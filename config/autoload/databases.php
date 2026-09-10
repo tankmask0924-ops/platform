@@ -9,6 +9,8 @@ declare(strict_types=1);
  * @contact  group@hyperf.io
  * @license  https://github.com/hyperf/hyperf/blob/master/LICENSE
  */
+use Hyperf\ModelCache\Handler\RedisHandler;
+
 use function Hyperf\Support\env;
 
 return [
@@ -36,6 +38,14 @@ return [
                 'force_casts' => true,
                 'inheritance' => 'Model',
             ],
+        ],
+        'cache' => [
+            'handler' => RedisHandler::class,
+            'prefix' => 'default',
+            'ttl' => 3600 * 24,
+            'empty_model_ttl' => 600,
+            'load_script' => true,
+            'use_default_value' => false,
         ],
     ],
 ];
