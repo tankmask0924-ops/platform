@@ -1,0 +1,28 @@
+{
+  "name": "platform-web",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "admin",
+    "merchant"
+  ],
+  "scripts": {
+    "dev:admin": "npm run dev -w @platform/admin",
+    "dev:merchant": "npm run dev -w @platform/merchant",
+    "build": "npm run build -w @platform/admin -w @platform/merchant",
+    "build:admin": "npm run build -w @platform/admin",
+    "build:merchant": "npm run build -w @platform/merchant",
+    "type-check": "npm run type-check -w @platform/admin -w @platform/merchant"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/tsconfig": "^0.9.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.0",
+    "vue-tsc": "^3.3.11"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}

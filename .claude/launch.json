@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "web-admin",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:admin", "--prefix", "web"],
+      "port": 5173
+    },
+    {
+      "name": "web-merchant",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev:merchant", "--prefix", "web"],
+      "port": 5174
+    }
+  ]
+}
