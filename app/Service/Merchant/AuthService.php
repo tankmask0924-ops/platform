@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace App\Service\Merchant;
 
-use App\Auth\MerchantTokenGuard;
+use App\Auth\MerchantJwtGuard;
 use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantQualificationDao;
@@ -58,7 +58,7 @@ class AuthService extends AbstractService
     protected Encryptor $encryptor;
 
     #[Inject]
-    protected MerchantTokenGuard $tokenGuard;
+    protected MerchantJwtGuard $tokenGuard;
 
     /**
      * @param array<string, mixed> $data

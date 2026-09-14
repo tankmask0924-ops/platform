@@ -31,8 +31,9 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *
  * AppKey / AppSecret 格式（本任务判断，requirements.md 没有规定具体格式）：
  * - AppKey：`ak_` 前缀 + 32 位十六进制（`bin2hex(random_bytes(16))`，128 bit 随机），
- *   前缀纯粹是方便人眼识别「这是个 AppKey」，跟 App\Auth\MerchantTokenGuard 的纯十六进制
- *   token 风格保持一个量级的随机性。varchar(64) 列宽绰绰有余。
+ *   前缀纯粹是方便人眼识别「这是个 AppKey」，随机性跟 App\Auth\MerchantJwtGuard 签发的
+ *   登录态 JWT 不是一回事（那是自包含 token，不是纯随机字节串），这里单纯参照同项目里
+ *   其它随机凭证一贯的量级。varchar(64) 列宽绰绰有余。
  * - AppSecret：`bin2hex(random_bytes(32))`，64 位十六进制（256 bit 随机），任务描述里
  *   直接给出的写法，不加前缀——它只在生成时的响应体里出现一次，不需要人眼识别。
  * - AppKey 唯一性：生成前查一次 MerchantDao::findByAppKey() 避免撞库，128 bit 随机空间下

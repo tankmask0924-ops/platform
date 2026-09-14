@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 namespace App\Middleware;
 
-use App\Auth\MerchantTokenGuard;
+use App\Auth\MerchantJwtGuard;
 use App\Dao\MerchantDao;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -24,7 +24,8 @@ use Psr\Http\Server\RequestHandlerInterface;
 /**
  * 商户管理后台（web/merchant）登录态鉴权中间件，跟开放 API 的
  * App\Middleware\OpenApiSignatureMiddleware 是两套完全独立的东西：这里是给人类浏览器
- * 会话用的 `Authorization: Bearer <token>`，不是服务器间的 HMAC 签名。
+ * 会话用的 `Authorization: Bearer <token>`，不是服务器间的 HMAC 签名。token 本身是
+ * HS256 签名的 JWT（App\Auth\MerchantJwtGuard），不是早期版本里的 Redis 不透明随机 token。
  *
  * 前端（web/shared/src/http.ts）用的是 axios，拿到 HTTP 401 会清本地登录态并跳转 /login，
  * 依赖的是真实 HTTP 状态码而不是响应体里的 code 字段（那是开放 API 的信封约定，这里不适用）。
@@ -42,7 +43,7 @@ use Psr\Http\Server\RequestHandlerInterface;
 class MerchantAuthMiddleware implements MiddlewareInterface
 {
     #[Inject]
-    protected MerchantTokenGuard $tokenGuard;
+    protected MerchantJwtGuard $tokenGuard;
 
     #[Inject]
     protected MerchantDao $merchantDao;

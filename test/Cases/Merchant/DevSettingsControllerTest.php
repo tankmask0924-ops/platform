@@ -19,7 +19,7 @@ use HyperfTest\HttpTestCase;
 /**
  * 真实 HTTP 派发的端到端测试，用法跟 test/Cases/Merchant/AuthControllerTest.php 一致
  * （走真实路由 + 中间件栈，登录态通过真实调用 /merchant/auth/login 拿 token，
- * 不直接 new MerchantTokenGuard 走捷径，跟 AuthControllerTest 保持一致的做法）。
+ * 不直接 new MerchantJwtGuard 走捷径，跟 AuthControllerTest 保持一致的做法）。
  *
  * @internal
  * @coversNothing
