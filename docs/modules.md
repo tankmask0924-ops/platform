@@ -119,7 +119,7 @@
 | 接口 | Controller | Service | 单测 | 状态 |
 |---|---|---|---|---|
 | 查询余额（可用/冻结/待到账返佣） | ✅ | ✅ | ✅ | ✅ |
-| 订单查询（平台单号或商户单号） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 订单查询（平台单号或商户单号，二选一） | ✅ | ✅ | ✅ | ✅ |<sup>①</sup>
 | 结果回调（平台 → 商户，含重试） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 话费商品列表 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 话费下单 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -133,6 +133,19 @@
 | 快递下单（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 快递取消（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 快递轨迹查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
+
+① `订单查询`目前只覆盖一期业务线（`recharge`/`card`）：`App\Model\Order`/`OrderRecharge`、
+`App\Dao\OrderDao`（`findByOrderNoForMerchant`/`findByMerchantOrderNoForMerchant` 都带
+`merchant_id` 条件，防止商户越权查到别人的订单和卡密，有专门的跨商户隔离测试覆盖）、
+`App\Dao\OrderRechargeDao`、`App\Service\OpenApi\OrderQueryService`（卡密类订单查
+`order_recharges` 并用 `Encryptor` 解密返回明文卡号卡密）、
+`App\Controller\OpenApi\OrderController`（`GET /open-api/order`）。
+`requirements.md 8.1` 提到的"快递订单返回费用明细"是三期功能，对应的费用明细表还没建，
+这里**没有做任何 express 专属处理**——express 订单目前只会返回订单基础字段，不含快递费用
+明细，等三期快递相关表（云洋驱动，见第 3 节）建好后再补。同时新增了
+`App\Controller\OpenApi\AbstractOpenApiController::fail()`（业务失败信封，HTTP 状态码
+统一保持 200，用 `code` 非 0 表达失败，跟中间件鉴权失败用 4xx 状态码是两套不同约定，
+详见该类的注释）。
 
 ---
 
@@ -212,11 +225,11 @@
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
-| 开放 API 接口 | 15 | 1 | 0 | 14 |
+| 开放 API 接口 | 15 | 2 | 0 | 13 |
 | 商户管理后台 | 14 | 0 | 0 | 14 |
 | 系统管理后台 | 14 | 0 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **97** | **5** | **0** | **92** |
+| **合计** | **97** | **6** | **0** | **91** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
