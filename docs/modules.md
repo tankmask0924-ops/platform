@@ -47,14 +47,16 @@
 
 | 能力 | Driver 方法 | Service 接入 | 单测 | 状态 |
 |---|---|---|---|---|
-| 下单 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 查询订单 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 解析回调（含验签） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 查询余额 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 下单 | ✅ `App\Supplier\Kasushou\KasushouDriver::placeOrder()` | ⬜（无订单处理 Service 调用，路由/供应商配置基础设施未建） | ✅ `test/Cases/Supplier/Kasushou/KasushouDriverTest.php` | 🔨 |
+| 查询订单 | ✅ `KasushouDriver::queryOrder()` | ⬜ 同上 | ✅ 同上 | 🔨 |
+| 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ⬜ 同上（回调入口/验签框架本身也还是 ⬜，见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` | 🔨 |
+| 查询余额 | ✅ `KasushouDriver::queryBalance()` | ⬜ 同上 | ✅ `KasushouDriverTest` | 🔨 |
 | 同步商品（成本价/状态/库存） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 错误码映射表 | ⬜ | ➖ | ⬜ | ⬜ |
+| 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
+
+> 本次新增：`App\Supplier\UnifiedResult`（4 态枚举）、`App\Supplier\DriverResult`（统一结果 DTO，含超出 6.2 字面字段列表的 `cardList` 扩展字段，见类注释）、`App\Supplier\Kasushou\KasushouSigner`（sha1 签名/验签）、`App\Supplier\Kasushou\KasushouStatusMapper`、`App\Supplier\Kasushou\KasushouDriver`。未引入 `DriverInterface`：目前只有卡速售一个驱动实现，云洋/芒果尚未开工，接口形状还没被第二个实现验证过，判断属于过早抽象，留了代码注释提醒等第二个驱动落地后再抽取。Service 接入留空：订单处理/路由 Service 调用这个驱动尚未建立（依赖第 5 节路由与第 6 节话费下单 API，均未开工），且供应商配置从哪里读取（`suppliers.config`）本身也是单独一期的 ⬜ 行，本次驱动构造函数直接接收 baseUrl/userId/apiKey，跟配置来源解耦。
 
 ---
 
@@ -234,7 +236,7 @@
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 11 | 4 | 0 | 7 |
-| 卡速售 2.0 驱动 | 8 | 0 | 0 | 8 |
+| 卡速售 2.0 驱动 | 8 | 1 | 4 | 3 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
@@ -242,7 +244,7 @@
 | 商户管理后台 | 14 | 0 | 0 | 14 |
 | 系统管理后台 | 14 | 0 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **97** | **7** | **0** | **90** |
+| **合计** | **97** | **8** | **4** | **85** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
