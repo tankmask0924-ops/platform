@@ -28,11 +28,19 @@ use Psr\Http\Server\RequestHandlerInterface;
  * 开放 API 签名鉴权中间件（requirements.md 8.1）：校验 app_key/timestamp/nonce/sign，
  * IP 白名单和按商户限流不在这个中间件的职责范围内（见 docs/modules.md 对应行）。
  *
- * 还没有开放 API 的 Controller 可以挂载它，所以暂时不注册进
- * config/autoload/middlewares.php 的全局 http 中间件列表（会连带拦住
- * 跟开放 API 无关的 / 和 /users 路由）。等第 6 节的开放 API 接口落地后，
- * 在对应 Controller 上通过注解挂载，例如：
- *   #[Controller(prefix: '/open', options: ['middleware' => [OpenApiSignatureMiddleware::class]])]
+ * 不注册进 config/autoload/middlewares.php 的全局 http 中间件列表（会连带拦住
+ * 跟开放 API 无关的 / 和 /users 路由），而是在开放 API Controller 上通过 #[Middleware] 类级注解
+ * 按需挂载，例如：
+ *   #[Controller(prefix: '/open-api')]
+ *   #[Middleware(OpenApiSignatureMiddleware::class)]
+ * 注意不能写成 #[Controller(options: ['middleware' => [...]])]——这个版本的
+ * DispatcherFactory::handleController() 会把 Controller 注解 options 里的 middleware 键
+ * 整个覆盖掉（只认 #[Middleware]/#[Middlewares] 注解），那样中间件会静默不生效
+ * （细节见 app/Controller/OpenApi/BalanceController.php 的类注释）。
+ * （`/open-api` 前缀约定见 app/Controller/OpenApi/BalanceController.php）
+ *
+ * 验签通过后会把查到的 Merchant 通过 `$request->withAttribute('merchant', $merchant)`
+ * 传给下一个 handler，开放 API Controller 直接从请求属性里取，不用重新按 app_key 查一次。
  *
  * 统一返回格式（{code, message, data}）还没有平台级方案（另一个 ⬜ 任务），
  * 这里失败时直接返回同样形状的 JSON，错误码是本中间件内部的占位编号，
@@ -117,7 +125,7 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
             return $this->reject(self::CODE_NONCE_REPLAYED, 'nonce replayed', 401);
         }
 
-        return $handler->handle($request);
+        return $handler->handle($request->withAttribute('merchant', $merchant));
     }
 
     private function reject(int $code, string $message, int $status = 400): ResponseInterface

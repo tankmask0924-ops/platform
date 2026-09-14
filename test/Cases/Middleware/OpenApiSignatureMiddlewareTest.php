@@ -48,7 +48,14 @@ class OpenApiSignatureMiddlewareTest extends TestCase
 
         $expectedResponse = Mockery::mock(ResponseInterface::class);
         $handler = Mockery::mock(RequestHandlerInterface::class);
-        $handler->shouldReceive('handle')->once()->andReturn($expectedResponse);
+        $handler->shouldReceive('handle')
+            ->once()
+            ->with(Mockery::on(function ($request) use ($merchant) {
+                $attached = $request->getAttribute('merchant');
+
+                return $attached instanceof Merchant && $attached->id === $merchant->id;
+            }))
+            ->andReturn($expectedResponse);
 
         $response = $this->middleware()->process($this->buildRequest($params), $handler);
 
