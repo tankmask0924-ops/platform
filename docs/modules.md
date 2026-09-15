@@ -219,7 +219,8 @@
 | 服务开通审核 | ⬜ | ⬜ | ⬜ |
 | 充值与调账：充值审核 / 手动调账 | ⬜ | ⬜ | ⬜ |
 | 本地商品库：CRUD | ⬜ | ⬜ | ⬜ |
-| 供应商管理：配置 CRUD / 商品映射 / 商品同步 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
+| 供应商管理：配置 CRUD（新建/列表/详情/修改/启用禁用，requirements.md 6.3） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Admin\SupplierAdminService` | ✅ |
+| 供应商管理：商品映射 / 商品同步 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
 | 商户等级：CRUD / 各业务线比例设置 | ⬜ | ⬜ | ⬜ |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜ |
@@ -229,6 +230,25 @@
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | ⬜ | ⬜ | ⬜ |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | ⬜ | ⬜ | ⬜ |
+
+> 「供应商管理：配置 CRUD」：新增 `App\Model\Supplier` + `App\Dao\SupplierDao` +
+> `App\Service\Admin\SupplierAdminService` + `App\Controller\Admin\SupplierController`
+> （`GET/POST /admin/suppliers`、`GET/PUT /admin/suppliers/{id}`、
+> `POST /admin/suppliers/{id}/status`），两个权限编码 `supplier.view`（列表/详情）、
+> `supplier.manage`（新建/修改/启停），已同步进
+> `App\Service\Admin\AdminBootstrapService::KNOWN_PERMISSIONS`。`driver` 校验
+> 白名单目前只有 `kasushou`（`SupplierAdminService::KNOWN_DRIVERS`，云洋/芒果落地后
+> 追加）。`config`（接口地址/账号/密钥等，按驱动各不相同的自由 JSON）整段加密存储
+> （`App\Crypto\Encryptor`，加密的是 `json_encode` 后的字符串，不是逐字段加密），
+> 列表接口完全不返回 `config`，详情接口解密后按启发式脱敏——key 名大小写不敏感包含
+> `key`/`secret`/`password`/`token` 的字段值替换成固定掩码 `'******'`，其余字段
+> （如 `base_url`/`user_id`）原样返回，任何情况下都不明文回显密钥（比商户
+> `app_secret` 生成时明文回显一次更严格，见 requirements.md 6.3）。**范围之外**：
+> 不建 `/notify/{code}` 回调路由本身（第 1 节「供应商回调入口与验签框架」仍是
+> ⬜，只保证 `code` 唯一且创建后不可改，给它留好稳定标识）；不把这里建的
+> `Supplier` 行接入实际下单路由去构造 `KasushouDriver` 实例（订单路由，6.5 节，
+> 更大的单独工作）；`balance`/`balance_synced_at` 在这个 API 里只读，由未来的
+> 余额同步任务写入。测试见 `test/Cases/Admin/SupplierControllerTest.php`。
 
 ---
 
@@ -264,9 +284,9 @@
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
 | 开放 API 接口 | 15 | 4 | 0 | 11 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
-| 系统管理后台 | 16 | 2 | 0 | 14 |
+| 系统管理后台 | 17 | 3 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **101** | **16** | **5** | **80** |
+| **合计** | **102** | **17** | **5** | **80** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
