@@ -220,7 +220,8 @@
 | 充值与调账：充值审核 / 手动调账 | ⬜ | ⬜ | ⬜ |
 | 本地商品库：CRUD | ⬜ | ⬜ | ⬜ |
 | 供应商管理：配置 CRUD（新建/列表/详情/修改/启用禁用，requirements.md 6.3） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Admin\SupplierAdminService` | ✅ |
-| 供应商管理：商品映射 / 商品同步 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
+| 供应商管理：商品映射（新建/列表/改价（必留痕）/优先级/启停，requirements.md 6.4） | ✅ `App\Controller\Admin\ProductMappingController` | ✅ `App\Service\Admin\ProductMappingAdminService` | ✅ |
+| 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
 | 商户等级：CRUD / 各业务线比例设置 | ⬜ | ⬜ | ⬜ |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜ |
@@ -249,6 +250,31 @@
 > `Supplier` 行接入实际下单路由去构造 `KasushouDriver` 实例（订单路由，6.5 节，
 > 更大的单独工作）；`balance`/`balance_synced_at` 在这个 API 里只读，由未来的
 > 余额同步任务写入。测试见 `test/Cases/Admin/SupplierControllerTest.php`。
+
+> 「供应商管理：商品映射」：这是 `App\Model\SupplierProduct`/`App\Dao\SupplierProductDao`
+> 类注释里之前提到的"尚未开工"的创建功能（见第 2 节"本次新增（商品同步）"说明），
+> 现已补上。新增 `App\Service\Admin\ProductMappingAdminService` + `App\Controller\Admin\ProductMappingController`
+> （`GET/POST /admin/product-mappings`，列表用 `?product_id=` 查询参数过滤；
+> `POST /admin/product-mappings/{id}/cost-price`、`POST .../{id}/priority`、
+> `POST .../{id}/status`、`PUT /admin/product-mappings/{id}` 改详情），两个权限编码
+> `product_mapping.view`（列表）、`product_mapping.manage`（新建 + 全部更新动作），
+> 已同步进 `App\Service\Admin\AdminBootstrapService::KNOWN_PERMISSIONS`。核心约束：
+> 创建时校验 `supplier.business_line === product.business_line`（movie-only 供应商不能
+> 映射到 recharge 商品，源自 6.1「供应商只属于一条业务线」+ 6.4 映射概念的推论，
+> 不是需求原文逐字给出）、`(product_id, supplier_id)` 唯一（先查后插 + `QueryException`
+> 兜底）。**人工改价复用"改价必留痕"不变量**：`SupplierProductDao::applySync()`
+> 重构为转发到新的私有 `writeCostPrice()`，新增的 `SupplierProductDao::updateCostPriceManually()`
+> （`source=manual`）跟 `applySync()`（`source=sync`）共用同一个私有方法走同一套
+> 事务 + 历史记录逻辑，不可能出现某条改价路径漏记历史；`ProductMappingAdminService`
+> 里改价、优先级、状态、详情（`supplier_product_code`/`stock`/`param_mapping`/
+> `sale_restrictions`）各自独立成方法，通用的 `updateDetails()` 刻意不接受
+> `cost_price`，避免留一个绕过历史记录的后门。`sale_restrictions` 只做透传 JSON
+> 校验，不解释其内容（kasushou.md 的 `can_buy`/`can_no_buy`/`can_price` 概念暂未映射
+> 到这个字段的具体形状，超出本次任务范围）。**范围之外**：路由跳过逻辑本身
+> （6.5 节，读 `priority`/`status`/`stock` 挑供应商）、商品变更通知/全量同步的
+> 自动接入（仍是第 2 节标注的 🔨 状态）。测试见
+> `test/Cases/Admin/ProductMappingControllerTest.php` + `test/Cases/Dao/SupplierProductDaoTest.php`
+> 新增用例。
 
 ---
 
@@ -284,9 +310,9 @@
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
 | 开放 API 接口 | 15 | 4 | 0 | 11 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
-| 系统管理后台 | 17 | 3 | 0 | 14 |
+| 系统管理后台 | 18 | 4 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **102** | **17** | **5** | **80** |
+| **合计** | **103** | **18** | **5** | **80** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

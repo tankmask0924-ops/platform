@@ -113,19 +113,80 @@ class SupplierProductDaoTest extends TestCase
         $this->assertNull($updated->stock);
     }
 
+    public function testListForProductOrdersByPriority()
+    {
+        $dao = $this->getContainer()->get(SupplierProductDao::class);
+        $productId = random_int(100000, 999999);
+
+        $low = $this->createProduct(supplierId: 301, code: $this->uniqueCode(), productId: $productId, priority: 5);
+        $high = $this->createProduct(supplierId: 302, code: $this->uniqueCode(), productId: $productId, priority: 1);
+        $mid = $this->createProduct(supplierId: 303, code: $this->uniqueCode(), productId: $productId, priority: 3);
+
+        $ordered = $dao->listForProduct($productId);
+
+        $this->assertSame([$high->id, $mid->id, $low->id], $ordered->pluck('id')->all());
+    }
+
+    public function testUpdateCostPriceManuallyInsertsPriceHistoryWithManualSource()
+    {
+        $dao = $this->getContainer()->get(SupplierProductDao::class);
+        $product = $this->createProduct(supplierId: 101, code: $this->uniqueCode(), costPrice: '10.00');
+
+        $updated = $dao->updateCostPriceManually($product, '15.00');
+
+        $this->assertSame('15.00', $updated->cost_price);
+
+        $history = SupplierProductPriceHistory::where('supplier_product_id', $product->id)->get();
+        $this->assertCount(1, $history);
+        $this->assertSame('10.00', $history->first()->old_price);
+        $this->assertSame('15.00', $history->first()->new_price);
+        $this->assertSame('manual', $history->first()->source);
+    }
+
+    public function testUpdateCostPriceManuallyDoesNotInsertPriceHistoryWhenPriceUnchanged()
+    {
+        $dao = $this->getContainer()->get(SupplierProductDao::class);
+        $product = $this->createProduct(supplierId: 101, code: $this->uniqueCode(), costPrice: '10.00');
+
+        $updated = $dao->updateCostPriceManually($product, '10.00');
+
+        $this->assertSame('10.00', $updated->cost_price);
+
+        $history = SupplierProductPriceHistory::where('supplier_product_id', $product->id)->get();
+        $this->assertCount(0, $history);
+    }
+
+    public function testUpdateCostPriceManuallyDoesNotTouchStatusOrStock()
+    {
+        $dao = $this->getContainer()->get(SupplierProductDao::class);
+        $product = $this->createProduct(supplierId: 101, code: $this->uniqueCode(), costPrice: '10.00', stock: 7);
+        $product->fill(['status' => 'paused'])->save();
+
+        $updated = $dao->updateCostPriceManually($product, '12.00');
+
+        $this->assertSame('paused', $updated->status);
+        $this->assertSame(7, $updated->stock);
+    }
+
     private function uniqueCode(): string
     {
         return 'GOODS-' . uniqid('', true);
     }
 
-    private function createProduct(int $supplierId, string $code, string $costPrice = '10.00', ?int $stock = 100): SupplierProduct
-    {
+    private function createProduct(
+        int $supplierId,
+        string $code,
+        string $costPrice = '10.00',
+        ?int $stock = 100,
+        ?int $productId = null,
+        int $priority = 1
+    ): SupplierProduct {
         $product = SupplierProduct::create([
-            'product_id' => random_int(100000, 999999),
+            'product_id' => $productId ?? random_int(100000, 999999),
             'supplier_id' => $supplierId,
             'supplier_product_code' => $code,
             'cost_price' => $costPrice,
-            'priority' => 1,
+            'priority' => $priority,
             'status' => 'active',
             'stock' => $stock,
         ]);

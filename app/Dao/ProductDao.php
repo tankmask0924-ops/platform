@@ -20,6 +20,17 @@ class ProductDao extends AbstractDao
     protected string $model = Product::class;
 
     /**
+     * 跟 App\Dao\SupplierDao::find() 同样的目的：只是把 AbstractDao::find() 的
+     * 返回类型从基类 Model 收窄成 Product，方便调用方（如
+     * App\Service\Admin\ProductMappingAdminService）拿到具体类型，不涉及
+     * model-cache（Product 未实现 CacheableInterface）。
+     */
+    public function find(int $id): ?Product
+    {
+        return Product::find($id);
+    }
+
+    /**
      * 开放 API「话费/卡券商品列表」用（requirements.md 8.1）：某条业务线全部在架商品，
      * 按创建时间正序（先上架的排前面）。这些列表预期很小、变化也不频繁，但读取时机不可预测
      * （商户随时可能来查），所以不加 model-cache，普通查询即可。
