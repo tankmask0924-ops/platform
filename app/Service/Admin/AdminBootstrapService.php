@@ -46,10 +46,12 @@ class AdminBootstrapService extends AbstractService
     /**
      * 当前生产代码里真实会被 App\Middleware\AdminPermissionMiddleware 检查到的
      * 权限编码全集——即所有实际挂了 #[App\Annotation\RequiresPermission(...)] 的
-     * Controller 方法对应的编码。截至本任务，只有 App\Controller\Admin\MerchantController::index()
-     * 挂了 #[RequiresPermission('merchant.view')]，requirements.md 8.3 列的其它管理后台
-     * 模块都还没有对应的 Controller/Service，为它们现在就编一个权限编码是没有意义的
-     * 占位（没有任何中间件会去检查它，加了也白加）。
+     * Controller 方法对应的编码。截至本任务，App\Controller\Admin\MerchantController
+     * 挂了 #[RequiresPermission('merchant.view')]（列表 + 详情）和
+     * #[RequiresPermission('merchant.review')]（入驻审核通过/驳回），
+     * requirements.md 8.3 列的其它管理后台模块都还没有对应的 Controller/Service，
+     * 为它们现在就编一个权限编码是没有意义的占位（没有任何中间件会去检查它，
+     * 加了也白加）。
      *
      * **重要（容易忘的操作陷阱）**：以后每在某个 Controller 方法上新增一个
      * `#[RequiresPermission('some.new.code')]`，必须同步把 'some.new.code' 加进下面
@@ -64,6 +66,7 @@ class AdminBootstrapService extends AbstractService
      */
     private const KNOWN_PERMISSIONS = [
         ['code' => 'merchant.view', 'module' => 'merchant', 'name' => '商户列表查看', 'type' => 'action'],
+        ['code' => 'merchant.review', 'module' => 'merchant', 'name' => '商户入驻审核', 'type' => 'action'],
     ];
 
     #[Inject]

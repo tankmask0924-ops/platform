@@ -16,11 +16,13 @@ use App\Annotation\RequiresPermission;
 use App\Controller\AbstractController;
 use App\Middleware\AdminAuthMiddleware;
 use App\Middleware\AdminPermissionMiddleware;
+use App\Model\AdminUser;
 use App\Service\Admin\MerchantAdminService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
 use Hyperf\HttpServer\Annotation\Middleware;
+use Hyperf\HttpServer\Annotation\PostMapping;
 
 /**
  * 系统管理后台（web/admin）「商户管理 - 商户列表」（requirements.md 8.3），
@@ -56,5 +58,54 @@ class MerchantController extends AbstractController
         $perPage = (int) $this->request->input('per_page', 15);
 
         return $this->merchantAdminService->list($page, $perPage);
+    }
+
+    /**
+     * 商户详情，跟列表用同一个权限编码（看详情跟看列表是同一档权限，
+     * 没有理由为「多看一点字段」单独设一个权限编码）。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.view')]
+    #[GetMapping(path: '{id}')]
+    public function show(int $id): array
+    {
+        return $this->merchantAdminService->detail($id);
+    }
+
+    /**
+     * 入驻审核 - 通过。用独立的 'merchant.review' 权限编码，跟 'merchant.view'
+     * 分开——查看商户列表/详情，和真正做出审核这种会改变商户状态的决定，
+     * 不应该是同一档权限（记得同步维护 App\Service\Admin\AdminBootstrapService::KNOWN_PERMISSIONS）。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.review')]
+    #[PostMapping(path: '{id}/approve')]
+    public function approve(int $id): array
+    {
+        /** @var AdminUser $admin */
+        $admin = $this->request->getAttribute('admin');
+
+        $this->merchantAdminService->approve($id, $this->request->input('level_id'), $admin->id);
+
+        return ['success' => true];
+    }
+
+    /**
+     * 入驻审核 - 驳回，同样是 'merchant.review' 权限。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.review')]
+    #[PostMapping(path: '{id}/reject')]
+    public function reject(int $id): array
+    {
+        /** @var AdminUser $admin */
+        $admin = $this->request->getAttribute('admin');
+
+        $this->merchantAdminService->reject($id, $this->request->input('reason'), $admin->id);
+
+        return ['success' => true];
     }
 }
