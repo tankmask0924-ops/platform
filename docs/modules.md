@@ -125,7 +125,7 @@
 | 查询余额（可用/冻结/待到账返佣） | ✅ | ✅ | ✅ | ✅ |
 | 订单查询（平台单号或商户单号，二选一） | ✅ | ✅ | ✅ | ✅ |<sup>①</sup>
 | 结果回调（平台 → 商户，含重试） | ➖ | ✅ | ✅ | ✅ |<sup>②</sup>
-| 话费商品列表 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 话费商品列表 | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
 | 话费下单 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 卡券商品列表（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 卡券下单（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -163,6 +163,22 @@
 等生命周期节点调用 `MerchantNotifyService::notify()` 的那部分代码还没有实现**——目前
 没有任何订单生命周期/供应商对接驱动代码存在，等那部分工作（第 2/3/4 节驱动 +
 订单处理流程）落地时接进来即可。
+
+③ `话费商品列表`只支持 `business_line=recharge`：`App\Model\Product`/`ProductLevelRebate`/
+`MerchantLevelBusinessRate`、对应的 `App\Dao\ProductDao`（`listOnShelfByBusinessLine`）/
+`ProductLevelRebateDao`/`MerchantLevelBusinessRateDao`、`App\Service\Product\RebateCalculator`
+（requirements.md 5.3 返佣公式：返佣基数 × 等级比例、向下取整到分，全程用 `bcmath` 字符串运算，
+不用 float，`bcmul` 对 scale 是截断不是四舍五入，非负数场景下截断等价于向下取整）、
+`App\Service\OpenApi\ProductListService`、`App\Controller\OpenApi\ProductController`
+（`GET /open-api/products`）。传 `business_line=card`（卡券是本节单独一行"卡券商品列表（二期）"，
+不在本次范围）或其它取值，一律用 `AbstractOpenApiController::fail()` 返回明确的 4xx 业务错误码，
+不静默返回空列表。**已知范围限制**：requirements.md 8.1 原文是"商户已开通的商品"，即只列出
+商户在 4.2 节"开通服务"审核通过的业务线，但那套开通/审核机制（`merchant_business_subscriptions`
+表已建，见 migrations/2026_09_14_090900_create_merchant_business_subscriptions_table.php）
+对应的正是第 7 节"服务开通：查看可开通业务线 / 提交申请 / 查看状态"这一整行独立、完全未开工的
+功能（三列都是 ⬜），本任务无法实现一个不存在的门槛检查，所以这里只要求商户通过
+`OpenApiSignatureMiddleware` 鉴权（商户存在且 `status = active`）即可看到该业务线全部在架商品，
+等第 7 节那一行落地后再补上按 `merchant_business_subscriptions` 过滤的逻辑。
 
 ---
 
@@ -245,11 +261,11 @@
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
-| 开放 API 接口 | 15 | 3 | 0 | 12 |
+| 开放 API 接口 | 15 | 4 | 0 | 11 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 15 | 1 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **100** | **14** | **5** | **81** |
+| **合计** | **100** | **15** | **5** | **80** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
