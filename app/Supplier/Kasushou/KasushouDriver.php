@@ -21,9 +21,42 @@ use Hyperf\Guzzle\ClientFactory;
 use RuntimeException;
 
 /**
- * 卡速售 2.0 驱动（requirements.md 6.2 统一能力 + kasushou.md 全文），覆盖本次任务
- * 范围内的下单/查询订单/解析回调/查询余额，商品同步、撤单、售后是 docs/modules.md
- * 里单独的 ⬜ 行，本类不实现。
+ * 卡速售 2.0 驱动（requirements.md 6.2 统一能力 + kasushou.md 全文），覆盖下单/
+ * 查询订单/解析回调/查询余额，以及本次任务新增的商品同步三个方法（商品变更通知
+ * 解析、查商品详情、查商品列表一页）。撤单、售后仍是 docs/modules.md 里单独的
+ * ⬜ 行，本类不实现。
+ *
+ * 【商品同步部分的安全设计：通知只作为触发，绝不信任通知 payload 里的价格/状态/
+ * 库存】kasushou.md 第 4 节"商品同步"原文："接收商品变更通知（表单格式，签名只
+ * 包含 id 和 time）"——只写了签名覆盖 id 和 time，没有覆盖通知里可能夹带的价格/
+ * 状态/库存字段本身。这意味着如果通知表单里真的带了这些字段，它们完全不在签名
+ * 保护范围内：任何能打到这个 webhook 地址的人，都可以在 id+time+sign 仍然合法
+ * 的前提下伪造任意价格/状态/库存，验签这一步完全拦不住。所以
+ * parseProductChangeNotification() 验签通过后只返回 id（供应商商品编码），
+ * 调用方（App\Service\Supplier\ProductSyncService::applyNotification()）必须再
+ * 调 queryProductDetail() 重新查一次权威值——这跟本类 parseCallback()
+ * "card_list/express_list 不参与签名，卡密一律以订单详情接口为准"是完全同一类
+ * 问题、同一种解法，特意在这里写清楚，接其它驱动时不要漏掉这个模式。这跟"每天
+ * 全量校准"的 syncAllProducts() 不同：全量同步是平台主动发起的出站认证请求，
+ * 响应可以直接信任，不需要再重新查一次。
+ *
+ * 【商品详情/列表接口字段名的免责声明，同类顶部已有的免责声明的延伸】kasushou.md
+ * 第 1 节"商品与成本价"一行明确提到了 `goods_price` 这一个字段名（"goods_price
+ * 为成本价"），这是文档原文出现过的，不是猜的。除此之外——商品详情/列表接口的
+ * 路径、请求参数名（这里猜 `goods_id`，跟 placeOrder() 请求体里已经在用的
+ * `goods_id` 保持一致）、响应里商品 id 字段名（这里猜跟商品变更通知的 `id` 字段
+ * 同名）、状态字段名和取值（这里猜字段名 `status`，取值猜字符串
+ * on/active/normal 表示在售、banned/forbidden 表示禁售，其余一律按"暂停"处理，
+ * 见 mapGoodsStatus()）、库存字段名（猜 `stock`，跟 supplier_products.stock 列名
+ * 一致）、列表响应的分页外层结构（猜 `{list: [...], total: n}`，`list` 缺失或非
+ * 数组时当成空页处理，不当错误）——这些全部是没有真实沙箱/接口文档时按最合理
+ * 猜测拼出来的，等实际联调对不上时，只需要改 queryProductDetail()/
+ * syncAllProducts()/parseGoodsEntry()/mapGoodsStatus() 这几处，不影响
+ * App\Service\Supplier\ProductSyncService 的调用方式。
+ *
+ * 【100 条/页借用】kasushou.md 只在"对账"一节给过"订单列表接口...每页最多 100
+ * 条"这一个明确数字，商品列表接口本身文档没给分页上限。syncAllProducts() 默认
+ * 100/页是照订单列表的数字类比借用，不是文档对商品列表的直接规定。
  *
  * 【是否需要一个正式的 DriverInterface？本次的判断：暂不引入，理由写在这】
  * requirements.md 6.2 列的统一能力（下单/查询订单/解析回调/查询余额等）确实是
@@ -55,6 +88,10 @@ class KasushouDriver
     private const PATH_ORDER_QUERY = '/api/v1/order/query';
 
     private const PATH_USER_INFO = '/api/v1/user/info';
+
+    private const PATH_GOODS_DETAIL = '/api/v1/goods/detail';
+
+    private const PATH_GOODS_LIST = '/api/v1/goods/list';
 
     private readonly KasushouSigner $signer;
 
@@ -212,6 +249,106 @@ class KasushouDriver
         return $this->queryOrder($externalOrderNo, $isCardProduct);
     }
 
+    /**
+     * 解析商品变更通知。只验证 id+time+sign 签名，验签通过后只返回 id（供应商商品
+     * 编码，对应 supplier_products.supplier_product_code），绝不从 payload 里
+     * 读取/信任任何价格/状态/库存字段——即便通知表单里带了这些字段。原因见本类
+     * 类注释里的安全设计说明。
+     *
+     * 验签失败：返回 null，调用方不能把 null 当成"没有变化"，也不能凭 null 做
+     * 任何库存/价格更新——就是单纯的"这条通知不可信，忽略"。
+     *
+     * @param array<string, mixed> $payload
+     */
+    public function parseProductChangeNotification(array $payload): ?string
+    {
+        if (! $this->signer->verifyProductChangeNotification($payload, $this->apiKey)) {
+            return null;
+        }
+
+        $id = $payload['id'] ?? null;
+        if (! is_string($id) && ! is_int($id)) {
+            return null;
+        }
+
+        return (string) $id;
+    }
+
+    /**
+     * 查单个供应商商品的权威详情（成本价/状态/库存）。请求字段名 `goods_id` 沿用
+     * placeOrder() 已经在用的同名字段（猜测，见类注释免责声明）。
+     *
+     * HTTP 失败/响应解析不出结构/关键字段缺失：一律抛 RuntimeException，不返回
+     * null——跟 queryBalance() 是同一个"这个方法要么给权威值、要么让调用方知道
+     * 失败了"的处理原则，不做"结果未知"这种订单类方法才有的三态语义（这不是订单
+     * 操作，没有 UnifiedResult 概念可用）。
+     *
+     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}
+     */
+    public function queryProductDetail(string $supplierProductCode): array
+    {
+        $body = ['goods_id' => $supplierProductCode];
+        $response = $this->sendSigned(self::PATH_GOODS_DETAIL, $body);
+
+        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
+            throw new RuntimeException(sprintf(
+                'KasushouDriver::queryProductDetail: %s',
+                $this->describeNonSuccessHttp($response['httpStatus'])
+            ));
+        }
+
+        $entry = $this->parseGoodsEntry($response['data']);
+        if ($entry === null) {
+            throw new RuntimeException('KasushouDriver::queryProductDetail: response missing id/goods_price or unparseable.');
+        }
+
+        return $entry;
+    }
+
+    /**
+     * 查商品列表的一页（100/页借用订单列表的分页数字，见类注释）。这里只做单次
+     * HTTP 调用，翻页循环、"翻到空页就停"的逻辑都留给调用方（未来的每日全量校准
+     * 定时任务，本次任务范围之外，见类注释）。
+     *
+     * HTTP 失败/响应解析不出结构：抛 RuntimeException，跟 queryProductDetail() 一致。
+     * 响应里 `list` 缺失、非数组，或者某一条商品条目缺 id/goods_price：不当成
+     * 错误，跳过那一条（或整页返回空），因为这是"取一页数据"的语义，不是"取一个
+     * 确定存在的商品详情"，容忍个别脏数据不影响其它条目正常同步。
+     *
+     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}>
+     */
+    public function syncAllProducts(int $page = 1, int $pageSize = 100): array
+    {
+        $body = ['page' => $page, 'page_size' => $pageSize];
+        $response = $this->sendSigned(self::PATH_GOODS_LIST, $body);
+
+        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
+            throw new RuntimeException(sprintf(
+                'KasushouDriver::syncAllProducts: %s',
+                $this->describeNonSuccessHttp($response['httpStatus'])
+            ));
+        }
+
+        $listRaw = $response['data']['list'] ?? null;
+        if (! is_array($listRaw)) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($listRaw as $raw) {
+            if (! is_array($raw)) {
+                continue;
+            }
+
+            $entry = $this->parseGoodsEntry($raw);
+            if ($entry !== null) {
+                $entries[] = $entry;
+            }
+        }
+
+        return $entries;
+    }
+
     protected function httpClient(): ClientInterface
     {
         return ApplicationContext::getContainer()->get(ClientFactory::class)->create();
@@ -334,5 +471,73 @@ class KasushouDriver
     private function toMoneyString(mixed $value): ?string
     {
         return $this->toStringOrNull($value);
+    }
+
+    /**
+     * 把商品详情/列表条目的原始数组解析成统一的小结构。id/goods_price 缺失或类型
+     * 不对：解析失败，返回 null（调用方决定是抛异常还是跳过这一条，见
+     * queryProductDetail()/syncAllProducts() 的不同处理）。
+     *
+     * @param array<string, mixed> $raw
+     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}
+     */
+    private function parseGoodsEntry(array $raw): ?array
+    {
+        $id = $raw['id'] ?? null;
+        if (! is_string($id) && ! is_int($id)) {
+            return null;
+        }
+
+        $costPrice = $this->toMoneyString($raw['goods_price'] ?? null);
+        if ($costPrice === null) {
+            return null;
+        }
+
+        return [
+            'supplier_product_code' => (string) $id,
+            'cost_price' => $costPrice,
+            'status' => $this->mapGoodsStatus($raw['status'] ?? null),
+            'stock' => $this->toNullableInt($raw['stock'] ?? null),
+        ];
+    }
+
+    /**
+     * 把供应商原始 status 字段映射成平台 supplier_products.status 的三态
+     * （active/paused/banned）。字段名和取值都是猜的（见类注释免责声明）。
+     *
+     * 缺字段、类型不对、或者不认识的取值：一律按 paused（暂停）处理，不猜 active——
+     * 猜错成"暂停"顶多是路由跳过这个供应商商品，猜错成"在售"却可能把已经下架/
+     * 缺货的商品继续卖给商户，两种错误代价不对称，跟 KasushouStatusMapper 里
+     * "拿不准一律 Unknown，不猜"是同一个原则的延伸。
+     */
+    private function mapGoodsStatus(mixed $raw): string
+    {
+        if (is_string($raw)) {
+            $normalized = strtolower($raw);
+            if (in_array($normalized, ['active', 'on', 'on_sale', 'normal'], true)) {
+                return 'active';
+            }
+            if (in_array($normalized, ['banned', 'ban', 'forbidden'], true)) {
+                return 'banned';
+            }
+            if (in_array($normalized, ['paused', 'pause', 'off'], true)) {
+                return 'paused';
+            }
+        }
+
+        return 'paused';
+    }
+
+    private function toNullableInt(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+
+        return null;
     }
 }

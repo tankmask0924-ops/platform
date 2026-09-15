@@ -174,4 +174,98 @@ class KasushouSignerTest extends TestCase
 
         $this->assertMatchesRegularExpression('/^\d{13}$/', $timestamp);
     }
+
+    // ---- verifyProductChangeNotification：第三套签名作用域，只覆盖 id+time ----
+
+    public function testVerifyProductChangeNotificationAcceptsValidSignature()
+    {
+        $signer = new KasushouSigner();
+        $id = 'GOODS-1';
+        $time = '1700000000';
+
+        // 独立按推断公式重新拼一遍：sha1(time + sha1(排序后的 {id,time} JSON，
+        // JSON_UNESCAPED_UNICODE) + apikey)。
+        $signed = ['id' => $id, 'time' => $time];
+        ksort($signed);
+        $json = json_encode($signed, JSON_UNESCAPED_UNICODE);
+        $sign = sha1($time . $json . self::API_KEY);
+
+        $payload = ['id' => $id, 'time' => $time, 'sign' => $sign];
+
+        $this->assertTrue($signer->verifyProductChangeNotification($payload, self::API_KEY));
+    }
+
+    public function testVerifyProductChangeNotificationFixedHandDerivedVector()
+    {
+        // 手算推导：id = "G1"，time = "1700000000"
+        // 排序后 JSON（JSON_UNESCAPED_UNICODE）-> {"id":"G1","time":"1700000000"}
+        // 拼接 = "1700000000" . '{"id":"G1","time":"1700000000"}' . "secret"
+        //      = '1700000000{"id":"G1","time":"1700000000"}secret'
+        // 用 `printf '%s' '1700000000{"id":"G1","time":"1700000000"}secret' | shasum -a 1`
+        // 独立验证（不经过 PHP/KasushouSigner）得到 790c8327da5caac6b888fa442aedaf9394086672
+        $signer = new KasushouSigner();
+
+        $payload = [
+            'id' => 'G1',
+            'time' => '1700000000',
+            'sign' => '790c8327da5caac6b888fa442aedaf9394086672',
+        ];
+
+        $this->assertTrue($signer->verifyProductChangeNotification($payload, self::API_KEY));
+    }
+
+    public function testVerifyProductChangeNotificationRejectsTamperedSign()
+    {
+        $signer = new KasushouSigner();
+
+        $payload = ['id' => 'G1', 'time' => '1700000000', 'sign' => 'not-the-real-signature'];
+
+        $this->assertFalse($signer->verifyProductChangeNotification($payload, self::API_KEY));
+    }
+
+    public function testVerifyProductChangeNotificationRejectsWrongSecret()
+    {
+        $signer = new KasushouSigner();
+        $id = 'G1';
+        $time = '1700000000';
+        $signed = ['id' => $id, 'time' => $time];
+        ksort($signed);
+        $sign = sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . 'a-different-secret');
+
+        $payload = ['id' => $id, 'time' => $time, 'sign' => $sign];
+
+        $this->assertFalse($signer->verifyProductChangeNotification($payload, self::API_KEY));
+    }
+
+    public function testVerifyProductChangeNotificationIgnoresUnsignedPriceStatusStockFields()
+    {
+        $signer = new KasushouSigner();
+        $id = 'G1';
+        $time = '1700000000';
+        // 只对 id+time 签名——即便 payload 里带了 price/status/stock，篡改它们
+        // 也不应该影响验签结果（这些字段不在签名保护范围内，是本任务的核心安全点）。
+        $signed = ['id' => $id, 'time' => $time];
+        ksort($signed);
+        $sign = sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . self::API_KEY);
+
+        $payload = [
+            'id' => $id,
+            'time' => $time,
+            'sign' => $sign,
+            'price' => '999.99',
+            'status' => 'banned',
+            'stock' => 0,
+        ];
+
+        $this->assertTrue($signer->verifyProductChangeNotification($payload, self::API_KEY));
+    }
+
+    public function testVerifyProductChangeNotificationRejectsMissingIdOrTime()
+    {
+        $signer = new KasushouSigner();
+
+        $this->assertFalse($signer->verifyProductChangeNotification(['time' => '1700000000', 'sign' => 'x'], self::API_KEY));
+        $this->assertFalse($signer->verifyProductChangeNotification(['id' => 'G1', 'sign' => 'x'], self::API_KEY));
+        $this->assertFalse($signer->verifyProductChangeNotification(['id' => 'G1', 'time' => '1700000000'], self::API_KEY));
+    }
 }

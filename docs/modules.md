@@ -51,12 +51,14 @@
 | 查询订单 | ✅ `KasushouDriver::queryOrder()` | ⬜ 同上 | ✅ 同上 | 🔨 |
 | 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ⬜ 同上（回调入口/验签框架本身也还是 ⬜，见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` | 🔨 |
 | 查询余额 | ✅ `KasushouDriver::queryBalance()` | ⬜ 同上 | ✅ `KasushouDriverTest` | 🔨 |
-| 同步商品（成本价/状态/库存） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | 🔨 `App\Service\Supplier\ProductSyncService`（`applyNotification()`/`applyFullSyncPage()`）已建好，但**目前没有任何调用方接入、没有在生产环境跑起来**：商品变更通知需要的 webhook 路由/控制器是第 1 节"供应商回调入口与验签框架"，还是 ⬜；每日全量同步需要的 `#[Crontab]` 定时任务，依赖一个从哪里读供应商配置（baseUrl/userId/apiKey）的 Supplier 配置加载机制，同样还没建，本次任务范围明确不含这两者 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测） | 🔨 |
 | 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
 
-> 本次新增：`App\Supplier\UnifiedResult`（4 态枚举）、`App\Supplier\DriverResult`（统一结果 DTO，含超出 6.2 字面字段列表的 `cardList` 扩展字段，见类注释）、`App\Supplier\Kasushou\KasushouSigner`（sha1 签名/验签）、`App\Supplier\Kasushou\KasushouStatusMapper`、`App\Supplier\Kasushou\KasushouDriver`。未引入 `DriverInterface`：目前只有卡速售一个驱动实现，云洋/芒果尚未开工，接口形状还没被第二个实现验证过，判断属于过早抽象，留了代码注释提醒等第二个驱动落地后再抽取。Service 接入留空：订单处理/路由 Service 调用这个驱动尚未建立（依赖第 5 节路由与第 6 节话费下单 API，均未开工），且供应商配置从哪里读取（`suppliers.config`）本身也是单独一期的 ⬜ 行，本次驱动构造函数直接接收 baseUrl/userId/apiKey，跟配置来源解耦。
+> 本次新增（下单/查询订单/解析回调/查询余额）：`App\Supplier\UnifiedResult`（4 态枚举）、`App\Supplier\DriverResult`（统一结果 DTO，含超出 6.2 字面字段列表的 `cardList` 扩展字段，见类注释）、`App\Supplier\Kasushou\KasushouSigner`（sha1 签名/验签）、`App\Supplier\Kasushou\KasushouStatusMapper`、`App\Supplier\Kasushou\KasushouDriver`。未引入 `DriverInterface`：目前只有卡速售一个驱动实现，云洋/芒果尚未开工，接口形状还没被第二个实现验证过，判断属于过早抽象，留了代码注释提醒等第二个驱动落地后再抽取。Service 接入留空：订单处理/路由 Service 调用这个驱动尚未建立（依赖第 5 节路由与第 6 节话费下单 API，均未开工），且供应商配置从哪里读取（`suppliers.config`）本身也是单独一期的 ⬜ 行，本次驱动构造函数直接接收 baseUrl/userId/apiKey，跟配置来源解耦。
+>
+> 本次新增（商品同步）：`App\Model\SupplierProduct` + `App\Dao\SupplierProductDao`（`findBySupplierAndCode()` 按供应商+供应商商品编码反查映射行；`applySync()` 是全项目唯一负责改 `cost_price` 的方法，在同一个事务里做到"改价必留痕"，不需要在每个调用方各自重复判断要不要写历史）、`App\Model\SupplierProductPriceHistory` + `App\Dao\SupplierProductPriceHistoryDao`（写一次不再更新，同 `MerchantNotifyLog`/`OrderRecharge` 模式）、`KasushouSigner::verifyProductChangeNotification()`（第三套签名作用域，只覆盖 id+time，公式是按本类既有签名家族的推断，不是文档直接给出的字符串，见方法注释）、`KasushouDriver::parseProductChangeNotification()`/`queryProductDetail()`/`syncAllProducts()`、`App\Service\Supplier\ProductSyncService`（命名不带 Kasushou，为将来云洋/芒果复用留空间）。核心安全设计：商品变更通知的签名只覆盖 id+time，通知 payload 里即便夹带价格/状态/库存也不受签名保护，可被任意篡改，所以验签通过后只当"触发信号"，权威值一律重新调 `queryProductDetail()` 查询，不直接信任通知内容——跟 `KasushouDriver::parseCallback()` 对 `card_list`/`express_list` 的处理是同一个模式。商品映射行的创建（后台"商品映射"功能）、商品变更通知的 webhook 路由/控制器、每日全量同步的 `#[Crontab]` 定时任务，均不在本次任务范围内。
 
 ---
 
@@ -239,7 +241,7 @@
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 11 | 5 | 0 | 6 |
-| 卡速售 2.0 驱动 | 8 | 1 | 4 | 3 |
+| 卡速售 2.0 驱动 | 8 | 1 | 5 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
@@ -247,7 +249,7 @@
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 15 | 1 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **100** | **14** | **4** | **82** |
+| **合计** | **100** | **14** | **5** | **81** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

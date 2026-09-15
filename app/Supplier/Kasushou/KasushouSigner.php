@@ -31,6 +31,24 @@ namespace App\Supplier\Kasushou;
  *     从待签名参数里剔除
  *   - time 字段本身仍然留在参与签名的 JSON 里（文档原文是"除 sign 外参数"），
  *     只是 sign / card_list / express_list 三个字段被排除
+ *
+ * 商品变更通知验签（第三套签名作用域，kasushou.md 第 4 节"商品同步"：
+ * "接收商品变更通知（表单格式，签名只包含 id 和 time）"）：
+ *   - 【本方法公式是推断，不是文档直接给出的字符串】文档只说了"签名只包含 id 和
+ *     time"这一句话，没有像上面回调验签那样给出完整的 "sha1(time + JSON + apikey)"
+ *     公式原文。这里按本类另外两个方法共用的通用形状——sha1(时间 + 排序后 JSON
+ *     编码 + apikey)——收窄到只对 {id, time} 这两个字段计算，是本次实现按"同一
+ *     供应商同一套签名家族"做的合理推断，不是对文档原文的直接引用。等实际联调
+ *     验证不通过时，只需要改 verifyProductChangeNotification() 这一个方法，
+ *     不影响 KasushouDriver::parseProductChangeNotification() 的调用方式
+ *   - 但"参与签名的字段只有 id + time"这件事本身是文档明确写出来的，不是推断——
+ *     这是一个白名单（只有这两个字段参与），跟回调验签的黑名单（除 sign/card_list/
+ *     express_list 外全部参与）方向相反：即使通知表单里还夹带了价格/状态/库存等
+ *     字段，这里也完全不读取它们参与签名，调用方同样不能信任这些字段本身
+ *     （见 KasushouDriver::parseProductChangeNotification() 类注释里的安全说明）
+ *   - JSON 编码 flag 沿用回调验签同款的 JSON_UNESCAPED_UNICODE（不用
+ *     UNESCAPED_SLASHES）——两者同属"供应商 -> 平台"方向的推送/通知，跟"平台 ->
+ *     供应商"方向的请求签名（用 UNESCAPED_SLASHES | UNESCAPED_UNICODE）分开处理
  */
 class KasushouSigner
 {
@@ -68,6 +86,40 @@ class KasushouSigner
         unset($signed['sign'], $signed['card_list'], $signed['express_list']);
 
         $timeString = is_string($time) ? $time : (string) $time;
+        $expected = sha1($timeString . $this->encodeSorted($signed, JSON_UNESCAPED_UNICODE) . $apiKey);
+
+        return hash_equals($expected, $sign);
+    }
+
+    /**
+     * 校验商品变更通知的 id+time+sign 签名。$params 是通知收到的完整参数，可能还
+     * 带有价格/状态/库存等字段——本方法一律不读取它们参与签名计算（见类注释里
+     * "白名单只有 id+time"的说明），只负责判断 id+time+sign 这三者是否自洽。
+     *
+     * @param array<string, mixed> $params
+     */
+    public function verifyProductChangeNotification(array $params, string $apiKey): bool
+    {
+        $id = $params['id'] ?? null;
+        $time = $params['time'] ?? null;
+        $sign = $params['sign'] ?? null;
+
+        if (! is_string($sign) || $sign === '') {
+            return false;
+        }
+        if ($id === null || $id === '' || $time === null || $time === '') {
+            return false;
+        }
+        if (! is_string($id) && ! is_int($id)) {
+            return false;
+        }
+
+        $idString = is_string($id) ? $id : (string) $id;
+        $timeString = is_string($time) ? $time : (string) $time;
+
+        $signed = ['id' => $idString, 'time' => $timeString];
+        ksort($signed);
+
         $expected = sha1($timeString . $this->encodeSorted($signed, JSON_UNESCAPED_UNICODE) . $apiKey);
 
         return hash_equals($expected, $sign);

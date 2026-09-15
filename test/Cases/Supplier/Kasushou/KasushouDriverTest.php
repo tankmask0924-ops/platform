@@ -21,6 +21,7 @@ use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use Hyperf\Testing\TestCase;
 use Mockery;
+use RuntimeException;
 
 /**
  * KasushouDriver 全部走 Mockery 双重的 GuzzleHttp\ClientInterface，不发真实网络请求——
@@ -373,6 +374,183 @@ class KasushouDriverTest extends TestCase
         $result = $driver->parseCallback($payload, []);
 
         $this->assertNull($result);
+    }
+
+    // ---- parseProductChangeNotification ----
+
+    public function testParseProductChangeNotificationValidSignatureReturnsId()
+    {
+        $time = '1700000000';
+        $id = 'GOODS-1';
+        $signed = ['id' => $id, 'time' => $time];
+        ksort($signed);
+        $sign = sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . self::API_KEY);
+
+        $payload = ['id' => $id, 'time' => $time, 'sign' => $sign];
+
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldNotReceive('request');
+
+        $driver = $this->makeDriver($client);
+        $result = $driver->parseProductChangeNotification($payload);
+
+        $this->assertSame('GOODS-1', $result);
+    }
+
+    public function testParseProductChangeNotificationInvalidSignatureReturnsNull()
+    {
+        $payload = ['id' => 'GOODS-1', 'time' => '1700000000', 'sign' => 'not-the-real-signature'];
+
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldNotReceive('request');
+
+        $driver = $this->makeDriver($client);
+        $result = $driver->parseProductChangeNotification($payload);
+
+        $this->assertNull($result);
+    }
+
+    /**
+     * 核心安全断言：验签只覆盖 id+time，返回值必须只是 id 这个字符串本身，绝不
+     * 能把 payload 里伪造的 price/status/stock 字段透出来给调用方——即便验签依然
+     * 通过（因为这些字段本来就不在签名保护范围内）。
+     */
+    public function testParseProductChangeNotificationDoesNotSurfaceUnsignedPriceStatusStockFields()
+    {
+        $time = '1700000000';
+        $id = 'GOODS-1';
+        $signed = ['id' => $id, 'time' => $time];
+        ksort($signed);
+        $sign = sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . self::API_KEY);
+
+        $payload = [
+            'id' => $id,
+            'time' => $time,
+            'sign' => $sign,
+            'price' => '0.01',
+            'status' => 'banned',
+            'stock' => 0,
+        ];
+
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldNotReceive('request');
+
+        $driver = $this->makeDriver($client);
+        $result = $driver->parseProductChangeNotification($payload);
+
+        // 返回值就是一个裸字符串 id，不是数组/DTO，天然没有地方能夹带 price/status/
+        // stock——这本身就是"不信任这些字段"的证明：接口设计上根本不给它们出路。
+        $this->assertSame('GOODS-1', $result);
+        $this->assertIsString($result);
+    }
+
+    // ---- queryProductDetail ----
+
+    public function testQueryProductDetailHappyPath()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->with('POST', Mockery::pattern('#/api/v1/goods/detail$#'), Mockery::type('array'))
+            ->andReturn(new Response(200, [], json_encode([
+                'code' => 200,
+                'msg' => '',
+                'data' => ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100],
+            ])));
+
+        $driver = $this->makeDriver($client);
+        $detail = $driver->queryProductDetail('GOODS-1');
+
+        $this->assertSame('GOODS-1', $detail['supplier_product_code']);
+        $this->assertSame('8.50', $detail['cost_price']);
+        $this->assertSame('active', $detail['status']);
+        $this->assertSame(100, $detail['stock']);
+    }
+
+    public function testQueryProductDetailUnrecognizedStatusMapsToPaused()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturn(new Response(200, [], json_encode([
+                'code' => 200,
+                'msg' => '',
+                'data' => ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'some-unknown-code', 'stock' => null],
+            ])));
+
+        $driver = $this->makeDriver($client);
+        $detail = $driver->queryProductDetail('GOODS-1');
+
+        $this->assertSame('paused', $detail['status']);
+        $this->assertNull($detail['stock']);
+    }
+
+    public function testQueryProductDetailHttp500Throws()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturn(new Response(500, [], json_encode(['code' => 500, 'msg' => 'internal error', 'data' => null])));
+
+        $driver = $this->makeDriver($client);
+
+        $this->expectException(RuntimeException::class);
+        $driver->queryProductDetail('GOODS-1');
+    }
+
+    // ---- syncAllProducts ----
+
+    public function testSyncAllProductsHappyPath()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->with('POST', Mockery::pattern('#/api/v1/goods/list$#'), Mockery::type('array'))
+            ->andReturn(new Response(200, [], json_encode([
+                'code' => 200,
+                'msg' => '',
+                'data' => [
+                    'list' => [
+                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100],
+                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 'banned', 'stock' => 0],
+                    ],
+                    'total' => 2,
+                ],
+            ])));
+
+        $driver = $this->makeDriver($client);
+        $entries = $driver->syncAllProducts(1, 100);
+
+        $this->assertCount(2, $entries);
+        $this->assertSame('GOODS-1', $entries[0]['supplier_product_code']);
+        $this->assertSame('active', $entries[0]['status']);
+        $this->assertSame('GOODS-2', $entries[1]['supplier_product_code']);
+        $this->assertSame('banned', $entries[1]['status']);
+    }
+
+    public function testSyncAllProductsEmptyListReturnsEmptyArray()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturn(new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => ['list' => [], 'total' => 0]])));
+
+        $driver = $this->makeDriver($client);
+
+        $this->assertSame([], $driver->syncAllProducts(2, 100));
+    }
+
+    public function testSyncAllProductsHttp500Throws()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturn(new Response(500, [], json_encode(['code' => 500, 'msg' => 'internal error', 'data' => null])));
+
+        $driver = $this->makeDriver($client);
+
+        $this->expectException(RuntimeException::class);
+        $driver->syncAllProducts();
     }
 
     /**
