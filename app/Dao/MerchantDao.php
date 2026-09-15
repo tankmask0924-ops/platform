@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\Merchant;
+use Hyperf\Database\Model\Collection;
 
 class MerchantDao extends AbstractDao
 {
@@ -30,5 +31,31 @@ class MerchantDao extends AbstractDao
     public function findByAppKey(string $appKey): ?Merchant
     {
         return $this->newQuery()->where('app_key', $appKey)->first();
+    }
+
+    /**
+     * 系统管理后台（web/admin）「商户列表」用（requirements.md 8.3），按创建时间倒序。
+     *
+     * 没有用 Hyperf\Database\Model\Builder::paginate()（会返回真正的
+     * LengthAwarePaginator）——那个方法运行时依赖 `hyperf/paginator` 包
+     * （composer.lock 里标注为"建议"依赖，实际没有被安装，见 composer.lock
+     * 里 `hyperf/paginator` 那行的 suggest 注释），真调用会抛
+     * `Class "Hyperf\Paginator\Paginator" not found`。补装这个新依赖超出本任务
+     * 范围（只是要一个「分页 + 总数」的后台列表，不值得为此新增一个包依赖），
+     * 所以跟 App\Dao\UserDao::paginate() 一样手写 forPage()+get()，
+     * 只是多加一个 count() 方法来拿总数，两次查询自己组装成分页结果，
+     * 效果等价于 LengthAwarePaginator 但不需要那个包。
+     */
+    public function paginate(int $page, int $perPage): Collection
+    {
+        return $this->newQuery()
+            ->orderByDesc('created_at')
+            ->forPage($page, $perPage)
+            ->get();
+    }
+
+    public function count(): int
+    {
+        return $this->newQuery()->count();
     }
 }

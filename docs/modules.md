@@ -35,7 +35,7 @@
 | 按商户限流中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 配置读 `merchant_rate_limits`/`system_settings.default_rate_limit_per_second`，计数器走 Redis | ⬜ |
 | 统一返回格式与错误码 | [requirements.md 8.1](requirements.md#81-开放-api) | `{code, message, data}`；平台统一错误码，不透传供应商原始信息 | ⬜ |
 | 供应商回调入口与验签框架 | [requirements.md 6.8](requirements.md#68-回调日志与统计) | `/notify/{供应商编码}?token=...`，按 `suppliers.driver` 分发给对应驱动解析 | ⬜ |
-| 后台角色权限中间件 | [requirements.md 8.3](requirements.md#83-系统管理后台webadmin) | 校验 `admin_users.role_id` 对应 `admin_permissions` | ⬜ |
+| 后台角色权限中间件 | [requirements.md 8.3](requirements.md#83-系统管理后台webadmin) | 系统管理后台（web/admin）第三套独立鉴权体系，跟商户端 JWT（`MERCHANT_JWT_SECRET`）、开放 API HMAC 签名都不共用任何密钥/中间件类。登录态：`App\Auth\AdminJwtGuard`（HS256，独立密钥 `ADMIN_JWT_SECRET`，TTL 8 小时——比商户端 7 天短，管理员权限更高），`App\Middleware\AdminAuthMiddleware` 解出 `AdminUser` 挂 `$request->withAttribute('admin', ...)`。角色权限校验：新增 `App\Annotation\RequiresPermission`（纯 PHP attribute，标在 Controller 方法上声明权限编码）+ `App\Middleware\AdminPermissionMiddleware`（通过 `Dispatched::$handler->callback` 反射读方法上的 `#[RequiresPermission]`，没有则放行，有则查 `App\Dao\AdminRolePermissionDao::roleHasPermission(role_id, code)` 判断，不通过 403）。两个中间件都以方法级 `#[Middleware(...)]` 挂载，`AdminAuthMiddleware` 必须写在 `AdminPermissionMiddleware` 前面（同优先级时 Hyperf 按注解书写顺序 FIFO 执行），已用真实 HTTP 派发验证顺序正确（`test/Cases/Admin/MerchantControllerTest.php::testNoTokenAtAllReturns401NotAPermissionError`：没 token 时 401 而不是拿不到 admin attribute 崩 500）。首个真实落地的受保护接口见第 8 节「商户管理：列表」。**已知缺口**：目前没有任何 API 能创建 `admin_users` 记录（管理员账号非自助注册），后续需要 `#[Command]` CLI 种子命令或管理员管理 CRUD 接口，测试目前直接插 Model | ✅ |
 | 异步队列消费进程 | [hyperf-conventions](../.claude/skills/hyperf-conventions/SKILL.md) | 继承 `ConsumerProcess` 并 `#[Process]` 注册，别忘了这步——注解本身不会自动生效 | ⬜ |
 | 定时任务调度进程 | [hyperf-conventions](../.claude/skills/hyperf-conventions/SKILL.md) | 继承 `CrontabDispatcherProcess` 并 `#[Process]` 注册，同上 | ⬜ |
 
@@ -195,7 +195,8 @@
 
 | 模块 | Controller | Service | 状态 |
 |---|---|---|---|
-| 商户管理：列表 / 审核 / 启用禁用 / 调整等级 / 限流设置 / 详情 | ⬜ | ⬜ | ⬜ |
+| 商户管理：列表 | ✅ `App\Controller\Admin\MerchantController` | ✅ `App\Service\Admin\MerchantAdminService` | ✅ |
+| 商户管理：审核 / 启用禁用 / 调整等级 / 限流设置 / 详情 | ⬜ | ⬜ | ⬜ |
 | 服务开通审核 | ⬜ | ⬜ | ⬜ |
 | 充值与调账：充值审核 / 手动调账 | ⬜ | ⬜ | ⬜ |
 | 本地商品库：CRUD | ⬜ | ⬜ | ⬜ |
@@ -237,16 +238,16 @@
 
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
-| 基础设施与公共能力 | 11 | 4 | 0 | 7 |
+| 基础设施与公共能力 | 11 | 5 | 0 | 6 |
 | 卡速售 2.0 驱动 | 8 | 1 | 4 | 3 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
 | 开放 API 接口 | 15 | 3 | 0 | 12 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
-| 系统管理后台 | 14 | 0 | 0 | 14 |
+| 系统管理后台 | 15 | 1 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **99** | **12** | **4** | **83** |
+| **合计** | **100** | **14** | **4** | **82** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
