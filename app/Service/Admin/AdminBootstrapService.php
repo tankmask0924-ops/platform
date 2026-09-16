@@ -54,7 +54,10 @@ class AdminBootstrapService extends AbstractService
      * App\Controller\Admin\ProductMappingController 挂了
      * #[RequiresPermission('product_mapping.view')]（列表）和
      * #[RequiresPermission('product_mapping.manage')]（新建 + 改价/优先级/状态/
-     * 详情更新），requirements.md 8.3 列的其它管理后台模块都还没有对应的 Controller/Service，
+     * 详情更新），App\Controller\Admin\RechargeRequestController 挂了
+     * #[RequiresPermission('recharge.view')]（充值申请列表）和
+     * #[RequiresPermission('recharge.manage')]（充值申请审核通过/驳回），
+     * requirements.md 8.3 列的其它管理后台模块都还没有对应的 Controller/Service，
      * 为它们现在就编一个权限编码是没有意义的占位（没有任何中间件会去检查它，
      * 加了也白加）。
      *
@@ -76,6 +79,8 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'supplier.manage', 'module' => 'supplier', 'name' => '供应商配置管理', 'type' => 'action'],
         ['code' => 'product_mapping.view', 'module' => 'product_mapping', 'name' => '商品映射查看', 'type' => 'action'],
         ['code' => 'product_mapping.manage', 'module' => 'product_mapping', 'name' => '商品映射管理', 'type' => 'action'],
+        ['code' => 'recharge.view', 'module' => 'recharge', 'name' => '充值申请查看', 'type' => 'action'],
+        ['code' => 'recharge.manage', 'module' => 'recharge', 'name' => '充值申请审核', 'type' => 'action'],
     ];
 
     #[Inject]

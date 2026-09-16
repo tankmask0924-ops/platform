@@ -28,9 +28,9 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 编排（选供应商、调驱动、判断订单成败），那是下一个任务（下单流程）的事，这里
  * 只保证「调用了就一定正确、幂等地改余额并记流水」。
  *
- * 实现 freeze/deduct/unfreeze/rebate_settle 四种 type；recharge/supplement_deduct/
- * refund/adjustment/rebate_clawback 对应充值审核、售后补扣/退款、财务手动调账、
- * 返佣扣回，都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
+ * 实现 freeze/deduct/unfreeze/rebate_settle/recharge 五种 type；supplement_deduct/
+ * refund/adjustment/rebate_clawback 对应售后补扣/退款、财务手动调账、返佣扣回，
+ * 都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
  * 争议处理、人工改判订单状态都还没建，`merchant_rebates.status` 到
  * `clawed_back` 的转换完全不在本类职责内；merchants.debt_since 只会被
  * supplement_deduct/rebate_clawback 驱动进负数，两者都不在本任务，所以这里的
@@ -45,6 +45,21 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 里用 MerchantDao::lockForUpdate()（SELECT ... FOR UPDATE）锁住商户这一行，
  * 同一商户的并发调用会在这里排队，逐个拿锁、读最新余额、算完再释放，不会有
  * 两笔并发请求读到同一份「变更前」余额、都通过检查、最终把余额冲成负数的竞态。
+ *
+ * 幂等责任划分（新增 recharge() 后必须看这一段）：merchant_balance_logs 的
+ * dedupe_order_key/dedupe_rebate_key 两个生成列只覆盖 deduct/unfreeze/
+ * rebate_settle/rebate_clawback 四种 type（见该表迁移里的 CASE 表达式），
+ * recharge 不在其中——数据库层面完全没有能拦住「同一笔充值审核被调用两次」的
+ * 唯一约束。这不是遗漏：真正需要防止重复的是「同一条 merchant_recharge_requests
+ * 审核请求只能被批准一次」，这是一个状态机问题（pending -> approved 单向不可逆），
+ * 天然的唯一键是请求行自身的 id + status，不是 order_id/rebate_id 那种能塞进
+ * 生成列表达式的外键，套用 deduct/unfreeze 那套「先插日志幂等」的方式在这里文不对题。
+ * 所以幂等防护整体挪给调用方 App\Service\Admin\RechargeRequestAdminService::approve()：
+ * 在同一个事务里先锁住 merchant_recharge_requests 行、重新检查
+ * status === 'pending'、原子地翻成 'approved'，全部成功之后才调用 recharge()——
+ * 对同一个已 approved 请求的第二次调用，会在状态检查这一步就被拒绝，根本不会
+ * 走到 recharge()。recharge() 本身只管「调用一次，正确地记一次账」，不重复造一套
+ * 跟调用方语义重叠的保护，详见 recharge() 方法自身的文档注释。
  *
  * 幂等（4.4「不能重复处理」）：deduct/unfreeze 各自最多处理一笔订单一次，靠的是
  * merchant_balance_logs 表上 `dedupe_order_key` 生成列的唯一索引（deduct/unfreeze
@@ -294,6 +309,54 @@ class BalanceService extends AbstractService
             ])->save();
 
             return true;
+        });
+    }
+
+    /**
+     * 充值：商户线下打款、管理后台审核通过后调用（requirements.md 4.3「充值与调账」）。
+     * 只加可用余额，冻结余额不动——充值的钱直接可用，从没经过冻结环节，跟
+     * settleRebate() 只加可用余额的理由一致。流水行仍然记录冻结余额的前后快照
+     * （本来就没变，before == after），保持「每条流水都有完整的两个余额快照」的约定。
+     *
+     * **没有幂等保护，这是有意的**：本类顶部文档注释已经把责任划分讲清楚——
+     * merchant_balance_logs 没有能防住 recharge 类型重复写入的唯一约束，真正的
+     * 防线在调用方 App\Service\Admin\RechargeRequestAdminService::approve()：
+     * 它必须先在事务里锁住 merchant_recharge_requests 行、确认 status === 'pending'、
+     * 把它原子地翻成 'approved'，全部成功之后才调用这里；对同一条已批准请求的
+     * 第二次批准会在那一步的状态检查上被拒绝，永远不会有机会把 recharge() 调用
+     * 第二次。这里如果自己再加一层「查一下是否已经充值过」的预检查，反而是
+     * TOCTOU 查了再写的假保护（没有唯一索引兜底，两个并发调用一样都能通过检查），
+     * 所以刻意不加，把这件事完全交给调用方的状态机保证「只调用一次」。
+     *
+     * @param null|string $reason 可选备注，落在流水行的 reason 字段（例如带上审核
+     *                            请求的 transfer_no/id，方便对账时追溯来源）
+     */
+    public function recharge(int $merchantId, string $amount, ?string $reason = null): void
+    {
+        Db::transaction(function () use ($merchantId, $amount, $reason) {
+            $merchant = $this->merchantDao->lockForUpdate($merchantId);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcadd($availableBefore, $amount, self::SCALE);
+            $frozenBefore = $merchant->frozen_balance;
+            $frozenAfter = $frozenBefore;
+
+            $merchant->fill(['available_balance' => $availableAfter])->save();
+
+            $this->balanceLogDao->create([
+                'merchant_id' => $merchantId,
+                'type' => 'recharge',
+                'amount' => $amount,
+                'available_before' => $availableBefore,
+                'available_after' => $availableAfter,
+                'frozen_before' => $frozenBefore,
+                'frozen_after' => $frozenAfter,
+                'reason' => $reason,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
         });
     }
 }
