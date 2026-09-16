@@ -447,6 +447,36 @@ class BalanceServiceTest extends TestCase
         );
     }
 
+    /**
+     * requirements.md 4.5「负余额」暂停下单判断的唯一真实来源是 isSuspended()，
+     * 断言它跟直接对 `available_balance` 做一次新鲜 bccomp 的结果一致——两个方向
+     * 都验证：负数一律 true（哪怕只差一分钱），非负（含正好等于 0）一律 false。
+     * 不读 `debt_since`：这里特意把 `debt_since` 摆成跟余额符号"不一致"的状态
+     * （比如余额已经非负但 debt_since 还没来得及被清空的中间态），证明 isSuspended()
+     * 真的只看 available_balance，没有偷偷读 debt_since 这一列。
+     */
+    public function testIsSuspendedAgreesWithFreshBccompOnAvailableBalanceBothDirections()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+
+        $negative = $this->createMerchant('-0.01', '0.00');
+        $this->assertTrue($service->isSuspended($negative));
+
+        $zero = $this->createMerchant('0.00', '0.00');
+        $this->assertFalse($service->isSuspended($zero));
+
+        $positive = $this->createMerchant('10.00', '0.00');
+        $this->assertFalse($service->isSuspended($positive));
+
+        // debt_since 跟余额符号故意摆成不一致的中间态：isSuspended() 不该被它带偏。
+        $inconsistent = $this->createMerchant('5.00', '0.00');
+        $inconsistent->fill(['debt_since' => '2026-01-01 08:00:00'])->save();
+        $this->assertFalse(
+            $service->isSuspended($inconsistent),
+            'isSuspended() 必须只看 available_balance，不能被一个过期/不一致的 debt_since 带偏'
+        );
+    }
+
     private function createRebate(int $merchantId, int $orderId, string $amount): MerchantRebate
     {
         $rebate = MerchantRebate::create([

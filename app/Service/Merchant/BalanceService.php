@@ -42,8 +42,14 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * persistBalance()（见其方法文档），由它比较"这次写入前"的可用余额和"这次写入后"
  * 的可用余额，只在真正跨越 0 这条线时才动 debt_since——从 ≥0 变成 <0 记下
  * 起始时间，从 <0 变回 ≥0 清空，停留在同一侧（含继续更负）不碰这一列。
- * 暂停下单的读取端在 App\Service\Order\RechargeOrderPlacementService::place()
- * （下单流程任务），本类只负责让 debt_since 这一列本身随时正确。
+ *
+ * 但 debt_since 只是一个派生缓存（给"欠款从什么时候开始"这个展示/预警用途），
+ * 它的正确性依赖"每一个改余额的写入路径都记得同步它"这个约定——本类内部能保证
+ * （统一收口到 persistBalance()），但不该让下单流程这种外部调用方也依赖这个约定
+ * 才能正确判断"现在是否该暂停下单"。所以真正的暂停闸门是 isSuspended()：直接对
+ * `available_balance` 做一次新鲜的 bccomp，不读 debt_since，永远不可能过期。
+ * 当前唯一的调用方是 App\Service\Order\RechargeOrderPlacementService::place()，
+ * 未来卡券/电影票/快递下单流程也应该调这同一个方法，不要各自重新实现判断逻辑。
  *
  * 金额全程用 bcmath 字符串运算，不用 float，跟 App\Service\Product\RebateCalculator
  * 的既有约定一致：decimal(10,2) 列精确到分，float 的二进制小数没法精确表示十进制分，
@@ -485,6 +491,18 @@ class BalanceService extends AbstractService
         );
 
         return bccomp($debtAmount, $threshold, self::SCALE) > 0;
+    }
+
+    /**
+     * requirements.md 4.5「负余额」暂停下单判断本身的唯一真实来源，供任意下单流程
+     * 复用（见类注释「暂停下单的读取端」一段）：直接对 `available_balance` 做一次
+     * 新鲜的 `bccomp`，不读 `debt_since`——后者是 persistBalance() 维护的派生缓存，
+     * 正确与否依赖每一条改余额路径都记得同步它，`available_balance` 本身才是权威
+     * 数据列，永远不需要担心过期或跟自己不一致。
+     */
+    public function isSuspended(Merchant $merchant): bool
+    {
+        return bccomp($merchant->available_balance, '0', self::SCALE) < 0;
     }
 
     /**

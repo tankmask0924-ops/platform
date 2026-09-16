@@ -179,18 +179,20 @@ class RechargeOrderPlacementService extends AbstractService
         }
 
         // requirements.md 4.5「负余额」：可用余额 < 0 时暂停该商户所有下单，直到
-        // 充值补足到 ≥ 0（`BalanceService::persistBalance()` 清空 `debt_since`）
-        // 才自动恢复。放在这个位置很重要：必须在上面的幂等重放快速路径*之后*——
-        // 一个商户在欠款之前已经成功的订单，重新提交同一个 merchant_order_no
-        // 必须原样拿回那笔旧订单的状态，不能因为商户现在恰好欠款就被这里拦下来
-        // （那会把一个纯粹的幂等重放，误判成一次新的、该拒绝的下单请求）；但必须
-        // 在校验商品、生成 order_no、创建 Order 行、调用 freeze() 之前——这是一次
-        // 真正的新下单尝试，商户欠款状态下应该被干净、快速地拒绝，不留下任何
-        // Order 行或余额变动，不应该走到后面任何一步才发现拒单。
+        // 充值补足到 ≥ 0 后自动恢复。放在这个位置很重要：必须在上面的幂等重放快速
+        // 路径*之后*——一个商户在欠款之前已经成功的订单，重新提交同一个
+        // merchant_order_no 必须原样拿回那笔旧订单的状态，不能因为商户现在恰好
+        // 欠款就被这里拦下来（那会把一个纯粹的幂等重放，误判成一次新的、该拒绝的
+        // 下单请求）；但必须在校验商品、生成 order_no、创建 Order 行、调用
+        // freeze() 之前——这是一次真正的新下单尝试，商户欠款状态下应该被干净、
+        // 快速地拒绝，不留下任何 Order 行或余额变动，不应该走到后面任何一步才
+        // 发现拒单。
         //
-        // 直接读 `debt_since !== null` 而不是重新比较 `available_balance` 跟 0：
-        // 前者是 BalanceService 那边刚刚建好的权威信号（进入/退出欠款状态的唯一
-        // 写入点），没必要在这里重新推导一遍同样的判断。
+        // 调 BalanceService::isSuspended() 而不是自己读 `debt_since !== null` 或
+        // 重新比较 `available_balance` 跟 0：判断逻辑本身（该用哪一列、要不要信
+        // debt_since 这个派生缓存）是 BalanceService 的职责，见该方法文档；本类
+        // 只管"什么时候该拿这个判断结果去拦下单"，也让未来卡券/电影票/快递下单
+        // 流程能直接复用同一个方法，不用各自重新实现一遍。
         //
         // 用 HttpException 而不是"落一个 failed 状态的 Order 行"（余额不足走的
         // 是那条路径）：欠款拒单和余额不足拒单是两个商户需要能分清楚的不同原因——
@@ -200,7 +202,7 @@ class RechargeOrderPlacementService extends AbstractService
         // 跟 validateProduct() 校验不通过时的既有约定一致：不创建任何 Order 行，
         // 直接抛 HttpException(422)，跟"这次请求参数/账户状态本身就不该继续"
         // 是同一类错误。
-        if ($merchant->debt_since !== null) {
+        if ($this->balanceService->isSuspended($merchant)) {
             throw new HttpException(422, '商户当前存在欠款，已暂停下单，请充值补足欠款后再试');
         }
 

@@ -21,6 +21,7 @@ use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierProduct;
+use App\Service\Merchant\BalanceService;
 use App\Service\Order\RechargeOrderPlacementService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
@@ -90,6 +91,13 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $this->productIds = [];
 
         foreach ($this->merchantIds as $id) {
+            // 上面按 order_id 清理只覆盖 freeze/deduct/unfreeze 那几种挂了 order_id
+            // 的流水；`testMerchantRecoversAfterRechargeAndCanPlaceOrderAgain()`
+            // 直接调用了 BalanceService::adjust()/recharge()，留下的是
+            // order_id 为 null、只挂 merchant_id 的 adjustment/recharge 流水，
+            // 这里按 merchant_id 兜底清掉，跟 BalanceServiceTest::tearDown() 同一个
+            // 惯例。对没有这类流水的其它测试是无害的空操作。
+            MerchantBalanceLog::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         $this->merchantIds = [];
@@ -303,16 +311,22 @@ class RechargeOrderPlacementServiceTest extends TestCase
     }
 
     /**
-     * requirements.md 4.5「负余额」：`debt_since` 非 null 时，暂停该商户所有下单——
-     * 一次全新的下单尝试（还没有已存在的订单可以幂等重放）必须被干净、快速地
-     * 拒绝，不创建任何 Order 行，不调用 `BalanceService::freeze()`，更不能碰到
-     * 供应商驱动。用跟 `testInsufficientBalanceFailsBeforeAnySupplierCall()` 同样
-     * 的严格性验证"没有调用"：驱动 mock 设成 `shouldNotReceive('placeOrder')`，
-     * 真的调用了会在 `Mockery::close()` 时让测试失败,不是靠事后查数据库表推断。
+     * requirements.md 4.5「负余额」：`BalanceService::isSuspended()` 为 true
+     * （即 `available_balance < 0`）时，暂停该商户所有下单——一次全新的下单尝试
+     * （还没有已存在的订单可以幂等重放）必须被干净、快速地拒绝，不创建任何
+     * Order 行，不调用 `BalanceService::freeze()`，更不能碰到供应商驱动。用跟
+     * `testInsufficientBalanceFailsBeforeAnySupplierCall()` 同样的严格性验证
+     * "没有调用"：驱动 mock 设成 `shouldNotReceive('placeOrder')`，真的调用了会在
+     * `Mockery::close()` 时让测试失败,不是靠事后查数据库表推断。
+     *
+     * 商户摆成 `available_balance` 为负、`debt_since` 同步非空的一致状态（正是
+     * `BalanceService::persistBalance()` 真实写入后会留下的样子），不是只改
+     * `debt_since` 而余额仍为正——拦截闸门现在直接读实时余额，不再信
+     * `debt_since` 这个派生缓存本身。
      */
     public function testMerchantInDebtIsRejectedCleanlyWithoutAnySideEffects()
     {
-        $merchant = $this->createMerchant('100.00', '2026-01-01 08:00:00');
+        $merchant = $this->createMerchant('-50.00', '2026-01-01 08:00:00');
         $product = $this->createProduct('10.00');
         $supplier = $this->createSupplier();
         $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
@@ -335,10 +349,13 @@ class RechargeOrderPlacementServiceTest extends TestCase
             Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first(),
             '欠款拒单不应该创建任何 Order 行'
         );
+        // order_attempts.order_id 有外键指向 orders 表，上面已经证明这个商户/
+        // merchant_order_no 组合没有任何 Order 行，自然不可能存在挂在它下面的
+        // OrderAttempt 行——不需要再单独查一遍。
         $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count(), '欠款拒单不应该有任何余额流水（freeze 从未被调用）');
 
         $merchant->refresh();
-        $this->assertSame('100.00', $merchant->available_balance);
+        $this->assertSame('-50.00', $merchant->available_balance);
         $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
@@ -372,8 +389,9 @@ class RechargeOrderPlacementServiceTest extends TestCase
         // 订单成功之后，商户"后来"陷入欠款（比如另一笔手动扣款调账）——直接改
         // 内存里这个 Merchant 对象再 save()，不经过 BalanceService（那部分穿越
         // 判断逻辑已经在 BalanceServiceTest 里覆盖过，这里只关心下单流程这边的
-        // 拦截点位置对不对）。
-        $merchant->fill(['debt_since' => '2026-01-01 08:00:00'])->save();
+        // 拦截点位置对不对）。拦截闸门现在读的是实时 `available_balance`，所以
+        // 这里连同 `debt_since` 一起摆成一致的"当前欠款"状态。
+        $merchant->fill(['available_balance' => '-10.00', 'debt_since' => '2026-01-01 08:00:00'])->save();
 
         // 第二次调用如果真的触发了驱动/freeze，Mockery 的 once() 期望会在
         // tearDown() 里的 Mockery::close() 让测试失败，是比"看返回值像成功"更硬的
@@ -384,6 +402,82 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
         $this->assertSame('success', $order->status);
+    }
+
+    /**
+     * requirements.md 4.5「充值补足到 ≥ 0 后自动恢复」端到端验证：不是分别验证
+     * "扣成负数后拒单"和"充值后恢复"两个独立场景凑巧都通过，而是同一个商户在
+     * 同一个测试里真的依次经历 `BalanceService::adjust()` 扣成负数 -> 下单被拒
+     * -> `BalanceService::recharge()` 补回非负 -> 下单成功这四步连续发生，证明
+     * `persistBalance()` 的 debt_since 穿越判断和 `isSuspended()` 的实时余额判断
+     * 真的接上了，不需要任何单独的"恢复"动作/开关/管理后台按钮。
+     *
+     * 全程只用一个 `$service`/一个驱动 mock：驱动 mock 只设一次 `shouldReceive
+     * ('placeOrder')->once()`（对应第二次、恢复后的下单尝试），第一次欠款期间的
+     * `place()` 调用如果真的碰到了驱动，会走成功分支返回而不是抛异常，
+     * `$this->fail(...)` 会先于 Mockery 计数暴露这个错误；两道证据叠加，比单独
+     * 任何一道都更硬。
+     */
+    public function testMerchantRecoversAfterRechargeAndCanPlaceOrderAgain()
+    {
+        $merchant = $this->createMerchant('50.00');
+        $product = $this->createProduct('10.00');
+        $supplier = $this->createSupplier();
+        $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
+
+        /** @var BalanceService $balanceService */
+        $balanceService = $this->getContainer()->get(BalanceService::class);
+
+        // 制造欠款：财务手动扣款调账（4.5 列举的三个会让余额变负的场景之一），
+        // 扣完之后可用余额从 50.00 变成 -20.00，跨越 0 这条线。
+        $balanceService->adjust($merchant->id, '-70.00', '测试：制造欠款', null);
+        $merchant->refresh();
+        $this->assertSame('-20.00', $merchant->available_balance);
+        $this->assertNotNull($merchant->debt_since, 'adjust() 扣成负数之后 debt_since 应该被设置');
+        $this->assertTrue($balanceService->isSuspended($merchant));
+
+        $driver = Mockery::mock(KasushouDriver::class);
+
+        $service = $this->makeService($driver);
+
+        $rejectedMerchantOrderNo = $this->uniqueMerchantOrderNo();
+        try {
+            $service->place($merchant, $rejectedMerchantOrderNo, $product->id, '13800000015', 'https://merchant.example.com/notify');
+            $this->fail('expected HttpException while merchant is currently in debt');
+        } catch (HttpException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+            $this->assertStringContainsString('欠款', $e->getMessage());
+        }
+
+        $this->assertNull(
+            Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $rejectedMerchantOrderNo)->first(),
+            '欠款期间的下单尝试不应该创建任何 Order 行'
+        );
+        $this->assertSame(
+            0,
+            MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'freeze')->count(),
+            '欠款期间的下单尝试不应该调用 freeze()'
+        );
+
+        // 充值补足到 ≥ 0——4.5「自动恢复」，不需要任何单独的恢复动作。
+        $balanceService->recharge($merchant->id, '30.00', '测试：充值补足欠款');
+        $merchant->refresh();
+        $this->assertSame('10.00', $merchant->available_balance);
+        $this->assertNull($merchant->debt_since, 'recharge() 补足到 ≥ 0 之后 debt_since 应该被清空');
+        $this->assertFalse($balanceService->isSuspended($merchant));
+
+        $driver->shouldReceive('placeOrder')->once()->andReturn(new DriverResult(
+            result: UnifiedResult::Success,
+            supplierOrderNo: 'SUP-RECOVERY',
+            actualCost: '8.00',
+        ));
+        $this->expectNotify(1);
+
+        $successMerchantOrderNo = $this->uniqueMerchantOrderNo();
+        $service->place($merchant, $successMerchantOrderNo, $product->id, '13800000015', 'https://merchant.example.com/notify');
+
+        $order = $this->findOrderOrFail($merchant->id, $successMerchantOrderNo);
+        $this->assertSame('success', $order->status, '充值补足欠款之后应该能重新成功下单');
     }
 
     /**
