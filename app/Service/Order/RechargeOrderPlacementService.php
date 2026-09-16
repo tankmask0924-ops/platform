@@ -96,11 +96,16 @@ use Throwable;
  * 任何生产代码专用的测试 setter/hook。
  *
  * 【范围外，见任务说明】商户业务线开通校验（4.2，跟"话费商品列表"任务同样的限制）、
- * 返佣真正入账（`merchant_rebates` 落库 + 结算调度，5.4；这里只是拿
- * `RebateCalculator` 算一个快照数字存进 `order_recharges.rebate_amount`，不代表
- * 真的返佣）、`Processing`/`Unknown` 结果的异步推进（等回调路由或定时查询任务，
- * 两者都还没建）、供应商侧回调地址的真实实现（`buildSupplierNotifyUrl()` 是占位，
- * 见该方法注释）、熔断（6.6）、供应商余额预警（-1 状态）——一律不在本类职责内。
+ * `Processing`/`Unknown` 结果的异步推进（等回调路由或定时查询任务，两者都还没建）、
+ * 供应商侧回调地址的真实实现（`buildSupplierNotifyUrl()` 是占位，见该方法注释）、
+ * 熔断（6.6）、供应商余额预警（-1 状态）——一律不在本类职责内。
+ *
+ * 【返佣，5.4】本类只把已经查过的 `Product` 原样透传给
+ * `OrderResultApplier::apply()`，真正"订单成功时生成待到账返佣记录"的逻辑在
+ * `OrderResultApplier` 里（跟"状态转换 + 余额 + 通知"共用同一个成功分支，见该类
+ * 类注释），不是本类职责——`order_recharges.rebate_amount` 仍然只是下单那一刻的
+ * 返佣金额快照（供商户对账参考），不代表真的返佣，真正生效的 `merchant_rebates`
+ * 记录由 `OrderResultApplier` 在订单真正成功时另外生成。
  */
 class RechargeOrderPlacementService extends AbstractService
 {
@@ -320,7 +325,7 @@ class RechargeOrderPlacementService extends AbstractService
             }
         }
 
-        $this->finalizeOrder($order, $lastMapping, $lastDriverResult);
+        $this->finalizeOrder($order, $product, $lastMapping, $lastDriverResult);
     }
 
     /**
@@ -402,9 +407,11 @@ class RechargeOrderPlacementService extends AbstractService
      * "一次都没试成"这个 `OrderResultApplier` 管不到的特殊分支（连
      * `DriverResult`/供应商都不存在，没法调用 `apply()`），以及把这次尝试对应
      * 映射行的估算成本价预置到订单上（`OrderResultApplier` 类注释里"cost_price
-     * 的预置值约定"一节）。
+     * 的预置值约定"一节）。`$product` 是下单时已经查过的商品行，直接透传给
+     * `OrderResultApplier::apply()`，成功时用来生成返佣待到账记录
+     * （requirements.md 5.4），不需要 `OrderResultApplier` 再反查一次。
      */
-    private function finalizeOrder(Order $order, ?SupplierProduct $mapping, ?DriverResult $driverResult): void
+    private function finalizeOrder(Order $order, Product $product, ?SupplierProduct $mapping, ?DriverResult $driverResult): void
     {
         if ($mapping === null || $driverResult === null) {
             // 一次都没试成——要么这个商品压根没有映射行，要么全部都被状态/库存/
@@ -422,7 +429,7 @@ class RechargeOrderPlacementService extends AbstractService
         // 抽取前的行为完全一致。
         $order->fill(['cost_price' => $mapping->cost_price]);
 
-        $this->orderResultApplier->apply($order, $driverResult, $mapping->supplier_id);
+        $this->orderResultApplier->apply($order, $driverResult, $mapping->supplier_id, $product);
     }
 
     private function finalizeAsNoSupplierAvailable(Order $order): void

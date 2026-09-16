@@ -12,12 +12,21 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
+use App\Dao\MerchantDao;
+use App\Dao\MerchantRebateDao;
+use App\Dao\OrderRechargeDao;
+use App\Dao\ProductDao;
+use App\Dao\SystemSettingDao;
 use App\Model\Order;
+use App\Model\Product;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
+use App\Service\Product\RebateCalculator;
 use App\Supplier\DriverResult;
 use App\Supplier\UnifiedResult;
+use Carbon\Carbon;
+use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
 
 /**
@@ -66,38 +75,162 @@ use Hyperf\Di\Annotation\Inject;
  * 一层，不需要在这里重复造轮子；但"要不要调用 `apply()`"这个更早的判断（订单是否
  * 已经是终态）必须由调用方在调用前做，`apply()` 假设"调用我就意味着这次结果应该
  * 被应用"，不会自己去反悔。
+ *
+ * 【返佣待到账记录生成，requirements.md 5.4】订单成功且拿到返佣基数时，在
+ * `BalanceService::deduct()` + 通知之后，紧接着按当前（"下单成功这一刻"，不是
+ * 下单发起时那一刻——两者之间商户等级可能被后台改过）的商户等级、
+ * `App\Service\Product\RebateCalculator::calculateDetailed()` 算出的比例/来源/
+ * 金额，生成一条 `merchant_rebates` 待到账记录（`status = pending`）。这个任务
+ * 只做"生成"和"结算"两半（结算见 `App\Service\Merchant\BalanceService::
+ * settleRebate()` + `App\Crontab\RebateSettlementCrontab`），**不做**作废/扣回——
+ * 触发它们的售后争议处理、人工改判订单状态都还没建，`merchant_rebates.status`
+ * 到 `voided`/`clawed_back` 的转换完全不在本类职责内。
+ *
+ * 金额为 0（商品没配返佣，或商户当前等级在商品维度、业务线维度都没有比例）时，
+ * 按 5.3/5.4 的规则**不生成任何记录**，不是"生成一条 amount=0 的记录"。
+ *
+ * 【`Product` 从哪来】两个调用方里只有 `RechargeOrderPlacementService::
+ * finalizeOrder()` 手上现成有 `Product`（下单时就查过一次，见该类
+ * `validateProduct()`），直接原样传进来，不重复查询；`SupplierCallbackService::
+ * handle()` 处理异步回调时手上没有 `Product`，`$product` 传 `null`，
+ * `generatePendingRebate()` 这时才按 `order_id` 反查 `order_recharges.product_id`
+ * 再查一次 `Product`（`order_recharges` 在下单成功进入路由之前就已经建好一行，
+ * 见 `RechargeOrderPlacementService::place()`，回调到达时这行必然已经存在）。
+ * 这条本类目前只覆盖话费业务线（唯一有 `OrderRecharge` 行的订单类型），
+ * 卡券/电影票/快递不适用（返佣基数/取法都不一样，见
+ * `App\Service\Product\RebateCalculator` 类注释）。
+ *
+ * 【重复调用防护】`merchant_rebates.order_id` 唯一索引兜底：`apply()` 的幂等本
+ * 依赖调用方保证只在订单仍是 `processing` 时调用一次，但万一真的被重复调用，
+ * 插入返佣记录撞上唯一索引会抛 `QueryException`，这里捕获当幂等 no-op，
+ * 跟 `BalanceService::deduct()`/`unfreeze()` 是同一个"插入撞车即已处理过"套路，
+ * 不是重新发明。
  */
 class OrderResultApplier extends AbstractService
 {
+    private const REBATE_DUE_PERIOD_SETTING_KEY = 'rebate_due_period_days';
+
+    /**
+     * requirements.md 5.4："固定期限在返佣管理后台设置，全平台统一，默认 7 天"——
+     * 这个默认值保证 `system_settings` 一行都没有时返佣到账逻辑仍然正确。
+     */
+    private const DEFAULT_REBATE_DUE_PERIOD_DAYS = 7;
+
     #[Inject]
     protected BalanceService $balanceService;
 
     #[Inject]
     protected MerchantNotifyService $merchantNotifyService;
 
-    public function apply(Order $order, DriverResult $result, int $supplierId): void
+    #[Inject]
+    protected RebateCalculator $rebateCalculator;
+
+    #[Inject]
+    protected MerchantRebateDao $merchantRebateDao;
+
+    #[Inject]
+    protected SystemSettingDao $systemSettingDao;
+
+    #[Inject]
+    protected MerchantDao $merchantDao;
+
+    #[Inject]
+    protected OrderRechargeDao $orderRechargeDao;
+
+    #[Inject]
+    protected ProductDao $productDao;
+
+    /**
+     * @param null|Product $product 调用方已经手上有的商品行，见类注释"`Product`
+     *                              从哪来"一节；只有 `Success` 分支会用到
+     */
+    public function apply(Order $order, DriverResult $result, int $supplierId, ?Product $product = null): void
     {
         match ($result->result) {
-            UnifiedResult::Success => $this->applySuccess($order, $result, $supplierId),
+            UnifiedResult::Success => $this->applySuccess($order, $result, $supplierId, $product),
             UnifiedResult::DefiniteFailure => $this->applyDefiniteFailure($order, $result, $supplierId),
             UnifiedResult::Processing, UnifiedResult::Unknown => $this->applyNonTerminal($order, $result, $supplierId),
         };
     }
 
-    private function applySuccess(Order $order, DriverResult $result, int $supplierId): void
+    private function applySuccess(Order $order, DriverResult $result, int $supplierId, ?Product $product): void
     {
+        $now = date('Y-m-d H:i:s');
+
         $order->fill([
             'status' => 'success',
             'cost_price' => $result->actualCost ?? $order->cost_price,
             'supplier_id' => $supplierId,
             'supplier_order_no' => $result->supplierOrderNo,
             'deducted_amount' => $order->sale_price,
-            'completed_at' => date('Y-m-d H:i:s'),
-            'finished_at' => date('Y-m-d H:i:s'),
+            'completed_at' => $now,
+            'finished_at' => $now,
         ])->save();
 
         $this->balanceService->deduct($order->merchant_id, $order->id, $order->sale_price);
         $this->merchantNotifyService->notify($order->id);
+
+        $this->generatePendingRebate($order, $product, $now);
+    }
+
+    private function generatePendingRebate(Order $order, ?Product $product, string $orderCompletedAt): void
+    {
+        $product ??= $this->resolveProduct($order);
+        if ($product === null) {
+            return;
+        }
+
+        // 用"下单成功这一刻"的商户等级，不是下单发起时的等级快照（两者之间等级
+        // 可能被后台调整过）——`MerchantDao::find()` 走 model-cache，缓存靠
+        // `App\Listener\DeleteCacheListener` 在等级变更 `save()` 时自动失效，
+        // 这里读到的仍然是最新值，不是过期缓存。
+        $merchant = $this->merchantDao->find($order->merchant_id);
+        if ($merchant === null) {
+            return;
+        }
+
+        $calculation = $this->rebateCalculator->calculateDetailed($product, $merchant->level_id);
+        if (bccomp($calculation->amount, '0', 2) <= 0) {
+            // requirements.md 5.3/5.4：没有比例可用或返佣基数为 0，不生成任何记录，
+            // 不是生成一条 amount = '0.00' 的记录。
+            return;
+        }
+
+        $dueDays = (int) $this->systemSettingDao->getValue(
+            self::REBATE_DUE_PERIOD_SETTING_KEY,
+            self::DEFAULT_REBATE_DUE_PERIOD_DAYS
+        );
+        $dueAt = Carbon::parse($orderCompletedAt)->addDays($dueDays)->toDateTimeString();
+
+        try {
+            $this->merchantRebateDao->create([
+                'order_id' => $order->id,
+                'merchant_id' => $order->merchant_id,
+                'business_line' => $order->business_line,
+                'level_id' => $merchant->level_id,
+                'rebate_base' => $product->rebate_amount,
+                'rebate_base_source' => 'product',
+                'rebate_rate' => $calculation->rate,
+                'rebate_rate_source' => $calculation->rateSource,
+                'amount' => $calculation->amount,
+                'status' => 'pending',
+                'order_completed_at' => $orderCompletedAt,
+                'due_at' => $dueAt,
+            ]);
+        } catch (QueryException $e) {
+            // merchant_rebates.order_id 唯一索引命中：这笔订单已经生成过返佣记录了，
+            // 幂等 no-op，见类注释"重复调用防护"一节。
+        }
+    }
+
+    private function resolveProduct(Order $order): ?Product
+    {
+        $recharge = $this->orderRechargeDao->find($order->id);
+        if ($recharge === null) {
+            return null;
+        }
+
+        return $this->productDao->find($recharge->product_id);
     }
 
     private function applyDefiniteFailure(Order $order, DriverResult $result, int $supplierId): void

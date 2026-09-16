@@ -14,6 +14,7 @@ namespace App\Service\Merchant;
 
 use App\Dao\MerchantBalanceLogDao;
 use App\Dao\MerchantDao;
+use App\Model\MerchantRebate;
 use App\Service\AbstractService;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\DbConnection\Db;
@@ -27,11 +28,13 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 编排（选供应商、调驱动、判断订单成败），那是下一个任务（下单流程）的事，这里
  * 只保证「调用了就一定正确、幂等地改余额并记流水」。
  *
- * 只实现 freeze/deduct/unfreeze 三种 type；recharge/supplement_deduct/refund/
- * adjustment/rebate_settle/rebate_clawback 对应充值审核、售后补扣/退款、财务
- * 手动调账、返佣结算/扣回，都是各自独立的、还没建的功能，不在这次任务范围内
- * （merchants.debt_since 只会被 supplement_deduct/rebate_clawback 驱动进负数，
- * 两者都不在本任务，所以这里的代码完全不碰 debt_since）。
+ * 实现 freeze/deduct/unfreeze/rebate_settle 四种 type；recharge/supplement_deduct/
+ * refund/adjustment/rebate_clawback 对应充值审核、售后补扣/退款、财务手动调账、
+ * 返佣扣回，都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
+ * 争议处理、人工改判订单状态都还没建，`merchant_rebates.status` 到
+ * `clawed_back` 的转换完全不在本类职责内；merchants.debt_since 只会被
+ * supplement_deduct/rebate_clawback 驱动进负数，两者都不在本任务，所以这里的
+ * 代码完全不碰 debt_since）。
  *
  * 金额全程用 bcmath 字符串运算，不用 float，跟 App\Service\Product\RebateCalculator
  * 的既有约定一致：decimal(10,2) 列精确到分，float 的二进制小数没法精确表示十进制分，
@@ -218,6 +221,79 @@ class BalanceService extends AbstractService
                 'available_balance' => $availableAfter,
                 'frozen_balance' => $frozenAfter,
             ])->save();
+        });
+    }
+
+    /**
+     * 返佣结算：`App\Crontab\RebateSettlementCrontab` 扫到到期的待到账
+     * `merchant_rebates` 记录后逐条调用（requirements.md 5.4"入账"）。只加
+     * 可用余额，冻结余额不动——返佣从来没有被冻结过，跟 freeze/deduct/unfreeze
+     * 三者操作的是"下单时预先冻结的钱"完全是两回事。
+     *
+     * 接收整个 `MerchantRebate` 模型而不是拆散成 `int $merchantId, int $rebateId, ...`
+     * 若干个标量参数（这点跟 freeze/deduct/unfreeze 的方法形状不同）：调用方
+     * （crontab）本来就是从 `MerchantRebateDao::findDuePending()` 查出一批
+     * `MerchantRebate` 行来处理，本方法同时要读 `merchant_id`/`order_id`/`amount`
+     * 三个字段、还要在结算成功后把这一行本身的 `status`/`settled_at` 改掉，接收
+     * 整个模型比拆开传参再让调用方额外传一个"结算之后要不要改这行"的回调更省事，
+     * 也避免调用方（crontab）自己去写"改 status/settled_at"这段本该属于
+     * BalanceService 的逻辑。
+     *
+     * 幂等：跟 deduct()/unfreeze() 完全同一套"先插日志、插入成功才动余额列"套路，
+     * 唯一索引换成了 `merchant_balance_logs.dedupe_rebate_key`
+     * （"{rebate_id}-{type}"，只覆盖 rebate_settle/rebate_clawback 两种 type，
+     * 见该表迁移注释），插入撞车说明这条 `rebate_id` 已经 rebate_settle 过一次，
+     * 捕获 `QueryException` 当幂等 no-op，此时余额列和 `merchant_rebates` 行都不碰。
+     * `merchants.available_balance` 的变更和 `merchant_rebates.status` 的变更在
+     * 同一个 `Db::transaction()` 里，要么一起提交、要么（比如中途进程被杀）整个
+     * 回滚，不会出现"钱到账了但记录还是 pending"或反过来的中间态；同一批到期记录
+     * 里每一条各自单独一个事务（调用方 `RebateSettlementCrontab` 逐条循环调用本
+     * 方法），某一条结算抛异常不会连累同批次其它记录被回滚。
+     *
+     * @return bool 这次调用是否真的完成了结算；`false` 表示幂等 no-op（这条
+     *              `rebate_id` 之前已经结算过），调用方据此统计"这次真正新结算了
+     *              多少条"，不是简单数"调用了多少次没抛异常"
+     */
+    public function settleRebate(MerchantRebate $rebate): bool
+    {
+        return Db::transaction(function () use ($rebate) {
+            $merchant = $this->merchantDao->lockForUpdate($rebate->merchant_id);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcadd($availableBefore, $rebate->amount, self::SCALE);
+            $frozenBefore = $merchant->frozen_balance;
+            $frozenAfter = $frozenBefore;
+
+            try {
+                $this->balanceLogDao->create([
+                    'merchant_id' => $rebate->merchant_id,
+                    'type' => 'rebate_settle',
+                    'amount' => $rebate->amount,
+                    'available_before' => $availableBefore,
+                    'available_after' => $availableAfter,
+                    'frozen_before' => $frozenBefore,
+                    'frozen_after' => $frozenAfter,
+                    'order_id' => $rebate->order_id,
+                    'rebate_id' => $rebate->id,
+                    'created_at' => date('Y-m-d H:i:s'),
+                ]);
+            } catch (QueryException $e) {
+                // dedupe_rebate_key 唯一索引命中：这条返佣已经结算过了，幂等 no-op。
+                // 日志没插成功，下面改余额列/返佣状态的代码不会执行到。
+                return false;
+            }
+
+            $merchant->fill(['available_balance' => $availableAfter])->save();
+
+            $rebate->fill([
+                'status' => 'settled',
+                'settled_at' => date('Y-m-d H:i:s'),
+            ])->save();
+
+            return true;
         });
     }
 }

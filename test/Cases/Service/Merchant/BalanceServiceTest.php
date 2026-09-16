@@ -14,6 +14,7 @@ namespace HyperfTest\Cases\Service\Merchant;
 
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
+use App\Model\MerchantRebate;
 use App\Service\Merchant\BalanceService;
 use Hyperf\Testing\TestCase;
 
@@ -38,8 +39,15 @@ class BalanceServiceTest extends TestCase
 {
     private array $merchantIds = [];
 
+    private array $rebateIds = [];
+
     protected function tearDown(): void
     {
+        foreach ($this->rebateIds as $id) {
+            MerchantRebate::destroy($id);
+        }
+        $this->rebateIds = [];
+
         foreach ($this->merchantIds as $id) {
             MerchantBalanceLog::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
@@ -196,6 +204,89 @@ class BalanceServiceTest extends TestCase
         $this->assertSame('0.00', $merchant->frozen_balance);
 
         $this->assertSame(1, MerchantBalanceLog::where('order_id', $orderId)->where('type', 'unfreeze')->count());
+    }
+
+    public function testSettleRebateIncreasesAvailableBalanceOnlyAndLogsIt()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        // 返佣从来没有被冻结过，模拟一个跟冻结余额无关的商户余额状态。
+        $merchant = $this->createMerchant('70.00', '5.00');
+        $orderId = $this->uniqueOrderId();
+        $rebate = $this->createRebate($merchant->id, $orderId, '3.00');
+
+        $result = $service->settleRebate($rebate);
+
+        $this->assertTrue($result);
+
+        $merchant->refresh();
+        $this->assertSame('73.00', $merchant->available_balance, 'settleRebate 只应该增加可用余额');
+        $this->assertSame('5.00', $merchant->frozen_balance, 'settleRebate 不应该动冻结余额');
+
+        $rebate->refresh();
+        $this->assertSame('settled', $rebate->status);
+        $this->assertNotNull($rebate->settled_at);
+
+        $log = MerchantBalanceLog::where('rebate_id', $rebate->id)->where('type', 'rebate_settle')->first();
+        $this->assertNotNull($log);
+        $this->assertSame($merchant->id, $log->merchant_id);
+        $this->assertSame($orderId, $log->order_id);
+        $this->assertSame('3.00', $log->amount);
+        $this->assertSame('70.00', $log->available_before);
+        $this->assertSame('73.00', $log->available_after);
+        $this->assertSame('5.00', $log->frozen_before);
+        $this->assertSame('5.00', $log->frozen_after);
+    }
+
+    /**
+     * 跟 deduct/unfreeze 的重复调用测试同样的目的：同一条 rebate_id 重复
+     * settleRebate()，第二次必须是安全的 no-op——不重复加余额，不抛异常，
+     * 流水表里这条 rebate_id + rebate_settle 组合只有一条。
+     */
+    public function testSettleRebateTwiceForSameRebateIsIdempotent()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('70.00', '0.00');
+        $orderId = $this->uniqueOrderId();
+        $rebate = $this->createRebate($merchant->id, $orderId, '3.00');
+
+        $first = $service->settleRebate($rebate);
+        $merchant->refresh();
+        $this->assertTrue($first);
+        $this->assertSame('73.00', $merchant->available_balance);
+
+        // 第二次调用：不应该抛异常，也不应该再加一次钱。
+        $second = $service->settleRebate($rebate);
+
+        $this->assertFalse($second, '第二次调用应该识别出已经结算过，返回 false');
+
+        $merchant->refresh();
+        // 关键断言：可用余额没有被第二次调用再加一次（不是 76.00）。
+        $this->assertSame('73.00', $merchant->available_balance);
+
+        // 关键断言：日志表里这个 rebate_id + rebate_settle 组合只有一条，不是两条。
+        $this->assertSame(1, MerchantBalanceLog::where('rebate_id', $rebate->id)->where('type', 'rebate_settle')->count());
+    }
+
+    private function createRebate(int $merchantId, int $orderId, string $amount): MerchantRebate
+    {
+        $rebate = MerchantRebate::create([
+            'order_id' => $orderId,
+            'merchant_id' => $merchantId,
+            'business_line' => 'recharge',
+            'level_id' => random_int(1, 999999),
+            'rebate_base' => '5.00',
+            'rebate_base_source' => 'product',
+            'rebate_rate' => '0.6000',
+            'rebate_rate_source' => 'level',
+            'amount' => $amount,
+            'status' => 'pending',
+            'order_completed_at' => date('Y-m-d H:i:s'),
+            'due_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $this->rebateIds[] = $rebate->id;
+
+        return $rebate;
     }
 
     private function createMerchant(string $availableBalance, string $frozenBalance): Merchant

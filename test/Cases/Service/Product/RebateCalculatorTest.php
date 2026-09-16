@@ -113,6 +113,58 @@ class RebateCalculatorTest extends TestCase
     }
 
     /**
+     * `calculateDetailed()`（requirements.md 5.4 生成待到账返佣记录用，需要连比例
+     * 及来源一起快照）复用同一个 spec 例 1 fixture：普通/银牌走等级默认比例
+     * （来源 'level'），金牌命中商品单独覆盖（来源 'product_level'）。金额断言
+     * 跟 `calculate()` 完全一致，证明重构没有改变既有行为。
+     */
+    public function testCalculateDetailedOrdinaryAndSilverLevelsUseLevelSource()
+    {
+        [$product, $ordinaryLevelId, $silverLevelId] = $this->buildSpecExampleFixture();
+
+        $ordinary = $this->calculator()->calculateDetailed($product, $ordinaryLevelId);
+        $this->assertSame('0.6000', $ordinary->rate);
+        $this->assertSame('level', $ordinary->rateSource);
+        $this->assertSame('0.30', $ordinary->amount);
+
+        $silver = $this->calculator()->calculateDetailed($product, $silverLevelId);
+        $this->assertSame('0.7500', $silver->rate);
+        $this->assertSame('level', $silver->rateSource);
+        $this->assertSame('0.37', $silver->amount);
+    }
+
+    public function testCalculateDetailedGoldLevelUsesProductLevelSource()
+    {
+        [$product, , , $goldLevelId] = $this->buildSpecExampleFixture();
+
+        $gold = $this->calculator()->calculateDetailed($product, $goldLevelId);
+        $this->assertSame('0.9000', $gold->rate);
+        $this->assertSame('product_level', $gold->rateSource);
+        $this->assertSame('0.45', $gold->amount);
+    }
+
+    /**
+     * 没有等级、或等级在商品维度和业务线维度都没设置比例时，`calculateDetailed()`
+     * 的 `rateSource` 必须是 `null`（不是空字符串或某个占位值），`amount` 固定
+     * `'0.00'`——`App\Service\Order\OrderResultApplier` 拿这个结果去判断"要不要
+     * 生成返佣记录"，靠的就是 `amount` 是否 > 0，`rateSource` 为 null 是"这份
+     * 结果不对应任何真实比例"的显式信号。
+     */
+    public function testCalculateDetailedZeroRateCaseHasNullSourceAndZeroAmount()
+    {
+        $product = $this->createProduct('0.50');
+
+        $noLevel = $this->calculator()->calculateDetailed($product, null);
+        $this->assertSame('0.00', $noLevel->amount);
+        $this->assertNull($noLevel->rateSource);
+
+        $levelWithNoRateAtAll = random_int(500000, 599999);
+        $noRate = $this->calculator()->calculateDetailed($product, $levelWithNoRateAtAll);
+        $this->assertSame('0.00', $noRate->amount);
+        $this->assertNull($noRate->rateSource);
+    }
+
+    /**
      * @return array{0: Product, 1: int, 2: int, 3: int} [商品, 普通等级id, 银牌等级id, 金牌等级id]
      */
     private function buildSpecExampleFixture(): array

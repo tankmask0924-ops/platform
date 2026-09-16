@@ -31,7 +31,8 @@
 | 加密服务 | [database-design.md 5.3](database-design.md#53-供应商配置和商户密钥的加密) | `App\Crypto\Encryptor`：`AES-256-GCM`，密钥读 `.env` 的 `APP_ENCRYPTION_KEY`；4 个单测通过（往返、非确定性、篡改检测、非法输入） | ✅ |
 | 开放 API 签名鉴权中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 验 `app_key`/`timestamp`/`nonce`/`sign`；`nonce` 防重放放 Redis（见 [database-design.md 5.6](database-design.md#56-哪些东西故意不放进这份-mysql-设计)）。`App\Middleware\OpenApiSignatureMiddleware`（PSR-15）：按 `app_key` 查商户（`MerchantDao::findByAppKey`）、校验 `status === active`、用 `Encryptor` 解密 `app_secret`、`SignatureSigner::verify` 验签、校验 `timestamp` ±5 分钟窗口、`NonceGuard::consume` 防重放；验签通过后把 Merchant 通过 `$request->withAttribute('merchant', $merchant)` 传给下一个 handler；失败时直接返回 `{code, message, data}` 形状的 JSON（内部占位错误码，不是平台统一错误码，统一返回格式那行做完后要收敛过去）。**未注册进 `config/autoload/middlewares.php` 全局列表**（会连带拦住 `/`、`/users`），在开放 API Controller 上用 `#[Middleware(OpenApiSignatureMiddleware::class)]` 类级注解挂载（**不能**用 `#[Controller(options: ['middleware' => [...]])]`——这个 Hyperf 版本的 `DispatcherFactory::handleController()` 会把 Controller 注解 options 里的 middleware 键整个覆盖掉，只认 `#[Middleware]`/`#[Middlewares]` 注解，那样中间件会静默不生效，真机测试过才发现）。已通过第 6 节"查询余额"接口做了真实 HTTP 派发的端到端联调（`test/Cases/OpenApi/BalanceControllerTest.php`，用 `test/HttpTestCase.php` 走真实路由 + 中间件栈，覆盖正常签名和错误签名两条路径），证明中间件真的挂上了、Merchant 属性真的传下去了，不再是仅靠 mock handler 的单测。中间件本身连同它依赖的 Merchant Model/Dao（见下一行）已经完整可用 | ✅ |
 | Merchant / MerchantLevel Model 与 Dao 基础设施 | [database-design.md](database-design.md) merchants / merchant_levels 表 | `App\Model\Merchant`（`hyperf/model-cache`，`ip_whitelist` 转 `array`）、`App\Model\MerchantLevel`；`App\Dao\MerchantDao`（`find()` 重写走 `findFromCache`，新增 `findByAppKey()` 不走缓存、新增 `lockForUpdate()` 加行锁不走缓存）、`App\Dao\MerchantLevelDao`。加密/解密逻辑不放在 Model，留在 Dao/Service/中间件层。单测覆盖按 id（含缓存）、按 app_key 查询、行锁查询（含验证编译出的 SQL 真的带 `for update`），真实 DB 建行后 teardown 清理 | ✅ |
-| 商户余额冻结/扣款/解冻 | [requirements.md 4.4](requirements.md#44-账户余额)、[4.5](requirements.md#45-负余额) | `App\Model\MerchantBalanceLog`（对应 `merchant_balance_logs`，`$timestamps = false`，写一次不改，`dedupe_order_key`/`dedupe_rebate_key` 两个生成列不进 `$fillable`）+ `App\Dao\MerchantBalanceLogDao`；`App\Service\Merchant\BalanceService::freeze()/deduct()/unfreeze()` 三个余额变动原语：`freeze()` 在 `Db::transaction()` 里 `MerchantDao::lockForUpdate()` 锁行、检查可用余额≥金额，够则冻结（可用减、冻结加）写 `freeze` 日志返回 `true`，不够直接返回 `false`（事务内无任何写操作，等效回滚，不记日志）；`deduct()`/`unfreeze()` 结构对称：先按 `dedupe_order_key`（`"{order_id}-{type}"`）唯一索引尝试插日志，插入成功才改余额列，插入因唯一索引撞车抛 `QueryException` 时捕获当幂等 no-op（余额列不会被碰到），不依赖应用层查了再写的预检查。全程 bcmath 字符串运算，不用 float。金额、bcmath 全程 scale=2。`freeze()` 本身没有同订单重复调用的 DB 级防护（`dedupe_order_key` 的生成列 CASE 只覆盖 `deduct`/`unfreeze`，不含 `freeze`）——按下单时序（先冻结、冻结成功才建订单行）没有现成的订单级唯一键可用，这道防线留给下一个任务（下单流程）在调用 `freeze()` 之前用请求幂等键/订单表约束解决。**范围内**：`freeze`/`deduct`/`unfreeze` 三种流水类型；**范围外**：`recharge`/`supplement_deduct`/`refund`/`adjustment`/`rebate_settle`/`rebate_clawback` 对应的充值审核、售后补扣/退款、手动调账、返佣结算/扣回流程，以及 `merchants.debt_since` 的维护（只有 `supplement_deduct`/`rebate_clawback` 会触发，两者都不在这次任务），还有把这三个原语真正接进下单流程（路由 + 供应商驱动调用 + 判定成败）——都是后续任务。测试见 `test/Cases/Service/Merchant/BalanceServiceTest.php`（含 `deduct`/`unfreeze` 各自的重复调用幂等测试）+ `test/Cases/Dao/MerchantDaoTest.php` 新增的行锁相关用例 | ✅ |
+| 商户余额冻结/扣款/解冻/返佣结算 | [requirements.md 4.4](requirements.md#44-账户余额)、[4.5](requirements.md#45-负余额)、[5.4](requirements.md#54-返佣到账) | `App\Model\MerchantBalanceLog`（对应 `merchant_balance_logs`，`$timestamps = false`，写一次不改，`dedupe_order_key`/`dedupe_rebate_key` 两个生成列不进 `$fillable`）+ `App\Dao\MerchantBalanceLogDao`；`App\Service\Merchant\BalanceService::freeze()/deduct()/unfreeze()/settleRebate()` 四个余额变动原语：`freeze()` 在 `Db::transaction()` 里 `MerchantDao::lockForUpdate()` 锁行、检查可用余额≥金额，够则冻结（可用减、冻结加）写 `freeze` 日志返回 `true`，不够直接返回 `false`（事务内无任何写操作，等效回滚，不记日志）；`deduct()`/`unfreeze()` 结构对称：先按 `dedupe_order_key`（`"{order_id}-{type}"`）唯一索引尝试插日志，插入成功才改余额列，插入因唯一索引撞车抛 `QueryException` 时捕获当幂等 no-op（余额列不会被碰到），不依赖应用层查了再写的预检查。全程 bcmath 字符串运算，不用 float。金额、bcmath 全程 scale=2。`freeze()` 本身没有同订单重复调用的 DB 级防护（`dedupe_order_key` 的生成列 CASE 只覆盖 `deduct`/`unfreeze`，不含 `freeze`）——按下单时序（先冻结、冻结成功才建订单行）没有现成的订单级唯一键可用，这道防线留给下一个任务（下单流程）在调用 `freeze()` 之前用请求幂等键/订单表约束解决。`settleRebate(MerchantRebate $rebate): bool` 是后加的第四个原语（本次"返佣到账"任务）：只加可用余额、不动冻结余额（返佣从没被冻结过），幂等靠同一张表的 `dedupe_rebate_key`（`"{rebate_id}-{type}"`，只覆盖 `rebate_settle`/`rebate_clawback`）唯一索引，同一套"先插日志、插入成功才改余额列"套路；额外在同一个事务里把 `merchant_rebates.status` 改成 `settled`、写 `settled_at`，返回值 `true`/`false` 区分"这次真的结算了"还是"幂等 no-op"，供调用方统计。**范围内**：`freeze`/`deduct`/`unfreeze`/`rebate_settle` 四种流水类型；**范围外**：`recharge`/`supplement_deduct`/`refund`/`adjustment`/`rebate_clawback` 对应的充值审核、售后补扣/退款、手动调账、返佣扣回流程，以及 `merchants.debt_since` 的维护（只有 `supplement_deduct`/`rebate_clawback` 会触发，两者都不在这次任务），还有把 `freeze`/`deduct`/`unfreeze` 真正接进下单流程（已在下单流程任务里完成，见下单相关行）——都是后续任务。测试见 `test/Cases/Service/Merchant/BalanceServiceTest.php`（含 `deduct`/`unfreeze`/`settleRebate` 各自的重复调用幂等测试）+ `test/Cases/Dao/MerchantDaoTest.php` 新增的行锁相关用例 | ✅ |
+| 返佣待到账生成 + 到期结算 | [requirements.md 5.4](requirements.md#54-返佣到账) | **生成**：`App\Service\Product\RebateCalculator` 新增 `calculateDetailed()`（`calculate()` 改造成它的薄包装，共用同一份 3 步比例取法，不分叉两套实现），返回 `App\Service\Product\RebateCalculationResult{rate, rateSource: 'product_level'\|'level'\|null, amount}`——比 `calculate()` 只给最终金额多了"用的哪个比例、从哪一层取的"，供生成待到账记录时按 5.4 原文快照"比例及来源"。`App\Model\MerchantRebate` 补上 `$dates`（`order_completed_at`/`due_at`/`settled_at`/`voided_at`/`clawed_back_at`，原来漏加，读出来一直是裸字符串不是 Carbon）；`App\Dao\MerchantRebateDao` 新增 `findByOrderId()`/`findDuePending()`。真正生成的逻辑加在 `App\Service\Order\OrderResultApplier::applySuccess()`（`BalanceService::deduct()` + 通知之后）：按"下单成功这一刻"重新查一次商户等级（不是下单发起时的旧快照）算出返佣，金额 > 0 才插入一条 `merchant_rebates`（`status = pending`，`due_at = order_completed_at + SystemSettingDao::getValue('rebate_due_period_days', 默认 7)`），金额为 0 时**不插入任何记录**；`apply()` 新增可选的 `?Product $product` 参数——`RechargeOrderPlacementService::finalizeOrder()` 把下单时已经查过的 `Product` 直接透传（不重复查询），`SupplierCallbackService::handle()` 处理异步回调时手上没有 `Product`，传 `null`，由 `OrderResultApplier` 按 `order_id` 反查 `order_recharges.product_id` 再查一次；插入撞上 `merchant_rebates.order_id` 唯一索引时捕获 `QueryException` 当幂等 no-op。**系统参数**：新增 `App\Model\SystemSetting` + `App\Dao\SystemSettingDao::getValue()`（`system_settings` 主键是字符串 `key`、只有 `updated_at` 没有 `created_at`，Model 用 `CREATED_AT = null` 覆盖常量处理；`getValue()` 通用解码——先 `json_decode()`，失败就原样返回字符串，具体类型由调用方按 key 约定自己转型），零配置行时代码级默认值兜底（`rebate_due_period_days` 默认 7），无编辑用的后台 UI（本次任务不含，见第 8 节"返佣管理"行）。**结算**：`App\Crontab\RebateSettlementCrontab`（`#[Crontab(rule: '*\/5 * * * *', onOneServer: true)]`，5 分钟一次，需求没规定具体频率）扫 `MerchantRebateDao::findDuePending()`（`status=pending AND due_at<=now()`），逐条调 `BalanceService::settleRebate()`，每条记录各自独立事务、外层 try/catch 包住，一条结算异常不连累同批次其它记录；`settleDueRebates()` 单独暴露成公开方法给测试直接调用，不用等真实 cron tick。**明确不做**（本次任务范围说明里点名排除）：`merchant_rebates.status` 到 `voided`/`clawed_back` 的转换——触发它们的售后争议处理、人工改判订单状态在这个代码库里都还不存在，没有任何代码路径会产生这两种状态；争议期间暂停到账（5.4"争议暂停"一节）同样依赖不存在的争议处理流程；供应商返佣晚到重算（电影票/快递专属，本次只覆盖话费）；返佣固定期限的后台编辑 UI。测试：`test/Cases/Service/Product/RebateCalculatorTest.php`（`calculateDetailed()` 的比例/来源断言，复用 5.3 例 1 的三档 fixture）+ `test/Cases/Service/Order/OrderResultApplierRebateTest.php`（生成：一条记录/零返佣不生成/等级快照/默认与覆盖到账期限/无现成 Product 时的反查 fallback）+ `test/Cases/Service/Merchant/BalanceServiceTest.php` 新增 `settleRebate()` 用例（含双调用幂等）+ `test/Cases/Crontab/RebateSettlementCrontabTest.php`（到期/未到期过滤、重复扫描不重复入账） | ✅ |
 | 开放 API IP 白名单校验 | [requirements.md 8.1](requirements.md#81-开放-api) | 读 `merchants.ip_whitelist` | ⬜ |
 | 按商户限流中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 配置读 `merchant_rate_limits`/`system_settings.default_rate_limit_per_second`，计数器走 Redis | ⬜ |
 | 统一返回格式与错误码 | [requirements.md 8.1](requirements.md#81-开放-api) | `{code, message, data}`；平台统一错误码，不透传供应商原始信息 | ⬜ |
@@ -254,7 +255,7 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
 | 商户等级：CRUD / 各业务线比例设置 | ⬜ | ⬜ | ⬜ |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
-| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜ |
+| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜（生成+结算的业务逻辑已在第 1 节"返佣待到账生成 + 到期结算"完成，这行剩下的是后台管理 UI——`rebate_due_period_days` 目前只能直接改 `system_settings` 表、没有编辑接口，也没有"商户返佣明细/供应商返佣明细"的查询列表） |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | ⬜ | ⬜ | ⬜ |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | ⬜ | ⬜ | ⬜ |
 | 财务报表 | ⬜ | ⬜ | ⬜ |
@@ -322,7 +323,7 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 | 熔断自动恢复（二期） | Crontab | ⬜ |
 | 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
-| 返佣到期自动入账 | Crontab | ⬜ |
+| 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ⬜ |
 
 ---
@@ -333,7 +334,7 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
-| 基础设施与公共能力 | 12 | 7 | 0 | 5 |
+| 基础设施与公共能力 | 13 | 8 | 0 | 5 |
 | 卡速售 2.0 驱动 | 8 | 1 | 5 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
@@ -341,8 +342,8 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 | 开放 API 接口 | 15 | 5 | 0 | 10 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 18 | 4 | 0 | 14 |
-| 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **104** | **21** | **5** | **78** |
+| 异步任务与定时任务 | 10 | 1 | 0 | 9 |
+| **合计** | **105** | **23** | **5** | **77** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

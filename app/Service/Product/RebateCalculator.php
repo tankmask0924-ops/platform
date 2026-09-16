@@ -59,23 +59,44 @@ class RebateCalculator extends AbstractService
      */
     public function calculate(Product $product, ?int $merchantLevelId): string
     {
-        if ($merchantLevelId === null) {
-            return '0.00';
-        }
-
-        $rate = $this->resolveRate($product, $merchantLevelId);
-        if ($rate === null) {
-            return '0.00';
-        }
-
-        return bcmul($product->rebate_amount, $rate, self::SCALE);
+        return $this->calculateDetailed($product, $merchantLevelId)->amount;
     }
 
-    private function resolveRate(Product $product, int $merchantLevelId): ?string
+    /**
+     * 跟 `calculate()` 共用同一套 3 步比例取法（见类注释），多返回"用的哪个比例、
+     * 从哪一层取的"，供 requirements.md 5.4 生成待到账返佣记录时快照
+     * "返佣基数及来源、比例及来源"用（`App\Service\Order\OrderResultApplier` 是
+     * 目前唯一调用方）。`calculate()` 改成这个方法的薄包装，两者共用同一份
+     * precedence 逻辑（`resolveRate()`），不会出现两处实现分叉、后续改需求漏改
+     * 一边的风险。
+     *
+     * @param null|int $merchantLevelId 商户当前等级；商户还没被分配等级时为 null
+     */
+    public function calculateDetailed(Product $product, ?int $merchantLevelId): RebateCalculationResult
+    {
+        if ($merchantLevelId === null) {
+            return new RebateCalculationResult('0', null, '0.00');
+        }
+
+        $resolved = $this->resolveRate($product, $merchantLevelId);
+        if ($resolved === null) {
+            return new RebateCalculationResult('0', null, '0.00');
+        }
+
+        [$rate, $rateSource] = $resolved;
+
+        return new RebateCalculationResult($rate, $rateSource, bcmul($product->rebate_amount, $rate, self::SCALE));
+    }
+
+    /**
+     * @return null|array{0: string, 1: 'level'|'product_level'} [比例, 比例来源]，
+     *                                                           都没命中时返回 null
+     */
+    private function resolveRate(Product $product, int $merchantLevelId): ?array
     {
         $override = $this->productLevelRebateDao->findForProductAndLevel($product->id, $merchantLevelId);
         if ($override !== null) {
-            return $override->rebate_rate;
+            return [$override->rebate_rate, 'product_level'];
         }
 
         $levelRate = $this->merchantLevelBusinessRateDao->findForLevelAndBusinessLine(
@@ -83,7 +104,7 @@ class RebateCalculator extends AbstractService
             $product->business_line
         );
         if ($levelRate !== null) {
-            return $levelRate->rebate_rate;
+            return [$levelRate->rebate_rate, 'level'];
         }
 
         return null;

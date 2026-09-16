@@ -13,10 +13,35 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\MerchantRebate;
+use Hyperf\Database\Model\Collection;
 
 class MerchantRebateDao extends AbstractDao
 {
     protected string $model = MerchantRebate::class;
+
+    /**
+     * 按 order_id 查返佣记录（`merchant_rebates.order_id` 唯一），目前只给测试用，
+     * 验证"一笔订单只生成一条返佣记录"/"零返佣订单不生成记录"。
+     */
+    public function findByOrderId(int $orderId): ?MerchantRebate
+    {
+        return $this->newQuery()->where('order_id', $orderId)->first();
+    }
+
+    /**
+     * requirements.md 5.4"入账"：定时任务扫描到期的待到账记录——
+     * `status = pending AND due_at <= now()`，给 `App\Crontab\RebateSettlementCrontab`
+     * 用。`due_at` 为 `null` 的行（订单本身完成时间还没到，比如快递未签收，本次
+     * 任务范围内的话费返佣不会出现这种情况，但字段设计上允许）不会被
+     * `<=` 比较命中，天然被排除，不需要额外加 `whereNotNull`。
+     */
+    public function findDuePending(): Collection
+    {
+        return $this->newQuery()
+            ->where('status', 'pending')
+            ->where('due_at', '<=', date('Y-m-d H:i:s'))
+            ->get();
+    }
 
     /**
      * 汇总某个商户「待到账」（status = pending）的返佣金额。
