@@ -24,6 +24,7 @@ use App\Model\SupplierProduct;
 use App\Service\Order\RechargeOrderPlacementService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
@@ -34,11 +35,14 @@ use Mockery;
 /**
  * App\Service\Order\RechargeOrderPlacementService 编排逻辑单测。所有供应商 HTTP
  * 调用都通过 Mockery 双重 App\Supplier\Kasushou\KasushouDriver 本身（不是再往下一层
- * 双重 GuzzleHttp\ClientInterface）——因为本类通过 setDriverFactoryForTesting()
- * 整个替换掉 buildDriver() 的产出，测试要验证的是"编排对不对"（选哪个供应商、
- * 什么时候停、什么时候扣款/解冻/通知），不是 KasushouDriver 内部怎么解析 HTTP
- * 响应（那部分已经在 test/Cases/Supplier/Kasushou/KasushouDriverTest.php 覆盖过），
- * 所以直接 mock 驱动的 placeOrder() 方法本身，不会发起任何真实网络请求。
+ * 双重 GuzzleHttp\ClientInterface）——因为本类把 App\Supplier\SupplierDriverFactory
+ * 整个换成 Mockery 双重（`$this->instance(SupplierDriverFactory::class, ...)`，
+ * 跟 test/Cases/Job/NotifyMerchantJobTest.php 把 DriverFactory 换成 Mockery 双重
+ * 是同一个容器 swap 手法），`build()` 直接返回预先配置好的驱动双重，测试要验证的是
+ * "编排对不对"（选哪个供应商、什么时候停、什么时候扣款/解冻/通知），不是
+ * KasushouDriver 内部怎么解析 HTTP 响应（那部分已经在
+ * test/Cases/Supplier/Kasushou/KasushouDriverTest.php 覆盖过），所以直接 mock
+ * 驱动的 placeOrder() 方法本身，不会发起任何真实网络请求。
  *
  * 异步通知走 App\Service\MerchantNotifyService -> Hyperf\AsyncQueue\Driver\DriverFactory
  * ->push(new NotifyMerchantJob(...))，用跟 test/Cases/Job/NotifyMerchantJobTest.php
@@ -163,8 +167,16 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         $this->expectNotify(1);
 
+        $driverFactory = Mockery::mock(SupplierDriverFactory::class);
+        $driverFactory->shouldReceive('build')
+            ->with(Mockery::on(static fn (Supplier $supplier) => $supplier->id === $supplierA->id))
+            ->andReturn($driverA);
+        $driverFactory->shouldReceive('build')
+            ->with(Mockery::on(static fn (Supplier $supplier) => $supplier->id === $supplierB->id))
+            ->andReturn($driverB);
+        $this->instance(SupplierDriverFactory::class, $driverFactory);
+
         $service = $this->getContainer()->get(RechargeOrderPlacementService::class);
-        $service->setDriverFactoryForTesting(static fn (Supplier $supplier) => $supplier->id === $supplierA->id ? $driverA : $driverB);
 
         $merchantOrderNo = $this->uniqueMerchantOrderNo();
         $service->place($merchant, $merchantOrderNo, $product->id, '13800000001', 'https://merchant.example.com/notify');
@@ -447,10 +459,11 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
     private function makeService(KasushouDriver $driver): RechargeOrderPlacementService
     {
-        $service = $this->getContainer()->get(RechargeOrderPlacementService::class);
-        $service->setDriverFactoryForTesting(static fn () => $driver);
+        $driverFactory = Mockery::mock(SupplierDriverFactory::class);
+        $driverFactory->shouldReceive('build')->andReturn($driver);
+        $this->instance(SupplierDriverFactory::class, $driverFactory);
 
-        return $service;
+        return $this->getContainer()->get(RechargeOrderPlacementService::class);
     }
 
     /**

@@ -12,7 +12,6 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
-use App\Crypto\Encryptor;
 use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
@@ -29,7 +28,7 @@ use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
 use App\Service\Product\RebateCalculator;
 use App\Supplier\DriverResult;
-use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
@@ -83,22 +82,18 @@ use Throwable;
  * 概率极低），createOrderRow() 撞了就重新生成重试，有限次数（`MAX_ORDER_NO_RETRIES`）
  * 后放弃并抛异常，不假设"一个随机串肯定不会撞"。
  *
- * 【供应商驱动派发】跟 App\Supplier\Kasushou\KasushouDriver 类注释同一个判断：
- * 目前只有卡速售一个驱动实现，用 `match($supplier->driver) {...}` 直接分支即可，
- * 不建 `DriverInterface` + 工厂抽象——等云洋/芒果任一个驱动落地、真正验证过这几个
- * 方法签名对两家供应商都合适之后再抽取。`suppliers.config` 对 `kasushou` 驱动的
- * JSON 形状（解密后）：`{"base_url": "...", "user_id": "...", "api_key": "..."}`，
- * 这是本次任务定下的事实上的约定，后台配置卡速售供应商时必须遵守这个形状。
+ * 【供应商驱动派发】派发逻辑本身在 App\Supplier\SupplierDriverFactory 里（含
+ * 目前只有卡速售一个驱动实现、暂不建 `DriverInterface` 的理由，见该类类注释）。
+ * 本类只通过 `#[Inject]` 持有一个 SupplierDriverFactory 实例并调用其 `build()`。
+ * `suppliers.config` 对 `kasushou` 驱动的 JSON 形状约定同样记录在
+ * SupplierDriverFactory 类注释里。
  *
- * 【测试挂钩】`buildDriver()` 默认按上面的约定真实解密 `suppliers.config` 构造
- * `KasushouDriver`。单测需要替换成用 Mockery 双重 `GuzzleHttp\ClientInterface`
- * 的驱动实例（跟 test/Cases/Supplier/Kasushou/KasushouDriverTest.php 的
- * `makeDriver()` 手法一样），但本类的依赖都是 Hyperf DI 用 `#[Inject]` 属性注入的
- * ——`KasushouDriverTest`/`NotifyMerchantJobTest` 那种"匿名子类覆盖 protected
- * 方法"手法在这里不适用：匿名类是测试文件里现场定义的运行时类，不在 Hyperf 注解
- * 扫描范围内，`#[Inject]` 属性不会被自动注入。所以这里改用 `setDriverFactoryForTesting()`
- * 这个测试专用的 setter：从容器正常拿一个依赖齐全的真实 Service 实例，再用这个
- * setter 换掉 `buildDriver()` 的实现，不需要反射也不需要重新组装依赖。
+ * 【测试方式】SupplierDriverFactory 是 Hyperf DI 用 `#[Inject]` 属性注入的普通依赖，
+ * 测试替身直接用 Hyperf\Testing\TestCase 自带的容器 swap——
+ * `$this->instance(SupplierDriverFactory::class, Mockery::mock(...))`，在解析
+ * 本类之前调用即可，跟 test/Cases/Job/NotifyMerchantJobTest.php 把
+ * Hyperf\AsyncQueue\Driver\DriverFactory 换成 Mockery 双重是同一个模式，不需要
+ * 任何生产代码专用的测试 setter/hook。
  *
  * 【范围外，见任务说明】商户业务线开通校验（4.2，跟"话费商品列表"任务同样的限制）、
  * 返佣真正入账（`merchant_rebates` 落库 + 结算调度，5.4；这里只是拿
@@ -152,23 +147,7 @@ class RechargeOrderPlacementService extends AbstractService
     protected MerchantNotifyService $merchantNotifyService;
 
     #[Inject]
-    protected Encryptor $encryptor;
-
-    /**
-     * @var null|callable(Supplier): KasushouDriver 见类注释「测试挂钩」，生产环境
-     *                                              恒为 null，走 buildDriver() 的真实实现
-     */
-    private $driverFactoryOverride;
-
-    /**
-     * 仅供测试使用：替换 buildDriver() 的实现，绕开真实的配置解密 + HTTP 驱动构造。
-     *
-     * @param callable(Supplier): KasushouDriver $factory
-     */
-    public function setDriverFactoryForTesting(callable $factory): void
-    {
-        $this->driverFactoryOverride = $factory;
-    }
+    protected SupplierDriverFactory $supplierDriverFactory;
 
     /**
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
@@ -363,7 +342,7 @@ class RechargeOrderPlacementService extends AbstractService
         $externalOrderNo = $order->order_no . '-' . $attemptNo;
 
         try {
-            $driver = $this->buildDriver($supplier);
+            $driver = $this->supplierDriverFactory->build($supplier);
 
             $driverResult = $driver->placeOrder(
                 externalOrderNo: $externalOrderNo,
@@ -472,40 +451,6 @@ class RechargeOrderPlacementService extends AbstractService
         // 非终态：不解冻、不扣款、不调用 MerchantNotifyService（只在成功/失败等终态
         // 通知商户），冻结余额原样保留，等未来的供应商回调接收路由或定时查询任务
         // （两者都不在本任务范围）把订单推进到终态。
-    }
-
-    /**
-     * 供应商驱动派发，目前只有卡速售一个实现，见类注释「供应商驱动派发」。
-     */
-    private function buildDriver(Supplier $supplier): KasushouDriver
-    {
-        if ($this->driverFactoryOverride !== null) {
-            return ($this->driverFactoryOverride)($supplier);
-        }
-
-        return match ($supplier->driver) {
-            'kasushou' => $this->buildKasushouDriver($supplier),
-            default => throw new RuntimeException('RechargeOrderPlacementService: unsupported supplier driver "' . $supplier->driver . '" (only kasushou is implemented so far).'),
-        };
-    }
-
-    /**
-     * `suppliers.config` 密文解密后对 kasushou 驱动的 JSON 形状约定：
-     * `{"base_url": "...", "user_id": "...", "api_key": "..."}`（本次任务定下，
-     * 后台配置卡速售供应商必须遵守，见类注释）。
-     */
-    private function buildKasushouDriver(Supplier $supplier): KasushouDriver
-    {
-        $config = json_decode($this->encryptor->decrypt($supplier->config), true);
-        if (! is_array($config)) {
-            throw new RuntimeException('RechargeOrderPlacementService: supplier #' . $supplier->id . ' config is not a valid JSON object.');
-        }
-
-        return new KasushouDriver(
-            (string) ($config['base_url'] ?? ''),
-            (string) ($config['user_id'] ?? ''),
-            (string) ($config['api_key'] ?? '')
-        );
     }
 
     /**
