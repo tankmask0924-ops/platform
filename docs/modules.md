@@ -127,7 +127,7 @@
 | 订单查询（平台单号或商户单号，二选一） | ✅ | ✅ | ✅ | ✅ |<sup>①</sup>
 | 结果回调（平台 → 商户，含重试） | ➖ | ✅ | ✅ | ✅ |<sup>②</sup>
 | 话费商品列表 | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
-| 话费下单 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 话费下单 | ✅ | ✅ | ✅ | ✅ |<sup>④</sup>
 | 卡券商品列表（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 卡券下单（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 电影票城市 / 影院 / 影片 / 场次 / 座位查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -180,6 +180,35 @@
 功能（三列都是 ⬜），本任务无法实现一个不存在的门槛检查，所以这里只要求商户通过
 `OpenApiSignatureMiddleware` 鉴权（商户存在且 `status = active`）即可看到该业务线全部在架商品，
 等第 7 节那一行落地后再补上按 `merchant_business_subscriptions` 过滤的逻辑。
+
+④ `话费下单`（`POST /open-api/orders/recharge`，requirements.md 8.1「下单」的话费一侧，
+卡券参数不同、单独设计，不在本次范围）是第一条打通「商品校验 -> 冻结 -> 供应商路由 ->
+判定成败 -> 扣款/解冻 -> 回调通知」的完整下单链路。新增 `App\Model\OrderAttempt` /
+`App\Dao\OrderAttemptDao`（`order_attempts` 一次尝试一行，`App\Supplier\UnifiedResult`
+四态到 `result` 字符串的映射见该 Model 类注释）、`App\Service\Order\
+RechargeOrderPlacementService`（编排本体）、`App\Controller\OpenApi\
+RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
+`unique(['merchant_id', 'merchant_order_no'])` 约束 + 严格保证 `Order::create()`
+先于 `BalanceService::freeze()` 执行，两个并发的重复请求里只有一个能建单成功，
+另一个在建单这一步就被数据库唯一约束挡下，根本走不到 `freeze()`，不是业务判断层面
+「决定不调用」。**路由**：按 `supplier_products.priority` 升序迭代，只路由到
+`status=active` 且（`stock` 为空或 `stock>0`）、所属 `Supplier.status=active` 的映射行；
+只有 `DefiniteFailure` 才换下一个供应商，`Success`/`Processing`/`Unknown` 一律停止路由
+（requirements.md 6.2）。**judgment call**：`orders.cost_price` 建单时占位 `'0.00'`，
+真的调用了某个供应商才更新；余额不足时订单行仍然持久化并标记 `failed`（建单必须先于
+`freeze()`，不存在"从不落一个没机会的订单"这个选项）；`order_no` 格式
+`R` + 14 位时间戳 + 6 位随机数字，撞了 `orders_order_no_unique` 有限次重试；
+`suppliers.config` 对 `kasushou` 驱动的 JSON 形状 `{"base_url","user_id","api_key"}`
+是本次任务定下的事实约定；`supplier_products.param_mapping` 形如
+`{"recharge_account": "<供应商侧字段名>"}`，缺失时 fallback 用 `recharge_account`
+本身；供应商回调地址（`buildSupplierNotifyUrl()`）是占位实现，真正的 `/notify/{code}`
+接收路由不在本次范围。**范围外**：商户业务线开通校验（4.2，跟③同样的限制）、
+`merchant_rebates` 真正入账（5.4，`RebateCalculator` 只用来算快照存
+`order_recharges.rebate_amount`）、`Processing`/`Unknown` 结果的异步推进（等回调接收
+路由或定时查询任务）、卡券/电影票/快递下单（参数不同，单独设计）、熔断（6.6）。
+测试见 `test/Cases/Service/Order/RechargeOrderPlacementServiceTest.php`（编排细节，
+含幂等重复提交只 freeze 一次的关键断言）+
+`test/Cases/OpenApi/RechargeOrderControllerTest.php`（真实 HTTP + 中间件栈）。
 
 ---
 
@@ -309,11 +338,11 @@
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
-| 开放 API 接口 | 15 | 4 | 0 | 11 |
+| 开放 API 接口 | 15 | 5 | 0 | 10 |
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 18 | 4 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **104** | **19** | **5** | **80** |
+| **合计** | **104** | **20** | **5** | **79** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
