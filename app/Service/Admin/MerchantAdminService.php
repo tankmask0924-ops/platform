@@ -13,12 +13,15 @@ declare(strict_types=1);
 namespace App\Service\Admin;
 
 use App\Crypto\Encryptor;
+use App\Dao\MerchantBalanceLogDao;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantLevelDao;
 use App\Dao\MerchantQualificationDao;
 use App\Model\Merchant;
+use App\Model\MerchantBalanceLog;
 use App\Model\MerchantQualification;
 use App\Service\AbstractService;
+use App\Service\Merchant\BalanceService;
 use Carbon\Carbon;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
@@ -45,6 +48,12 @@ class MerchantAdminService extends AbstractService
 
     #[Inject]
     protected Encryptor $encryptor;
+
+    #[Inject]
+    protected BalanceService $balanceService;
+
+    #[Inject]
+    protected MerchantBalanceLogDao $balanceLogDao;
 
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
@@ -142,6 +151,100 @@ class MerchantAdminService extends AbstractService
 
             $merchant->fill(['status' => 'rejected'])->save();
         });
+    }
+
+    /**
+     * 手动调账（requirements.md 4.3「手动调账」），独立权限编码 'merchant.balance_adjust'
+     * ——财务直接改商户余额是有实际资金影响的动作，跟"查看商户列表/详情"
+     * （merchant.view）不是同一档权限，理由跟当初把 'merchant.review' 从
+     * 'merchant.view' 拆出来完全一致（见 App\Controller\Admin\MerchantController
+     * 类注释）。记得同步维护 App\Service\Admin\AdminBootstrapService::KNOWN_PERMISSIONS。
+     *
+     * reason 非空校验放在这里（调用方），不下推到 App\Service\Merchant\BalanceService::
+     * adjust() 里——跟 reject() 校验自己的 reason 参数是同一个理由：这是纯粹的
+     * 输入形状校验，不依赖任何需要行锁保护的数据库状态。amount 的格式/非零校验
+     * 属于 BalanceService::adjust() 自己的职责（金额这个值对象本身该满足的约束），
+     * 这里不重复做，直接原样透传给它。
+     *
+     * 不在这里先 findMerchantOrFail() 校验商户存在再调用 adjust()——跟
+     * App\Service\Admin\RechargeRequestAdminService::approve() 调用
+     * BalanceService::recharge() 的方式一致，商户不存在时让 adjust() 自己在锁行
+     * 那一步抛 HttpException(404)，不重复查一次。
+     */
+    public function adjustBalance(int $merchantId, mixed $amount, mixed $reason, int $operatorId): void
+    {
+        $reason = is_string($reason) ? trim($reason) : '';
+        if ($reason === '') {
+            throw new HttpException(422, 'reason 不能为空');
+        }
+
+        if (! is_string($amount) && ! is_int($amount) && ! is_float($amount)) {
+            throw new HttpException(422, 'amount 必须是合法的金额');
+        }
+
+        $this->balanceService->adjust($merchantId, (string) $amount, $reason, $operatorId);
+    }
+
+    /**
+     * 资金流水（requirements.md 4.4/4.5、7.2「支持筛选」），跟商户自己在
+     * App\Service\Merchant\BalanceLogService::list() 看到的数据一模一样，只是
+     * 按路径参数 {id} 指定的商户查，供客服/审计核对用——用 'merchant.view' 权限
+     * （看商户资金流水跟看商户详情是同一档权限，没有理由为"多看一点字段"单独
+     * 设一个权限编码，见 App\Controller\Admin\MerchantController::show() 同类注释），
+     * 不是新增的 'merchant.balance_adjust'（那个权限是"能不能改余额"，跟"能不能
+     * 看流水"是两回事）。
+     *
+     * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
+     */
+    public function balanceLogs(int $merchantId, int $page, int $perPage, mixed $type): array
+    {
+        $this->findMerchantOrFail($merchantId);
+
+        $type = $this->normalizeBalanceLogTypeFilter($type);
+
+        $logs = $this->balanceLogDao->paginateByMerchantId($merchantId, $page, $perPage, $type);
+
+        return [
+            'data' => $logs->map(fn (MerchantBalanceLog $log) => $this->formatBalanceLog($log))->values()->all(),
+            'total' => $this->balanceLogDao->countByMerchantId($merchantId, $type),
+            'page' => $page,
+            'per_page' => $perPage,
+        ];
+    }
+
+    private function normalizeBalanceLogTypeFilter(mixed $type): ?string
+    {
+        if ($type === null || $type === '') {
+            return null;
+        }
+
+        if (! is_string($type) || ! in_array($type, MerchantBalanceLog::TYPES, true)) {
+            throw new HttpException(422, 'type 不合法');
+        }
+
+        return $type;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatBalanceLog(MerchantBalanceLog $log): array
+    {
+        return [
+            'id' => $log->id,
+            'merchant_id' => $log->merchant_id,
+            'type' => $log->type,
+            'amount' => $log->amount,
+            'available_before' => $log->available_before,
+            'available_after' => $log->available_after,
+            'frozen_before' => $log->frozen_before,
+            'frozen_after' => $log->frozen_after,
+            'order_id' => $log->order_id,
+            'rebate_id' => $log->rebate_id,
+            'reason' => $log->reason,
+            'operator_id' => $log->operator_id,
+            'created_at' => $log->created_at?->toDateTimeString(),
+        ];
     }
 
     private function findMerchantOrFail(int $merchantId): Merchant

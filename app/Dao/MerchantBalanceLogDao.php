@@ -31,4 +31,43 @@ class MerchantBalanceLogDao extends AbstractDao
             ->orderBy('created_at')
             ->get();
     }
+
+    /**
+     * 资金流水列表用（requirements.md 7.2「支持筛选」），按创建时间倒序——最近发生的
+     * 排最前面，是流水这种"看历史记录"场景的自然阅读顺序，跟 findByOrderId() 故意用
+     * 正序（核对一笔订单内 freeze/deduct 的先后发生顺序）目的不同，不复用同一个方法。
+     * 商户端、管理端共用这一个方法：商户端调用方（App\Service\Merchant\BalanceLogService）
+     * 永远只传认证中间件解出的商户自己的 id；管理端调用方
+     * （App\Service\Admin\MerchantAdminService）传路径参数里的 {id}，本身就是这个
+     * 商户后台管理场景要看的目标，不存在 IDOR 问题——IDOR 防护的责任在调用方
+     * 传什么 $merchantId 进来，不在这个方法本身。
+     *
+     * 加 `id DESC` 当第二排序键，不是只按 `created_at DESC` 单独排：`created_at`
+     * 只有秒级精度（`date('Y-m-d H:i:s')` 写入，见 App\Service\Merchant\BalanceService
+     * 各方法），同一秒内连续发生的多次余额变动（写测试时几乎必然如此，生产环境
+     * 短时间内密集调账/下单也会发生）`created_at` 会相同，MySQL 对这种并列情况
+     * 排序顺序未定义，只按它排会导致"最近发生的排最前面"这个承诺在有并列时
+     * 失效（曾经在自测时真实复现：同一秒插入的三条记录，只按 created_at 排出来
+     * 是插入顺序而不是期望的倒序）。`id` 自增，天然反映真实插入顺序，加上去之后
+     * 同秒内的记录也能确定性地按"后发生的排前面"排列。
+     */
+    public function paginateByMerchantId(int $merchantId, int $page, int $perPage, ?string $type = null): Collection
+    {
+        $query = $this->newQuery()->where('merchant_id', $merchantId);
+        if ($type !== null) {
+            $query->where('type', $type);
+        }
+
+        return $query->orderByDesc('created_at')->orderByDesc('id')->forPage($page, $perPage)->get();
+    }
+
+    public function countByMerchantId(int $merchantId, ?string $type = null): int
+    {
+        $query = $this->newQuery()->where('merchant_id', $merchantId);
+        if ($type !== null) {
+            $query->where('type', $type);
+        }
+
+        return $query->count();
+    }
 }

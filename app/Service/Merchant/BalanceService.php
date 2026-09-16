@@ -28,13 +28,16 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 编排（选供应商、调驱动、判断订单成败），那是下一个任务（下单流程）的事，这里
  * 只保证「调用了就一定正确、幂等地改余额并记流水」。
  *
- * 实现 freeze/deduct/unfreeze/rebate_settle/recharge 五种 type；supplement_deduct/
- * refund/adjustment/rebate_clawback 对应售后补扣/退款、财务手动调账、返佣扣回，
+ * 实现 freeze/deduct/unfreeze/rebate_settle/recharge/adjustment 六种 type；
+ * supplement_deduct/refund/rebate_clawback 对应售后补扣/退款、返佣扣回，
  * 都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
  * 争议处理、人工改判订单状态都还没建，`merchant_rebates.status` 到
- * `clawed_back` 的转换完全不在本类职责内；merchants.debt_since 只会被
- * supplement_deduct/rebate_clawback 驱动进负数，两者都不在本任务，所以这里的
- * 代码完全不碰 debt_since）。
+ * `clawed_back` 的转换完全不在本类职责内；merchants.debt_since 的维护/恢复
+ * （4.5「可用余额 < 0 时暂停该商户所有下单，充值补足到 ≥ 0 后自动恢复」）
+ * 依赖的是下单流程读到负余额时的拦截逻辑和一个"充值后自动清除"的钩子，两者
+ * 都还没建，所以即使 adjust() 现在也能把可用余额调成负数，这里仍然不碰
+ * debt_since——单独维护这一列而配套的暂停/恢复逻辑都不存在，是一个没有意义
+ * 的半成品，等下单流程/负余额处理任务再一起做）。
  *
  * 金额全程用 bcmath 字符串运算，不用 float，跟 App\Service\Product\RebateCalculator
  * 的既有约定一致：decimal(10,2) 列精确到分，float 的二进制小数没法精确表示十进制分，
@@ -75,6 +78,14 @@ use Hyperf\HttpMessage\Exception\HttpException;
 class BalanceService extends AbstractService
 {
     private const SCALE = 2;
+
+    /**
+     * adjust() 自己的金额格式校验：跟 App\Service\Merchant\RechargeRequestService::
+     * AMOUNT_PATTERN 同一套「整数部分 + 最多两位小数」的精度要求（对齐
+     * decimal(10,2) 列），额外允许一个可选的前导负号——调账允许加也允许扣，
+     * RechargeRequestService 的充值金额场景不需要负数，这是两者唯一的差异。
+     */
+    private const ADJUST_AMOUNT_PATTERN = '/^-?\d+(\.\d{1,2})?$/';
 
     #[Inject]
     protected MerchantDao $merchantDao;
@@ -355,6 +366,76 @@ class BalanceService extends AbstractService
                 'frozen_before' => $frozenBefore,
                 'frozen_after' => $frozenAfter,
                 'reason' => $reason,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+        });
+    }
+
+    /**
+     * 手动调账：财务给商户直接加/扣可用余额（requirements.md 4.3「手动调账」），
+     * 提交即生效、不需要二次审核——调用方（App\Service\Admin\MerchantAdminService::
+     * adjustBalance()）在权限校验通过之后直接调用这里，中间没有另一个「审核」步骤，
+     * 跟充值必须先经过 merchant_recharge_requests 的 pending -> approved 状态机
+     * 完全不同。只改可用余额，冻结余额不动——手动调账不是订单流程的一环，从没有
+     * 经过冻结环节，跟 recharge()/settleRebate() 只加可用余额的理由一致。
+     *
+     * `$amount` 可正可负（例如 `'10.00'` 表示加、`'-10.00'` 表示扣），格式校验用
+     * self::ADJUST_AMOUNT_PATTERN（本方法自己的职责，属于「金额」这个值对象本身
+     * 该满足的约束，不是 HTTP 层输入校验）；`$reason`/`$operatorId` 的合法性校验
+     * 属于调用方职责（`$reason` 必须非空，比照
+     * App\Service\Admin\MerchantAdminService::reject() 校验 reason 的方式，本方法
+     * 假定拿到的 `$reason` 已经是非空字符串，不重复校验）。
+     *
+     * **关于负余额下限——这是本方法跟任务描述文字冲突、以 requirements.md 原文为准
+     * 的一处重要判断，写在这里防止以后有人"读了任务描述就来改代码"**：
+     * requirements.md 4.5「负余额」一节列出的、会让可用余额变成负数的场景**有三个**：
+     * 快递补扣、返佣扣回、**财务手动扣款调账**（原文列表第三项，逐字照抄，没有
+     * additional 说明文字——通篇 requirements.md 只有 4.3/4.4/4.5 三处提到"手动调账"，
+     * 指的都是同一个功能，"财务手动扣款调账"就是本方法在 `$amount` 为负时的这个
+     * 分支，不是另一个没建过的功能）。4.5 处理规则里"补扣、返佣扣回照常执行、
+     * 不设下限，必须如实记账"这条虽然字面只点了两个名字，但既然手动扣款调账
+     * 本来就在"会让余额变负"的那三个穷举原因之列，不可能对它单独设一个别处
+     * 找不到出处的下限——那样会让 4.5 自己举的这个例子变得不可能发生。所以
+     * adjust() **不**对扣款方向做「结果会不会小于 0」的下限校验，扣多少就扣多少，
+     * 如实记账；真正的负余额后果（暂停下单、欠款预警线）是下单流程/欠款处理
+     * 那边的职责，不是这个方法的职责（本方法只保证"调用了就正确地记一次账"，
+     * 跟 freeze/deduct/unfreeze 的职责边界划分是同一个道理）。唯一在这里做的校验
+     * 是「金额不能是 0」——调账金额是 0 没有任何业务意义，明显是误操作，在真正
+     * 碰数据库之前就直接拒绝。
+     */
+    public function adjust(int $merchantId, string $amount, string $reason, ?int $operatorId): void
+    {
+        if (! preg_match(self::ADJUST_AMOUNT_PATTERN, $amount)) {
+            throw new HttpException(422, 'amount 格式不合法，最多两位小数');
+        }
+
+        if (bccomp($amount, '0', self::SCALE) === 0) {
+            throw new HttpException(422, 'amount 不能为 0');
+        }
+
+        Db::transaction(function () use ($merchantId, $amount, $reason, $operatorId) {
+            $merchant = $this->merchantDao->lockForUpdate($merchantId);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcadd($availableBefore, $amount, self::SCALE);
+            $frozenBefore = $merchant->frozen_balance;
+            $frozenAfter = $frozenBefore;
+
+            $merchant->fill(['available_balance' => $availableAfter])->save();
+
+            $this->balanceLogDao->create([
+                'merchant_id' => $merchantId,
+                'type' => 'adjustment',
+                'amount' => $amount,
+                'available_before' => $availableBefore,
+                'available_after' => $availableAfter,
+                'frozen_before' => $frozenBefore,
+                'frozen_after' => $frozenAfter,
+                'reason' => $reason,
+                'operator_id' => $operatorId,
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
         });

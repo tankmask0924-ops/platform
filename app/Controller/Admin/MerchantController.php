@@ -108,4 +108,47 @@ class MerchantController extends AbstractController
 
         return ['success' => true];
     }
+
+    /**
+     * 手动调账（requirements.md 4.3），独立权限编码 'merchant.balance_adjust'——
+     * 财务改余额是有实际资金影响的动作，不该跟"查看"（merchant.view）共用一档
+     * 权限，见 App\Service\Admin\MerchantAdminService::adjustBalance() 类注释。
+     * `amount` 可正可负（正数加、负数扣），`reason` 必填，operator_id 从
+     * `admin` request attribute 取，不接受请求体传入。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.balance_adjust')]
+    #[PostMapping(path: '{id}/balance-adjustments')]
+    public function adjustBalance(int $id): array
+    {
+        /** @var AdminUser $admin */
+        $admin = $this->request->getAttribute('admin');
+
+        $this->merchantAdminService->adjustBalance(
+            $id,
+            $this->request->input('amount'),
+            $this->request->input('reason'),
+            $admin->id
+        );
+
+        return ['success' => true];
+    }
+
+    /**
+     * 资金流水，跟 show() 用同一档 'merchant.view' 权限——看流水跟看详情是同一档
+     * 权限，见 App\Service\Admin\MerchantAdminService::balanceLogs() 类注释。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.view')]
+    #[GetMapping(path: '{id}/balance-logs')]
+    public function balanceLogs(int $id): array
+    {
+        $page = (int) $this->request->input('page', 1);
+        $perPage = (int) $this->request->input('per_page', 15);
+        $type = $this->request->input('type');
+
+        return $this->merchantAdminService->balanceLogs($id, $page, $perPage, $type);
+    }
 }

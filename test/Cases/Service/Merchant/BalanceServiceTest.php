@@ -16,6 +16,7 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantRebate;
 use App\Service\Merchant\BalanceService;
+use Hyperf\HttpMessage\Exception\HttpException;
 use Hyperf\Testing\TestCase;
 
 /**
@@ -265,6 +266,106 @@ class BalanceServiceTest extends TestCase
 
         // 关键断言：日志表里这个 rebate_id + rebate_settle 组合只有一条，不是两条。
         $this->assertSame(1, MerchantBalanceLog::where('rebate_id', $rebate->id)->where('type', 'rebate_settle')->count());
+    }
+
+    public function testAdjustWithPositiveAmountIncreasesAvailableBalanceAndRecordsOperator()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('100.00', '5.00');
+
+        $service->adjust($merchant->id, '20.00', '快递理赔款', 42);
+
+        $merchant->refresh();
+        $this->assertSame('120.00', $merchant->available_balance);
+        $this->assertSame('5.00', $merchant->frozen_balance, 'adjust 不应该动冻结余额');
+
+        $log = MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'adjustment')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('20.00', $log->amount);
+        $this->assertSame('100.00', $log->available_before);
+        $this->assertSame('120.00', $log->available_after);
+        $this->assertSame('5.00', $log->frozen_before);
+        $this->assertSame('5.00', $log->frozen_after);
+        $this->assertSame('快递理赔款', $log->reason);
+        $this->assertSame(42, $log->operator_id);
+    }
+
+    public function testAdjustWithNegativeAmountWithinBalanceDecreasesAvailableBalance()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('100.00', '0.00');
+
+        $service->adjust($merchant->id, '-30.00', '误充值冲正', 7);
+
+        $merchant->refresh();
+        $this->assertSame('70.00', $merchant->available_balance);
+
+        $log = MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'adjustment')->first();
+        $this->assertSame('-30.00', $log->amount);
+        $this->assertSame('100.00', $log->available_before);
+        $this->assertSame('70.00', $log->available_after);
+        $this->assertSame(7, $log->operator_id);
+    }
+
+    /**
+     * requirements.md 4.5「负余额」原文把"财务手动扣款调账"列为会让可用余额变成
+     * 负数的三个穷举场景之一（另外两个是快递补扣、返佣扣回），处理规则明确
+     * "不设下限，必须如实记账"——所以这里**不**校验"扣完是不是小于 0"，扣多少
+     * 扣多少，如实记账，这是跟任务描述文字表述（"必须拒绝会让余额变负的调账"）
+     * 刻意不一致的地方，以 requirements.md 原文为准，见
+     * App\Service\Merchant\BalanceService::adjust() 方法文档注释里的完整推理。
+     */
+    public function testAdjustWithNegativeAmountExceedingBalanceStillAppliesAndRecordsNegativeBalance()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('10.00', '0.00');
+
+        $service->adjust($merchant->id, '-30.00', '财务手动扣款调账', 7);
+
+        $merchant->refresh();
+        $this->assertSame('-20.00', $merchant->available_balance);
+
+        $log = MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'adjustment')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('-30.00', $log->amount);
+        $this->assertSame('10.00', $log->available_before);
+        $this->assertSame('-20.00', $log->available_after);
+    }
+
+    public function testAdjustWithZeroAmountIsRejectedBeforeAnyWrite()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('10.00', '0.00');
+
+        try {
+            $service->adjust($merchant->id, '0.00', '无意义调账', 7);
+            $this->fail('0 金额调账应该被拒绝');
+        } catch (HttpException $e) {
+            $this->assertGreaterThanOrEqual(400, $e->getStatusCode());
+            $this->assertLessThan(500, $e->getStatusCode());
+        }
+
+        $merchant->refresh();
+        $this->assertSame('10.00', $merchant->available_balance);
+        $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count());
+    }
+
+    public function testAdjustWithInvalidAmountFormatIsRejectedBeforeAnyWrite()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('10.00', '0.00');
+
+        try {
+            $service->adjust($merchant->id, 'not-a-number', '无意义调账', 7);
+            $this->fail('格式不合法的金额应该被拒绝');
+        } catch (HttpException $e) {
+            $this->assertGreaterThanOrEqual(400, $e->getStatusCode());
+            $this->assertLessThan(500, $e->getStatusCode());
+        }
+
+        $merchant->refresh();
+        $this->assertSame('10.00', $merchant->available_balance);
+        $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count());
     }
 
     private function createRebate(int $merchantId, int $orderId, string $amount): MerchantRebate

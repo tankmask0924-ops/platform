@@ -18,6 +18,7 @@ use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
 use App\Model\Merchant;
+use App\Model\MerchantBalanceLog;
 use App\Model\MerchantLevel;
 use App\Model\MerchantQualification;
 use HyperfTest\HttpTestCase;
@@ -44,6 +45,8 @@ class MerchantControllerTest extends HttpTestCase
     private const PERMISSION_CODE = 'merchant.view';
 
     private const REVIEW_PERMISSION_CODE = 'merchant.review';
+
+    private const BALANCE_ADJUST_PERMISSION_CODE = 'merchant.balance_adjust';
 
     private array $adminUserIds = [];
 
@@ -73,6 +76,7 @@ class MerchantControllerTest extends HttpTestCase
             MerchantQualification::destroy($id);
         }
         foreach ($this->merchantIds as $id) {
+            MerchantBalanceLog::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         foreach ($this->levelIds as $id) {
@@ -377,6 +381,169 @@ class MerchantControllerTest extends HttpTestCase
         $this->assertSame(401, $response->getStatusCode());
     }
 
+    public function testAdjustBalanceCreditIncreasesAvailableBalanceWithOperatorId()
+    {
+        $merchant = $this->createMerchant('active', ['available_balance' => '10.00', 'frozen_balance' => '2.00']);
+        $admin = $this->createAdminWithPermissions([self::BALANCE_ADJUST_PERMISSION_CODE]);
+        $token = $this->loginAs($admin);
+
+        $response = $this->client->request('POST', '/admin/merchants/' . $merchant->id . '/balance-adjustments', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'form_params' => ['amount' => '15.50', 'reason' => '快递理赔款'],
+        ]);
+
+        $this->assertSame(200, $response->getStatusCode());
+
+        $merchant->refresh();
+        $this->assertSame('25.50', $merchant->available_balance);
+        $this->assertSame('2.00', $merchant->frozen_balance);
+
+        $log = MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'adjustment')->first();
+        $this->assertNotNull($log);
+        $this->assertSame('15.50', $log->amount);
+        $this->assertSame('快递理赔款', $log->reason);
+        $this->assertSame($admin->id, $log->operator_id);
+    }
+
+    public function testAdjustBalanceDeductDecreasesAvailableBalanceWithOperatorId()
+    {
+        $merchant = $this->createMerchant('active', ['available_balance' => '50.00']);
+        $admin = $this->createAdminWithPermissions([self::BALANCE_ADJUST_PERMISSION_CODE]);
+        $token = $this->loginAs($admin);
+
+        $response = $this->client->request('POST', '/admin/merchants/' . $merchant->id . '/balance-adjustments', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'form_params' => ['amount' => '-20.00', 'reason' => '误充值冲正'],
+        ]);
+
+        $this->assertSame(200, $response->getStatusCode());
+
+        $merchant->refresh();
+        $this->assertSame('30.00', $merchant->available_balance);
+
+        $log = MerchantBalanceLog::where('merchant_id', $merchant->id)->where('type', 'adjustment')->first();
+        $this->assertSame('-20.00', $log->amount);
+        $this->assertSame($admin->id, $log->operator_id);
+    }
+
+    public function testAdjustBalanceMissingReasonReturnsCleanErrorAndChangesNothing()
+    {
+        $merchant = $this->createMerchant('active', ['available_balance' => '10.00']);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::BALANCE_ADJUST_PERMISSION_CODE]));
+
+        $response = $this->client->request('POST', '/admin/merchants/' . $merchant->id . '/balance-adjustments', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'form_params' => ['amount' => '5.00', 'reason' => ''],
+        ]);
+
+        $this->assertGreaterThanOrEqual(400, $response->getStatusCode());
+        $this->assertLessThan(500, $response->getStatusCode());
+
+        $merchant->refresh();
+        $this->assertSame('10.00', $merchant->available_balance);
+        $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count());
+    }
+
+    public function testAdjustBalanceOnNonexistentMerchantReturns404()
+    {
+        $token = $this->loginAs($this->createAdminWithPermissions([self::BALANCE_ADJUST_PERMISSION_CODE]));
+
+        $response = $this->client->request('POST', '/admin/merchants/999999999/balance-adjustments', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'form_params' => ['amount' => '5.00', 'reason' => '随便什么原因'],
+        ]);
+
+        $this->assertSame(404, $response->getStatusCode());
+    }
+
+    /**
+     * 证明 'merchant.balance_adjust' 是独立于 'merchant.view' 生效的权限编码——
+     * 只拥有查看权限的管理员不能做调账这种有实际资金影响的动作。
+     */
+    public function testAdjustBalanceWithoutPermissionGets403EvenWithViewPermission()
+    {
+        $merchant = $this->createMerchant('active', ['available_balance' => '10.00']);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::PERMISSION_CODE]));
+
+        $response = $this->client->request('POST', '/admin/merchants/' . $merchant->id . '/balance-adjustments', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'form_params' => ['amount' => '5.00', 'reason' => '随便什么原因'],
+        ]);
+
+        $this->assertSame(403, $response->getStatusCode());
+
+        $merchant->refresh();
+        $this->assertSame('10.00', $merchant->available_balance);
+    }
+
+    public function testNoTokenOnAdjustBalanceReturns401()
+    {
+        $merchant = $this->createMerchant('active');
+
+        $response = $this->client->request('POST', '/admin/merchants/' . $merchant->id . '/balance-adjustments', [
+            'form_params' => ['amount' => '5.00', 'reason' => '随便什么原因'],
+        ]);
+
+        $this->assertSame(401, $response->getStatusCode());
+    }
+
+    public function testBalanceLogsReturnsRowsForThePathMerchant()
+    {
+        $merchant = $this->createMerchant('active', ['available_balance' => '10.00']);
+        MerchantBalanceLog::create([
+            'merchant_id' => $merchant->id,
+            'type' => 'recharge',
+            'amount' => '10.00',
+            'available_before' => '0.00',
+            'available_after' => '10.00',
+            'frozen_before' => '0.00',
+            'frozen_after' => '0.00',
+            'created_at' => date('Y-m-d H:i:s'),
+        ]);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::PERMISSION_CODE]));
+
+        $response = $this->client->request('GET', '/admin/merchants/' . $merchant->id . '/balance-logs', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertCount(1, $body['data']);
+        $this->assertSame('recharge', $body['data'][0]['type']);
+    }
+
+    public function testBalanceLogsOnNonexistentMerchantReturns404()
+    {
+        $token = $this->loginAs($this->createAdminWithPermissions([self::PERMISSION_CODE]));
+
+        $response = $this->client->request('GET', '/admin/merchants/999999999/balance-logs', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $this->assertSame(404, $response->getStatusCode());
+    }
+
+    public function testBalanceLogsWithoutPermissionGets403()
+    {
+        $merchant = $this->createMerchant('active');
+        $token = $this->loginAs($this->createAdminWithoutAnyPermission());
+
+        $response = $this->client->request('GET', '/admin/merchants/' . $merchant->id . '/balance-logs', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $this->assertSame(403, $response->getStatusCode());
+    }
+
+    public function testNoTokenOnBalanceLogsReturns401()
+    {
+        $merchant = $this->createMerchant('active');
+
+        $response = $this->client->request('GET', '/admin/merchants/' . $merchant->id . '/balance-logs');
+
+        $this->assertSame(401, $response->getStatusCode());
+    }
+
     private function loginAs(AdminUser $admin): string
     {
         $login = $this->client->request('POST', '/admin/auth/login', [
@@ -448,14 +615,17 @@ class MerchantControllerTest extends HttpTestCase
         return $admin;
     }
 
-    private function createMerchant(string $status): Merchant
+    /**
+     * @param array<string, mixed> $overrides
+     */
+    private function createMerchant(string $status, array $overrides = []): Merchant
     {
-        $merchant = Merchant::create([
+        $merchant = Merchant::create(array_merge([
             'type' => 'company',
             'password' => password_hash('whatever', PASSWORD_BCRYPT),
             'status' => $status,
             'phone' => '186' . random_int(10000000, 99999999),
-        ]);
+        ], $overrides));
         $this->merchantIds[] = $merchant->id;
 
         return $merchant;

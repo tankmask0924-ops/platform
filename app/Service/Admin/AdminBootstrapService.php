@@ -47,8 +47,10 @@ class AdminBootstrapService extends AbstractService
      * 当前生产代码里真实会被 App\Middleware\AdminPermissionMiddleware 检查到的
      * 权限编码全集——即所有实际挂了 #[App\Annotation\RequiresPermission(...)] 的
      * Controller 方法对应的编码。截至本任务，App\Controller\Admin\MerchantController
-     * 挂了 #[RequiresPermission('merchant.view')]（列表 + 详情）和
-     * #[RequiresPermission('merchant.review')]（入驻审核通过/驳回），
+     * 挂了 #[RequiresPermission('merchant.view')]（列表 + 详情 + 资金流水）、
+     * #[RequiresPermission('merchant.review')]（入驻审核通过/驳回）和
+     * #[RequiresPermission('merchant.balance_adjust')]（手动调账，requirements.md
+     * 4.3，独立权限编码——财务改余额是有实际资金影响的动作，不跟"查看"共用一档），
      * App\Controller\Admin\SupplierController 挂了 #[RequiresPermission('supplier.view')]
      * （列表 + 详情）和 #[RequiresPermission('supplier.manage')]（新建/修改/启停），
      * App\Controller\Admin\ProductMappingController 挂了
@@ -75,6 +77,7 @@ class AdminBootstrapService extends AbstractService
     private const KNOWN_PERMISSIONS = [
         ['code' => 'merchant.view', 'module' => 'merchant', 'name' => '商户列表查看', 'type' => 'action'],
         ['code' => 'merchant.review', 'module' => 'merchant', 'name' => '商户入驻审核', 'type' => 'action'],
+        ['code' => 'merchant.balance_adjust', 'module' => 'merchant', 'name' => '商户余额手动调账', 'type' => 'action'],
         ['code' => 'supplier.view', 'module' => 'supplier', 'name' => '供应商配置查看', 'type' => 'action'],
         ['code' => 'supplier.manage', 'module' => 'supplier', 'name' => '供应商配置管理', 'type' => 'action'],
         ['code' => 'product_mapping.view', 'module' => 'product_mapping', 'name' => '商品映射查看', 'type' => 'action'],

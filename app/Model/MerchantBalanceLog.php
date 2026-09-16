@@ -25,11 +25,14 @@ use Carbon\Carbon;
  * 应用代码永远不会、也不能直接写这两列，写了会被数据库忽略或报错。
  *
  * type 目前落地的合法值见迁移注释：recharge/freeze/deduct/unfreeze/
- * supplement_deduct/refund/adjustment/rebate_settle/rebate_clawback。
- * 本次任务（商户余额冻结/扣款/解冻）只有 App\Service\Merchant\BalanceService
- * 写 freeze/deduct/unfreeze 三种；其余类型对应的触发流程（充值审核、售后补扣/退款、
- * 手动调账、返佣结算/扣回）都是还没建的功能，不在这次任务范围内，但表结构和
- * Model 需要如实覆盖完整枚举，因为是同一张共用表。
+ * supplement_deduct/refund/adjustment/rebate_settle/rebate_clawback，完整枚举
+ * 見下面 self::TYPES（给资金流水筛选接口的 `?type=` 参数做白名单校验用，
+ * App\Service\Merchant\BalanceLogService、App\Service\Admin\MerchantAdminService
+ * 各自的 normalizeTypeFilter() 都引用这个常量，不各自维护一份容易漂移的列表）。
+ * 目前 App\Service\Merchant\BalanceService 写 freeze/deduct/unfreeze/recharge/
+ * rebate_settle/adjustment 六种（手动调账见 adjust()）；supplement_deduct/refund/
+ * rebate_clawback 对应的触发流程（售后补扣/退款、返佣扣回）还是没建的功能，
+ * 不在这次任务范围内，但表结构和 Model 需要如实覆盖完整枚举，因为是同一张共用表。
  *
  * @property int $id
  * @property int $merchant_id
@@ -47,6 +50,21 @@ use Carbon\Carbon;
  */
 class MerchantBalanceLog extends Model
 {
+    /**
+     * @var array<int, string>
+     */
+    public const TYPES = [
+        'recharge',
+        'freeze',
+        'deduct',
+        'unfreeze',
+        'supplement_deduct',
+        'refund',
+        'adjustment',
+        'rebate_settle',
+        'rebate_clawback',
+    ];
+
     public bool $timestamps = false;
 
     protected ?string $table = 'merchant_balance_logs';
