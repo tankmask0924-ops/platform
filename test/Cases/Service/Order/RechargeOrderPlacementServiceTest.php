@@ -303,6 +303,90 @@ class RechargeOrderPlacementServiceTest extends TestCase
     }
 
     /**
+     * requirements.md 4.5「负余额」：`debt_since` 非 null 时，暂停该商户所有下单——
+     * 一次全新的下单尝试（还没有已存在的订单可以幂等重放）必须被干净、快速地
+     * 拒绝，不创建任何 Order 行，不调用 `BalanceService::freeze()`，更不能碰到
+     * 供应商驱动。用跟 `testInsufficientBalanceFailsBeforeAnySupplierCall()` 同样
+     * 的严格性验证"没有调用"：驱动 mock 设成 `shouldNotReceive('placeOrder')`，
+     * 真的调用了会在 `Mockery::close()` 时让测试失败,不是靠事后查数据库表推断。
+     */
+    public function testMerchantInDebtIsRejectedCleanlyWithoutAnySideEffects()
+    {
+        $merchant = $this->createMerchant('100.00', '2026-01-01 08:00:00');
+        $product = $this->createProduct('10.00');
+        $supplier = $this->createSupplier();
+        $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldNotReceive('placeOrder');
+
+        $service = $this->makeService($driver);
+        $merchantOrderNo = $this->uniqueMerchantOrderNo();
+
+        try {
+            $service->place($merchant, $merchantOrderNo, $product->id, '13800000013', 'https://merchant.example.com/notify');
+            $this->fail('expected HttpException for merchant currently in debt');
+        } catch (HttpException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+            $this->assertStringContainsString('欠款', $e->getMessage());
+        }
+
+        $this->assertNull(
+            Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first(),
+            '欠款拒单不应该创建任何 Order 行'
+        );
+        $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count(), '欠款拒单不应该有任何余额流水（freeze 从未被调用）');
+
+        $merchant->refresh();
+        $this->assertSame('100.00', $merchant->available_balance);
+        $this->assertSame('0.00', $merchant->frozen_balance);
+    }
+
+    /**
+     * requirements.md 4.5「负余额」拒单逻辑必须放在幂等重放查找*之后*：一个商户
+     * 在欠款之前已经成功下过的订单，即使商户现在恰好处于欠款状态，重新提交同一个
+     * `merchant_order_no` 也必须原样拿回那笔旧订单的状态，不能被新加的欠款拦截
+     * 挡住——这正是本任务说明里点名要验证"拦截点位置放对了"的场景。
+     */
+    public function testIdempotentResubmissionStillReturnsExistingOrderWhileMerchantIsCurrentlyInDebt()
+    {
+        $merchant = $this->createMerchant('100.00');
+        $product = $this->createProduct('10.00');
+        $supplier = $this->createSupplier();
+        $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('placeOrder')->once()->andReturn(new DriverResult(
+            result: UnifiedResult::Success,
+            supplierOrderNo: 'SUP-1',
+            actualCost: '8.00',
+        ));
+
+        $this->expectNotify(1);
+
+        $service = $this->makeService($driver);
+        $merchantOrderNo = $this->uniqueMerchantOrderNo();
+
+        $first = $service->place($merchant, $merchantOrderNo, $product->id, '13800000014', 'https://merchant.example.com/notify');
+
+        // 订单成功之后，商户"后来"陷入欠款（比如另一笔手动扣款调账）——直接改
+        // 内存里这个 Merchant 对象再 save()，不经过 BalanceService（那部分穿越
+        // 判断逻辑已经在 BalanceServiceTest 里覆盖过，这里只关心下单流程这边的
+        // 拦截点位置对不对）。
+        $merchant->fill(['debt_since' => '2026-01-01 08:00:00'])->save();
+
+        // 第二次调用如果真的触发了驱动/freeze，Mockery 的 once() 期望会在
+        // tearDown() 里的 Mockery::close() 让测试失败，是比"看返回值像成功"更硬的
+        // 证据；这里同时也直接断言返回值等于第一次的响应，证明真的是原样重放。
+        $second = $service->place($merchant, $merchantOrderNo, $product->id, '13800000014', 'https://merchant.example.com/notify');
+
+        $this->assertSame($first, $second, '商户当前欠款不应该影响已存在订单的幂等重放');
+
+        $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
+        $this->assertSame('success', $order->status);
+    }
+
+    /**
      * 全篇最重要的一条：同一个 merchant_order_no 提交两次，第二次绝不能再调用一次
      * freeze()/驱动——不是靠"响应看起来正常"去推断，而是靠 Mockery 的 once() 期望
      * （驱动 mock 和 push() mock 都设成 once()，第二次调用如果真的发生，
@@ -495,7 +579,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
         return 'MO-' . uniqid('', true);
     }
 
-    private function createMerchant(string $availableBalance): Merchant
+    private function createMerchant(string $availableBalance, ?string $debtSince = null): Merchant
     {
         $unique = uniqid('recharge_order_test_', true);
 
@@ -508,6 +592,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
             'app_secret' => 'encrypted-secret-placeholder',
             'available_balance' => $availableBalance,
             'frozen_balance' => '0.00',
+            'debt_since' => $debtSince,
         ]);
 
         $this->merchantIds[] = $merchant->id;

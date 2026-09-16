@@ -178,6 +178,32 @@ class RechargeOrderPlacementService extends AbstractService
             return $this->toResponseArray($existing);
         }
 
+        // requirements.md 4.5「负余额」：可用余额 < 0 时暂停该商户所有下单，直到
+        // 充值补足到 ≥ 0（`BalanceService::persistBalance()` 清空 `debt_since`）
+        // 才自动恢复。放在这个位置很重要：必须在上面的幂等重放快速路径*之后*——
+        // 一个商户在欠款之前已经成功的订单，重新提交同一个 merchant_order_no
+        // 必须原样拿回那笔旧订单的状态，不能因为商户现在恰好欠款就被这里拦下来
+        // （那会把一个纯粹的幂等重放，误判成一次新的、该拒绝的下单请求）；但必须
+        // 在校验商品、生成 order_no、创建 Order 行、调用 freeze() 之前——这是一次
+        // 真正的新下单尝试，商户欠款状态下应该被干净、快速地拒绝，不留下任何
+        // Order 行或余额变动，不应该走到后面任何一步才发现拒单。
+        //
+        // 直接读 `debt_since !== null` 而不是重新比较 `available_balance` 跟 0：
+        // 前者是 BalanceService 那边刚刚建好的权威信号（进入/退出欠款状态的唯一
+        // 写入点），没必要在这里重新推导一遍同样的判断。
+        //
+        // 用 HttpException 而不是"落一个 failed 状态的 Order 行"（余额不足走的
+        // 是那条路径）：欠款拒单和余额不足拒单是两个商户需要能分清楚的不同原因——
+        // 前者是"账户被暂停，先充值消除欠款"，后者是"这一笔订单太大，可用余额
+        // 不够"，用同一种"Order 行 + fail_reason"机制表达会让商户以为可以直接
+        // 换个更小金额的商品重试，而实际上账户整体被暂停，任何金额都会被拒绝。
+        // 跟 validateProduct() 校验不通过时的既有约定一致：不创建任何 Order 行，
+        // 直接抛 HttpException(422)，跟"这次请求参数/账户状态本身就不该继续"
+        // 是同一类错误。
+        if ($merchant->debt_since !== null) {
+            throw new HttpException(422, '商户当前存在欠款，已暂停下单，请充值补足欠款后再试');
+        }
+
         $product = $this->validateProduct($productId);
 
         $order = $this->createOrderRow($merchant, $merchantOrderNo, $product, $callbackUrl);

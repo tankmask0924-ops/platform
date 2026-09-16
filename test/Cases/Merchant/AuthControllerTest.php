@@ -245,9 +245,43 @@ class AuthControllerTest extends HttpTestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame($merchant->id, $body['id']);
         $this->assertSame($merchant->phone, $body['phone']);
+        $this->assertArrayHasKey('debt_since', $body);
+        $this->assertNull($body['debt_since'], '默认不欠款，debt_since 应该是 null');
         $this->assertArrayNotHasKey('password', $body);
         $this->assertArrayNotHasKey('app_secret', $body);
         $this->assertArrayNotHasKey('id_card_no', $body);
+    }
+
+    /**
+     * requirements.md 4.5「负余额」：`me()` 要能让商户前端拿到 `debt_since` 用于
+     * "醒目提示尽快充值"（本任务只暴露字段，UI 不在范围内）。直接建一个
+     * `debt_since` 已经设置好的商户，不经过 `BalanceService`——跨越 0 这条线的
+     * 判断逻辑本身已经在 `BalanceServiceTest` 覆盖过，这里只关心
+     * 控制器有没有原样透传这一列。
+     */
+    public function testMeWithDebtSinceSetReturnsItNonNull()
+    {
+        $merchant = $this->createActiveMerchant([
+            'phone' => '133' . random_int(10000000, 99999999),
+            'available_balance' => '-20.00',
+            'debt_since' => '2026-02-01 09:30:00',
+        ]);
+
+        $login = $this->client->request('POST', '/merchant/auth/login', [
+            'form_params' => [
+                'username' => $merchant->phone,
+                'password' => 'correct-password',
+            ],
+        ]);
+        $token = json_decode((string) $login->getBody(), true)['token'];
+
+        $response = $this->client->request('GET', '/merchant/auth/me', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('2026-02-01 09:30:00', $body['debt_since']);
     }
 
     public function testMeWithoutAuthorizationHeaderReturns401()

@@ -14,8 +14,11 @@ namespace App\Service\Merchant;
 
 use App\Dao\MerchantBalanceLogDao;
 use App\Dao\MerchantDao;
+use App\Dao\SystemSettingDao;
+use App\Model\Merchant;
 use App\Model\MerchantRebate;
 use App\Service\AbstractService;
+use Carbon\Carbon;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
@@ -32,12 +35,15 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * supplement_deduct/refund/rebate_clawback 对应售后补扣/退款、返佣扣回，
  * 都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
  * 争议处理、人工改判订单状态都还没建，`merchant_rebates.status` 到
- * `clawed_back` 的转换完全不在本类职责内；merchants.debt_since 的维护/恢复
- * （4.5「可用余额 < 0 时暂停该商户所有下单，充值补足到 ≥ 0 后自动恢复」）
- * 依赖的是下单流程读到负余额时的拦截逻辑和一个"充值后自动清除"的钩子，两者
- * 都还没建，所以即使 adjust() 现在也能把可用余额调成负数，这里仍然不碰
- * debt_since——单独维护这一列而配套的暂停/恢复逻辑都不存在，是一个没有意义
- * 的半成品，等下单流程/负余额处理任务再一起做）。
+ * `clawed_back` 的转换完全不在本类职责内）。
+ *
+ * `merchants.debt_since` 的维护（4.5「可用余额 < 0 时暂停该商户所有下单，充值
+ * 补足到 ≥ 0 后自动恢复」）：六个方法最终都改余额列，统一收口到私有方法
+ * persistBalance()（见其方法文档），由它比较"这次写入前"的可用余额和"这次写入后"
+ * 的可用余额，只在真正跨越 0 这条线时才动 debt_since——从 ≥0 变成 <0 记下
+ * 起始时间，从 <0 变回 ≥0 清空，停留在同一侧（含继续更负）不碰这一列。
+ * 暂停下单的读取端在 App\Service\Order\RechargeOrderPlacementService::place()
+ * （下单流程任务），本类只负责让 debt_since 这一列本身随时正确。
  *
  * 金额全程用 bcmath 字符串运算，不用 float，跟 App\Service\Product\RebateCalculator
  * 的既有约定一致：decimal(10,2) 列精确到分，float 的二进制小数没法精确表示十进制分，
@@ -87,11 +93,32 @@ class BalanceService extends AbstractService
      */
     private const ADJUST_AMOUNT_PATTERN = '/^-?\d+(\.\d{1,2})?$/';
 
+    /**
+     * requirements.md 4.5「欠款预警线」的 system_settings key：欠款（可用余额为负时
+     * 的绝对值）超过这个金额就该告警财务——真正的告警通道（邮件/短信/IM）这个代码库
+     * 完全没有，不在本类职责内，这里只提供"超没超线"这个判断本身，供将来告警功能
+     * 直接调用，不用等那个功能落地时才回来重新定义"超线"是什么意思。
+     */
+    private const DEBT_WARNING_THRESHOLD_SETTING_KEY = 'debt_warning_threshold';
+
+    /**
+     * 后台一行没配置时的代码级默认值，跟 OrderResultApplier::
+     * DEFAULT_REBATE_DUE_PERIOD_DAYS 同一个"零配置也要能正确运行"的既有惯例。
+     * requirements.md 没给具体数字，这里选 1000.00 元：数额小到几十上百元的欠款
+     * 大概率是补扣/扣回的正常业务波动，不值得惊动财务；四位数以上通常意味着
+     * 已经积累了不止一笔，值得人工介入。纯粹是一个保守的起点，真实数值应该由
+     * 运营在后台按实际坏账规模调整，不是本类能替业务方决定的事。
+     */
+    private const DEFAULT_DEBT_WARNING_THRESHOLD = '1000.00';
+
     #[Inject]
     protected MerchantDao $merchantDao;
 
     #[Inject]
     protected MerchantBalanceLogDao $balanceLogDao;
+
+    #[Inject]
+    protected SystemSettingDao $systemSettingDao;
 
     /**
      * 冻结：下单时调用。可用余额减少、冻结余额增加。
@@ -142,10 +169,7 @@ class BalanceService extends AbstractService
             $availableAfter = bcsub($availableBefore, $amount, self::SCALE);
             $frozenAfter = bcadd($frozenBefore, $amount, self::SCALE);
 
-            $merchant->fill([
-                'available_balance' => $availableAfter,
-                'frozen_balance' => $frozenAfter,
-            ])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
 
             $this->balanceLogDao->create([
                 'merchant_id' => $merchantId,
@@ -205,7 +229,7 @@ class BalanceService extends AbstractService
                 return;
             }
 
-            $merchant->fill(['frozen_balance' => $frozenAfter])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
         });
     }
 
@@ -243,10 +267,7 @@ class BalanceService extends AbstractService
                 return;
             }
 
-            $merchant->fill([
-                'available_balance' => $availableAfter,
-                'frozen_balance' => $frozenAfter,
-            ])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
         });
     }
 
@@ -312,7 +333,7 @@ class BalanceService extends AbstractService
                 return false;
             }
 
-            $merchant->fill(['available_balance' => $availableAfter])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
 
             $rebate->fill([
                 'status' => 'settled',
@@ -355,7 +376,7 @@ class BalanceService extends AbstractService
             $frozenBefore = $merchant->frozen_balance;
             $frozenAfter = $frozenBefore;
 
-            $merchant->fill(['available_balance' => $availableAfter])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
 
             $this->balanceLogDao->create([
                 'merchant_id' => $merchantId,
@@ -424,7 +445,7 @@ class BalanceService extends AbstractService
             $frozenBefore = $merchant->frozen_balance;
             $frozenAfter = $frozenBefore;
 
-            $merchant->fill(['available_balance' => $availableAfter])->save();
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
 
             $this->balanceLogDao->create([
                 'merchant_id' => $merchantId,
@@ -439,5 +460,75 @@ class BalanceService extends AbstractService
                 'created_at' => date('Y-m-d H:i:s'),
             ]);
         });
+    }
+
+    /**
+     * requirements.md 4.5「欠款预警线」的判断本身（"超没超线"），不包含任何真正的
+     * 告警动作——这个代码库没有邮件/短信/IM 之类能通知内部财务人员的通道，"告警
+     * 财务、商户后台醒目提示"两侧都还没建，属于另一个未来任务。这里先把"给定一个
+     * 商户，它现在的欠款是不是超过了配置的预警线"这个可复用的判断露出来，供那个
+     * 未来任务直接调用，不用等它落地时才回来定义"超线"是什么意思。
+     *
+     * 非欠款状态（`available_balance ≥ 0`）一律返回 `false`——没有欠款就无所谓
+     * "超没超线"。
+     */
+    public function isOverDebtWarningThreshold(Merchant $merchant): bool
+    {
+        if (bccomp($merchant->available_balance, '0', self::SCALE) >= 0) {
+            return false;
+        }
+
+        $debtAmount = bcmul($merchant->available_balance, '-1', self::SCALE);
+        $threshold = (string) $this->systemSettingDao->getValue(
+            self::DEBT_WARNING_THRESHOLD_SETTING_KEY,
+            self::DEFAULT_DEBT_WARNING_THRESHOLD
+        );
+
+        return bccomp($debtAmount, $threshold, self::SCALE) > 0;
+    }
+
+    /**
+     * 六个余额变动方法（freeze/deduct/unfreeze/settleRebate/recharge/adjust）唯一
+     * 真正写 `available_balance`/`frozen_balance` 列的地方，也是 `debt_since`
+     * （requirements.md 4.5「负余额」）唯一的写入点。
+     *
+     * `debt_since` 只在**跨越 0 这条线**时才动：
+     * - 写入前 `available_balance ≥ 0`、写入后 `$newAvailable < 0`：刚刚进入欠款，
+     *   记下起始时间。
+     * - 写入前 `< 0`、写入后 `$newAvailable ≥ 0`：欠款结清，清空。
+     * - 停留在同一侧（含继续变得更负，比如已经欠款时又被扣了一笔补扣/扣回/调账）：
+     *   完全不碰这一列——不重置一个已经存在的欠款起始时间，也不会因为"仍然 ≥0"
+     *   就把一个本来是 null 的值再 set 成 null（`fill()` 只在真的要变的时候才把
+     *   `debt_since` 塞进数组，两种"不需要变"的情况都不出现在 `$fill` 里）。
+     *
+     * 用 `Carbon::now()` 而不是这个类其它地方一律用的 `date('Y-m-d H:i:s')`：
+     * 后者是 PHP 原生函数，不受 `Carbon::setTestNow()` 影响，没法在测试里精确控制
+     * "先进入欠款"和"欠款期间再扣一次"这两次调用之间的时间差异（真实调用间隔可能
+     * 落在同一秒内，光靠墙钟时间不能可靠区分"没重置"和"两次调用刚好在同一秒重置
+     * 了"）；`Carbon::now()` 会读 `Carbon::setTestNow()` 设置的假时钟，测试能精确
+     * 摆出"这两次调用之间已经过了 N 分钟"这个场景，断言时间戳真的原样未变，而不是
+     * 恰好没来得及变。
+     *
+     * 三个余额列在同一个 `save()` 调用里一起落盘（`fill()` 攒齐了再统一 `save()`
+     * 一次，不是三次独立 UPDATE），跟调用方（六个方法）都已经在 `Db::transaction()`
+     * 里锁了商户行的前提配合，不需要这里再单独开事务。
+     */
+    private function persistBalance(Merchant $merchant, string $newAvailable, string $newFrozen): void
+    {
+        $wasNegative = bccomp($merchant->available_balance, '0', self::SCALE) < 0;
+        $willBeNegative = bccomp($newAvailable, '0', self::SCALE) < 0;
+
+        $fill = [
+            'available_balance' => $newAvailable,
+            'frozen_balance' => $newFrozen,
+        ];
+
+        if (! $wasNegative && $willBeNegative) {
+            $fill['debt_since'] = Carbon::now()->format('Y-m-d H:i:s');
+        } elseif ($wasNegative && ! $willBeNegative) {
+            $fill['debt_since'] = null;
+        }
+
+        $merchant->fill($fill)->save();
     }
 }

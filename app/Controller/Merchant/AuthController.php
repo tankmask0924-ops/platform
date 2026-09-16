@@ -75,6 +75,10 @@ class AuthController extends AbstractController
             'phone' => $merchant->phone,
             'email' => $merchant->email,
             'level_id' => $merchant->level_id,
+            // requirements.md 4.5「负余额」：非 null 表示商户当前欠款、下单已被
+            // 暂停，商户后台前端将来靠这个字段做"醒目提示尽快充值"（本任务只需要
+            // 暴露字段，UI 本身不在这次任务范围）。
+            'debt_since' => $merchant->debt_since,
         ];
     }
 }

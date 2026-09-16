@@ -74,8 +74,30 @@ class BalanceControllerTest extends HttpTestCase
                 'available_balance' => '1000.50',
                 'frozen_balance' => '20.00',
                 'pending_rebate' => '30.25',
+                'debt_since' => null,
             ],
         ], json_decode((string) $response->getBody(), true));
+    }
+
+    /**
+     * requirements.md 4.5「负余额」：`debt_since` 非 null 时，开放 API 也要能让商户
+     * 自己的系统程序化探测到「当前处于欠款状态」。这里直接建一个 `debt_since`
+     * 已经设置好的商户（不经过 `BalanceService`）——跨越 0 这条线的判断逻辑本身
+     * 已经在 `test/Cases/Service/Merchant/BalanceServiceTest.php` 覆盖过，这里只
+     * 关心"控制器/Service 有没有原样透传这一列"。
+     */
+    public function testBalanceIncludesDebtSinceWhenMerchantIsInDebt()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret, '-50.00', '0.00', '2026-01-01 08:00:00');
+
+        $response = $this->client->request('GET', '/open-api/balance', [
+            'query' => $this->signedParams($merchant->app_key, $secret),
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('2026-01-01 08:00:00', $body['data']['debt_since']);
     }
 
     public function testInvalidSignatureIsRejectedThroughRealMiddlewareStack()
@@ -108,8 +130,12 @@ class BalanceControllerTest extends HttpTestCase
         return $params;
     }
 
-    private function createMerchant(string $plainSecret, string $availableBalance, string $frozenBalance): Merchant
-    {
+    private function createMerchant(
+        string $plainSecret,
+        string $availableBalance,
+        string $frozenBalance,
+        ?string $debtSince = null
+    ): Merchant {
         $unique = uniqid('balance_ctrl_test_', true);
 
         $merchant = Merchant::create([
@@ -121,6 +147,7 @@ class BalanceControllerTest extends HttpTestCase
             'app_secret' => (new Encryptor())->encrypt($plainSecret),
             'available_balance' => $availableBalance,
             'frozen_balance' => $frozenBalance,
+            'debt_since' => $debtSince,
         ]);
 
         $this->merchantIds[] = $merchant->id;

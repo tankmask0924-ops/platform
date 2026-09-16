@@ -16,6 +16,7 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantRebate;
 use App\Service\Merchant\BalanceService;
+use Carbon\Carbon;
 use Hyperf\HttpMessage\Exception\HttpException;
 use Hyperf\Testing\TestCase;
 
@@ -44,6 +45,10 @@ class BalanceServiceTest extends TestCase
 
     protected function tearDown(): void
     {
+        // 欠款穿越场景的测试用 Carbon::setTestNow() 冻结/推进假时钟，测试结束
+        // 必须重置回真实时钟，不然会污染同一进程里跑的其它测试。
+        Carbon::setTestNow();
+
         foreach ($this->rebateIds as $id) {
             MerchantRebate::destroy($id);
         }
@@ -366,6 +371,80 @@ class BalanceServiceTest extends TestCase
         $merchant->refresh();
         $this->assertSame('10.00', $merchant->available_balance);
         $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count());
+    }
+
+    /**
+     * requirements.md 4.5「负余额」：可用余额从 ≥0 变成 <0 那一刻，`debt_since`
+     * 必须被设置成这次写入发生的时间——`adjust()` 的负数分支是三个会让余额变负
+     * 的场景之一（另外两个：快递补扣、返佣扣回，都还没建），穿越 0 这条线的判断
+     * 逻辑本身在 `BalanceService::persistBalance()`，这里通过 `adjust()` 验证它
+     * 真的被接上了。用 `Carbon::setTestNow()` 冻结时钟，断言 `debt_since` 精确
+     * 等于冻结的那个时间点，不是宽松地判断"不是 null"。
+     */
+    public function testAdjustCrossingFromNonNegativeToNegativeSetsDebtSince()
+    {
+        Carbon::setTestNow(Carbon::parse('2026-01-01 10:00:00'));
+
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('10.00', '0.00');
+        $this->assertNull($merchant->debt_since);
+
+        $service->adjust($merchant->id, '-30.00', '财务手动扣款调账', 7);
+
+        $merchant->refresh();
+        $this->assertSame('-20.00', $merchant->available_balance);
+        $this->assertSame('2026-01-01 10:00:00', $merchant->debt_since);
+    }
+
+    /**
+     * 跟上一条对称：可用余额从 <0 变回 ≥0（这里用 `recharge()`，覆盖除 `adjust()`
+     * 之外另一个走 `persistBalance()` 的调用方）必须清空 `debt_since`。商户起始
+     * 状态直接摆成"已经欠款"（不经过 `adjust()`，用 `fill()->save()` 直接布置初始
+     * 状态，聚焦测试 `recharge()` 这次调用本身的穿越行为）。
+     */
+    public function testRechargeCrossingFromNegativeToNonNegativeClearsDebtSince()
+    {
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('-20.00', '0.00');
+        $merchant->fill(['debt_since' => '2026-01-01 09:00:00'])->save();
+
+        $service->recharge($merchant->id, '20.00', '充值补足欠款');
+
+        $merchant->refresh();
+        $this->assertSame('0.00', $merchant->available_balance);
+        $this->assertNull($merchant->debt_since);
+    }
+
+    /**
+     * 全篇最容易踩坑的一条：已经欠款的商户再被扣一次（比如同一天先后两笔手动
+     * 扣款调账），`debt_since` 必须原样保留**第一次**进入欠款的时间，不能被
+     * 第二次扣款刷新成更晚的时间——不然"欠了多久"这个信息就丢了。用
+     * `Carbon::setTestNow()` 让两次调用之间真的经过一段可控的时间差
+     * （而不是指望两次调用凑巧落在系统时钟的不同秒上），断言第二次调用之后
+     * `debt_since` 精确等于第一次的时间戳，不是"仍然不是 null"这种弱断言。
+     */
+    public function testAdjustWhileAlreadyInDebtDoesNotResetExistingDebtSince()
+    {
+        Carbon::setTestNow(Carbon::parse('2026-01-01 10:00:00'));
+
+        $service = $this->getContainer()->get(BalanceService::class);
+        $merchant = $this->createMerchant('10.00', '0.00');
+
+        $service->adjust($merchant->id, '-30.00', '财务手动扣款调账', 7);
+        $merchant->refresh();
+        $firstDebtSince = $merchant->debt_since;
+        $this->assertSame('2026-01-01 10:00:00', $firstDebtSince);
+
+        Carbon::setTestNow(Carbon::parse('2026-01-01 10:05:00'));
+        $service->adjust($merchant->id, '-5.00', '追加扣款', 7);
+
+        $merchant->refresh();
+        $this->assertSame('-25.00', $merchant->available_balance);
+        $this->assertSame(
+            $firstDebtSince,
+            $merchant->debt_since,
+            '已经在欠款状态时再扣一次不应该重置 debt_since'
+        );
     }
 
     private function createRebate(int $merchantId, int $orderId, string $amount): MerchantRebate
