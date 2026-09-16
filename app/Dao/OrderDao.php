@@ -45,4 +45,23 @@ class OrderDao extends AbstractDao
             ->where('merchant_order_no', $merchantOrderNo)
             ->first();
     }
+
+    /**
+     * 按平台订单号全局查询，不限定 merchant_id——跟上面两个方法刻意不同：
+     * `order_no` 本身在 `orders` 表上是唯一列（`orders_order_no_unique`，见
+     * migrations/2026_09_14_091800_create_orders_table.php），不像
+     * `merchant_order_no` 那样只在单个商户下唯一，所以全局查询不存在"越权读到
+     * 别的商户订单"的问题。这个方法只给平台内部、不透传给商户的调用方使用——
+     * 目前唯一调用方是 `App\Service\Order\SupplierCallbackService`：供应商回调
+     * 携带的是平台自己生成的 `external_orderno`（截出 `order_no` 部分），
+     * 回调到达时平台还不知道这笔订单属于哪个商户，没有 merchant_id 可供限定。
+     * 绝不能把这个方法暴露给开放 API 那一侧（商户查询订单必须用上面两个
+     * 限定 merchant_id 的方法）。
+     */
+    public function findByOrderNo(string $orderNo): ?Order
+    {
+        return $this->newQuery()
+            ->where('order_no', $orderNo)
+            ->first();
+    }
 }

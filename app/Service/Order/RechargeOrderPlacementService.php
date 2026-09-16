@@ -149,6 +149,9 @@ class RechargeOrderPlacementService extends AbstractService
     #[Inject]
     protected SupplierDriverFactory $supplierDriverFactory;
 
+    #[Inject]
+    protected OrderResultApplier $orderResultApplier;
+
     /**
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
@@ -389,68 +392,50 @@ class RechargeOrderPlacementService extends AbstractService
         return is_string($mapped) && $mapped !== '' ? $mapped : 'recharge_account';
     }
 
+    /**
+     * 只有明确失败才换下一个供应商"这条失败换供应商的循环逻辑本身在
+     * `routeAndFinalize()` 里（跟这个方法是同一件事的两半，特意不合并），这里只做
+     * "路由循环选出的最终结果该怎么落到订单上"这一步单次判断，状态转换+余额+通知
+     * 那部分共享逻辑已经抽到 `App\Service\Order\OrderResultApplier`（docs/modules.md
+     * 第 1 节"供应商回调入口与验签框架"任务抽出来的，另一个调用方是
+     * `App\Service\Order\SupplierCallbackService`，见该类类注释），这里只负责
+     * "一次都没试成"这个 `OrderResultApplier` 管不到的特殊分支（连
+     * `DriverResult`/供应商都不存在，没法调用 `apply()`），以及把这次尝试对应
+     * 映射行的估算成本价预置到订单上（`OrderResultApplier` 类注释里"cost_price
+     * 的预置值约定"一节）。
+     */
     private function finalizeOrder(Order $order, ?SupplierProduct $mapping, ?DriverResult $driverResult): void
     {
         if ($mapping === null || $driverResult === null) {
             // 一次都没试成——要么这个商品压根没有映射行，要么全部都被状态/库存/
-            // 供应商禁用过滤掉了。等效于"路由后全部明确失败"。
-            $this->finalizeAsFailed($order, null, '无可用供应商');
+            // 供应商禁用过滤掉了。等效于"路由后全部明确失败"，且没有供应商/驱动
+            // 结果可言，不经过 OrderResultApplier（它的签名要求一个真实的
+            // DriverResult + supplierId，这里两者都没有）。
+            $this->finalizeAsNoSupplierAvailable($order);
             return;
         }
 
-        match ($driverResult->result) {
-            UnifiedResult::Success => $this->finalizeAsSuccess($order, $mapping, $driverResult),
-            UnifiedResult::DefiniteFailure => $this->finalizeAsFailed(
-                $order,
-                $mapping,
-                $driverResult->failReason ?? '供应商明确下单失败'
-            ),
-            UnifiedResult::Processing, UnifiedResult::Unknown => $this->finalizeAsProcessing($order, $mapping, $driverResult),
-        };
+        // 预置这次尝试对应映射行的估算成本价（只改内存属性，不 save()）：
+        // OrderResultApplier::apply() 内部统一 save() 时会把它跟状态字段一起写进
+        // 同一条 UPDATE——Success 分支如果驱动给了 actualCost 会覆盖掉这个估算值，
+        // DefiniteFailure/Processing/Unknown 分支保留它作为最终 cost_price，跟被
+        // 抽取前的行为完全一致。
+        $order->fill(['cost_price' => $mapping->cost_price]);
+
+        $this->orderResultApplier->apply($order, $driverResult, $mapping->supplier_id);
     }
 
-    private function finalizeAsSuccess(Order $order, SupplierProduct $mapping, DriverResult $driverResult): void
-    {
-        $order->fill([
-            'status' => 'success',
-            'cost_price' => $driverResult->actualCost ?? $mapping->cost_price,
-            'supplier_id' => $mapping->supplier_id,
-            'supplier_order_no' => $driverResult->supplierOrderNo,
-            'deducted_amount' => $order->sale_price,
-            'completed_at' => date('Y-m-d H:i:s'),
-            'finished_at' => date('Y-m-d H:i:s'),
-        ])->save();
-
-        $this->balanceService->deduct($order->merchant_id, $order->id, $order->sale_price);
-        $this->merchantNotifyService->notify($order->id);
-    }
-
-    private function finalizeAsFailed(Order $order, ?SupplierProduct $mapping, string $failReason): void
+    private function finalizeAsNoSupplierAvailable(Order $order): void
     {
         $order->fill([
             'status' => 'failed',
-            'cost_price' => $mapping?->cost_price ?? '0.00',
-            'supplier_id' => $mapping?->supplier_id,
-            'fail_reason' => $failReason,
+            'cost_price' => '0.00',
+            'fail_reason' => '无可用供应商',
             'finished_at' => date('Y-m-d H:i:s'),
         ])->save();
 
         $this->balanceService->unfreeze($order->merchant_id, $order->id, $order->frozen_amount);
         $this->merchantNotifyService->notify($order->id);
-    }
-
-    private function finalizeAsProcessing(Order $order, SupplierProduct $mapping, DriverResult $driverResult): void
-    {
-        $order->fill([
-            'status' => 'processing',
-            'cost_price' => $mapping->cost_price,
-            'supplier_id' => $mapping->supplier_id,
-            'supplier_order_no' => $driverResult->supplierOrderNo,
-        ])->save();
-
-        // 非终态：不解冻、不扣款、不调用 MerchantNotifyService（只在成功/失败等终态
-        // 通知商户），冻结余额原样保留，等未来的供应商回调接收路由或定时查询任务
-        // （两者都不在本任务范围）把订单推进到终态。
     }
 
     /**

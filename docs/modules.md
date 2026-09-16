@@ -35,7 +35,7 @@
 | 开放 API IP 白名单校验 | [requirements.md 8.1](requirements.md#81-开放-api) | 读 `merchants.ip_whitelist` | ⬜ |
 | 按商户限流中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 配置读 `merchant_rate_limits`/`system_settings.default_rate_limit_per_second`，计数器走 Redis | ⬜ |
 | 统一返回格式与错误码 | [requirements.md 8.1](requirements.md#81-开放-api) | `{code, message, data}`；平台统一错误码，不透传供应商原始信息 | ⬜ |
-| 供应商回调入口与验签框架 | [requirements.md 6.8](requirements.md#68-回调日志与统计) | `/notify/{供应商编码}?token=...`，按 `suppliers.driver` 分发给对应驱动解析 | ⬜ |
+| 供应商回调入口与验签框架 | [requirements.md 6.8](requirements.md#68-回调日志与统计) | `App\Controller\NotifySupplierController`：`POST /notify/{供应商编码}`，第三套独立于开放 API/系统管理后台的路由命名空间，故意不挂任何既有鉴权中间件——验签本身就是唯一的身份校验，由 `App\Service\Order\SupplierCallbackService::handle()` 按 `suppliers.code`（`SupplierDao::findByCode()`）找到供应商、`SupplierDriverFactory::build()` 建驱动、调驱动的 `parseCallback()`（目前只有卡速售一家，验签失败返回 `null`）验签+拿权威结果，再从 `DriverResult::$rawRequest['external_orderno']`（形如 `"{order_no}-{attemptNo}"`，`order_no` 本身不含 `-`，截第一个 `-` 前面即可）反查平台订单（新增 `OrderDao::findByOrderNo()`，全局查询不限定 merchant_id——`orders.order_no` 本身就是唯一列，且回调到达时还不知道订单属于哪个商户）。响应体是纯文本（`Response::raw()`），不是 `{code,message,data}` 信封，成功/幂等重放固定回复卡速售要求的字面字符串 `ok`（HTTP 200）；供应商编码不存在或反查不到订单 → 404；验签失败 → 403，绝不能回 `ok`。**推进订单状态的"成功/明确失败即解冻+失败/处理中不动"逻辑从 `RechargeOrderPlacementService` 抽成了共享的 `App\Service\Order\OrderResultApplier::apply()`**（同步下单路由循环选出最终结果、和这里推进 `processing` 订单共用同一份状态转换+余额+通知代码，失败换供应商的循环逻辑本身没有抽，仍然只属于同步下单路径，因为订单一旦 `processing` 就已经绑死一次供应商尝试，不可能再背着商户换供应商）。**幂等**：`BalanceService::deduct()/unfreeze()` 本身的 `dedupe_order_key` 唯一索引保证同一 `order_id` 的余额变动只生效一次，`SupplierCallbackService` 在此之上再显式检查——订单已经是 `success`/`failed` 终态就直接短路回复 `ok`，不重新调用 `apply()`，避免供应商按 kasushou.md 描述的间隔（5/10/15/20/25 分钟，最多 5 次）重试同一个回调时被重复推进/重复推送商户通知。测试：`test/Cases/Controller/NotifySupplierControllerTest.php`（`test/HttpTestCase.php` 真实路由派发，覆盖成功/明确失败/处理中三种驱动结果、已终态订单重复回调不被重新应用、验签失败、供应商编码不存在、订单号反查不到六条路径）+ `test/Cases/Service/Order/RechargeOrderPlacementServiceTest.php`（抽取 `OrderResultApplier` 后原样保留，验证同步下单行为未变）。**范围外，留给后续任务**：商品变更通知 webhook（`ProductSyncService::applyNotification()` 已有原语但没有路由，是另一个更小的独立任务，不是本行）、卡速售之外的其它驱动接入这个入口、IP 白名单/限流、`#[Crontab]` 定时按 `external_orderno` 重查询兜底真正丢失的回调（本行只处理"回调正常到达"这一条路径） | ✅ |
 | 后台角色权限中间件 | [requirements.md 8.3](requirements.md#83-系统管理后台webadmin) | 系统管理后台（web/admin）第三套独立鉴权体系，跟商户端 JWT（`MERCHANT_JWT_SECRET`）、开放 API HMAC 签名都不共用任何密钥/中间件类。登录态：`App\Auth\AdminJwtGuard`（HS256，独立密钥 `ADMIN_JWT_SECRET`，TTL 8 小时——比商户端 7 天短，管理员权限更高），`App\Middleware\AdminAuthMiddleware` 解出 `AdminUser` 挂 `$request->withAttribute('admin', ...)`。角色权限校验：新增 `App\Annotation\RequiresPermission`（纯 PHP attribute，标在 Controller 方法上声明权限编码）+ `App\Middleware\AdminPermissionMiddleware`（通过 `Dispatched::$handler->callback` 反射读方法上的 `#[RequiresPermission]`，没有则放行，有则查 `App\Dao\AdminRolePermissionDao::roleHasPermission(role_id, code)` 判断，不通过 403）。两个中间件都以方法级 `#[Middleware(...)]` 挂载，`AdminAuthMiddleware` 必须写在 `AdminPermissionMiddleware` 前面（同优先级时 Hyperf 按注解书写顺序 FIFO 执行），已用真实 HTTP 派发验证顺序正确（`test/Cases/Admin/MerchantControllerTest.php::testNoTokenAtAllReturns401NotAPermissionError`：没 token 时 401 而不是拿不到 admin attribute 崩 500）。首个真实落地的受保护接口见第 8 节「商户管理：列表」。**账号开通**：管理员账号非自助注册，此前没有任何 API/工具能创建 `admin_users` 记录，测试只能直接插 Model；现已补上 `App\Command\CreateAdminCommand`（`docker exec pf php bin/hyperf.php admin:create --username= --password= [--real-name=]`，幂等可重复执行）+ `App\Service\Admin\AdminBootstrapService`：find-or-create `super_admin` 角色、find-or-create 当前已知权限（`AdminBootstrapService::KNOWN_PERMISSIONS`，目前只有 `merchant.view`，每新增一个 `#[RequiresPermission]` 都要同步进这个数组，否则该权限在 DB 里不存在，所有角色对它的检查都会被判定为无权限）并授权给该角色、创建 `AdminUser`（bcrypt 哈希密码），测试见 `test/Cases/Service/Admin/AdminBootstrapServiceTest.php` + `test/Cases/Command/CreateAdminCommandTest.php` | ✅ |
 | 异步队列消费进程 | [hyperf-conventions](../.claude/skills/hyperf-conventions/SKILL.md) | 继承 `ConsumerProcess` 并 `#[Process]` 注册，别忘了这步——注解本身不会自动生效 | ⬜ |
 | 定时任务调度进程 | [hyperf-conventions](../.claude/skills/hyperf-conventions/SKILL.md) | 继承 `CrontabDispatcherProcess` 并 `#[Process]` 注册，同上 | ⬜ |
@@ -333,7 +333,7 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
-| 基础设施与公共能力 | 12 | 6 | 0 | 6 |
+| 基础设施与公共能力 | 12 | 7 | 0 | 5 |
 | 卡速售 2.0 驱动 | 8 | 1 | 5 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
@@ -342,7 +342,7 @@ RechargeOrderController`。**幂等 + 冻结最多一次**：`orders` 表
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 18 | 4 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **104** | **20** | **5** | **79** |
+| **合计** | **104** | **21** | **5** | **78** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
