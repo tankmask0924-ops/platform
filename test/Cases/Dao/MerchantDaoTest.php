@@ -71,6 +71,38 @@ class MerchantDaoTest extends TestCase
         $this->assertNull($dao->findByAppKey('does-not-exist-' . uniqid('', true)));
     }
 
+    public function testLockForUpdateReturnsMatchingMerchant()
+    {
+        $dao = $this->getContainer()->get(MerchantDao::class);
+        $merchant = $this->createMerchant();
+
+        $found = $dao->lockForUpdate($merchant->id);
+
+        $this->assertNotNull($found);
+        $this->assertSame($merchant->id, $found->id);
+    }
+
+    public function testLockForUpdateReturnsNullForMissingId()
+    {
+        $dao = $this->getContainer()->get(MerchantDao::class);
+
+        $this->assertNull($dao->lockForUpdate(999999999));
+    }
+
+    /**
+     * 没有真正的并发环境能验证「行锁生效、第二个事务真的被卡住排队」，退而求其次：
+     * 验证 MerchantDao::lockForUpdate() 依赖的同一条查询构造链（newQuery()->where()->
+     * lockForUpdate()）编译出的 SQL 里确实带有 MySQL 的 `for update` 子句——这是
+     * Hyperf\Database\Query\Grammars\MySqlGrammar::compileLock() 的产出，证明调用
+     * 这个方法真的会让数据库对这一行加锁，不是只有方法名叫这个但实际没生效。
+     */
+    public function testLockForUpdateGeneratesForUpdateSql()
+    {
+        $sql = Merchant::query()->where('id', 1)->lockForUpdate()->toSql();
+
+        $this->assertStringContainsString('for update', $sql);
+    }
+
     private function createMerchant(): Merchant
     {
         $unique = uniqid('merchant_dao_test_', true);

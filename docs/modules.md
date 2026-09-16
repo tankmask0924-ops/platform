@@ -30,7 +30,8 @@
 | 数据库迁移 | [database-design.md](database-design.md) 全文 | 按[分期](database-design.md#6-按分期建表)把 39 张表拆成迁移文件；一期 27 张已建好并跑通（`migrations/2026_09_14_*`），含 `merchant_balance_logs` 的幂等生成列，已用真实数据验证去重逻辑 | ✅ |
 | 加密服务 | [database-design.md 5.3](database-design.md#53-供应商配置和商户密钥的加密) | `App\Crypto\Encryptor`：`AES-256-GCM`，密钥读 `.env` 的 `APP_ENCRYPTION_KEY`；4 个单测通过（往返、非确定性、篡改检测、非法输入） | ✅ |
 | 开放 API 签名鉴权中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 验 `app_key`/`timestamp`/`nonce`/`sign`；`nonce` 防重放放 Redis（见 [database-design.md 5.6](database-design.md#56-哪些东西故意不放进这份-mysql-设计)）。`App\Middleware\OpenApiSignatureMiddleware`（PSR-15）：按 `app_key` 查商户（`MerchantDao::findByAppKey`）、校验 `status === active`、用 `Encryptor` 解密 `app_secret`、`SignatureSigner::verify` 验签、校验 `timestamp` ±5 分钟窗口、`NonceGuard::consume` 防重放；验签通过后把 Merchant 通过 `$request->withAttribute('merchant', $merchant)` 传给下一个 handler；失败时直接返回 `{code, message, data}` 形状的 JSON（内部占位错误码，不是平台统一错误码，统一返回格式那行做完后要收敛过去）。**未注册进 `config/autoload/middlewares.php` 全局列表**（会连带拦住 `/`、`/users`），在开放 API Controller 上用 `#[Middleware(OpenApiSignatureMiddleware::class)]` 类级注解挂载（**不能**用 `#[Controller(options: ['middleware' => [...]])]`——这个 Hyperf 版本的 `DispatcherFactory::handleController()` 会把 Controller 注解 options 里的 middleware 键整个覆盖掉，只认 `#[Middleware]`/`#[Middlewares]` 注解，那样中间件会静默不生效，真机测试过才发现）。已通过第 6 节"查询余额"接口做了真实 HTTP 派发的端到端联调（`test/Cases/OpenApi/BalanceControllerTest.php`，用 `test/HttpTestCase.php` 走真实路由 + 中间件栈，覆盖正常签名和错误签名两条路径），证明中间件真的挂上了、Merchant 属性真的传下去了，不再是仅靠 mock handler 的单测。中间件本身连同它依赖的 Merchant Model/Dao（见下一行）已经完整可用 | ✅ |
-| Merchant / MerchantLevel Model 与 Dao 基础设施 | [database-design.md](database-design.md) merchants / merchant_levels 表 | `App\Model\Merchant`（`hyperf/model-cache`，`ip_whitelist` 转 `array`）、`App\Model\MerchantLevel`；`App\Dao\MerchantDao`（`find()` 重写走 `findFromCache`，新增 `findByAppKey()` 不走缓存）、`App\Dao\MerchantLevelDao`。加密/解密逻辑不放在 Model，留在 Dao/Service/中间件层。单测覆盖按 id（含缓存）、按 app_key 查询，真实 DB 建行后 teardown 清理 | ✅ |
+| Merchant / MerchantLevel Model 与 Dao 基础设施 | [database-design.md](database-design.md) merchants / merchant_levels 表 | `App\Model\Merchant`（`hyperf/model-cache`，`ip_whitelist` 转 `array`）、`App\Model\MerchantLevel`；`App\Dao\MerchantDao`（`find()` 重写走 `findFromCache`，新增 `findByAppKey()` 不走缓存、新增 `lockForUpdate()` 加行锁不走缓存）、`App\Dao\MerchantLevelDao`。加密/解密逻辑不放在 Model，留在 Dao/Service/中间件层。单测覆盖按 id（含缓存）、按 app_key 查询、行锁查询（含验证编译出的 SQL 真的带 `for update`），真实 DB 建行后 teardown 清理 | ✅ |
+| 商户余额冻结/扣款/解冻 | [requirements.md 4.4](requirements.md#44-账户余额)、[4.5](requirements.md#45-负余额) | `App\Model\MerchantBalanceLog`（对应 `merchant_balance_logs`，`$timestamps = false`，写一次不改，`dedupe_order_key`/`dedupe_rebate_key` 两个生成列不进 `$fillable`）+ `App\Dao\MerchantBalanceLogDao`；`App\Service\Merchant\BalanceService::freeze()/deduct()/unfreeze()` 三个余额变动原语：`freeze()` 在 `Db::transaction()` 里 `MerchantDao::lockForUpdate()` 锁行、检查可用余额≥金额，够则冻结（可用减、冻结加）写 `freeze` 日志返回 `true`，不够直接返回 `false`（事务内无任何写操作，等效回滚，不记日志）；`deduct()`/`unfreeze()` 结构对称：先按 `dedupe_order_key`（`"{order_id}-{type}"`）唯一索引尝试插日志，插入成功才改余额列，插入因唯一索引撞车抛 `QueryException` 时捕获当幂等 no-op（余额列不会被碰到），不依赖应用层查了再写的预检查。全程 bcmath 字符串运算，不用 float。金额、bcmath 全程 scale=2。`freeze()` 本身没有同订单重复调用的 DB 级防护（`dedupe_order_key` 的生成列 CASE 只覆盖 `deduct`/`unfreeze`，不含 `freeze`）——按下单时序（先冻结、冻结成功才建订单行）没有现成的订单级唯一键可用，这道防线留给下一个任务（下单流程）在调用 `freeze()` 之前用请求幂等键/订单表约束解决。**范围内**：`freeze`/`deduct`/`unfreeze` 三种流水类型；**范围外**：`recharge`/`supplement_deduct`/`refund`/`adjustment`/`rebate_settle`/`rebate_clawback` 对应的充值审核、售后补扣/退款、手动调账、返佣结算/扣回流程，以及 `merchants.debt_since` 的维护（只有 `supplement_deduct`/`rebate_clawback` 会触发，两者都不在这次任务），还有把这三个原语真正接进下单流程（路由 + 供应商驱动调用 + 判定成败）——都是后续任务。测试见 `test/Cases/Service/Merchant/BalanceServiceTest.php`（含 `deduct`/`unfreeze` 各自的重复调用幂等测试）+ `test/Cases/Dao/MerchantDaoTest.php` 新增的行锁相关用例 | ✅ |
 | 开放 API IP 白名单校验 | [requirements.md 8.1](requirements.md#81-开放-api) | 读 `merchants.ip_whitelist` | ⬜ |
 | 按商户限流中间件 | [requirements.md 8.1](requirements.md#81-开放-api) | 配置读 `merchant_rate_limits`/`system_settings.default_rate_limit_per_second`，计数器走 Redis | ⬜ |
 | 统一返回格式与错误码 | [requirements.md 8.1](requirements.md#81-开放-api) | `{code, message, data}`；平台统一错误码，不透传供应商原始信息 | ⬜ |
@@ -303,7 +304,7 @@
 
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
-| 基础设施与公共能力 | 11 | 5 | 0 | 6 |
+| 基础设施与公共能力 | 12 | 6 | 0 | 6 |
 | 卡速售 2.0 驱动 | 8 | 1 | 5 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
@@ -312,7 +313,7 @@
 | 商户管理后台 | 16 | 4 | 0 | 12 |
 | 系统管理后台 | 18 | 4 | 0 | 14 |
 | 异步任务与定时任务 | 10 | 0 | 0 | 10 |
-| **合计** | **103** | **18** | **5** | **80** |
+| **合计** | **104** | **19** | **5** | **80** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

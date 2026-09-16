@@ -34,6 +34,20 @@ class MerchantDao extends AbstractDao
     }
 
     /**
+     * 事务内加行锁读商户账户，供 App\Service\Merchant\BalanceService 的
+     * freeze/deduct/unfreeze 使用（requirements.md 4.5：并发下单要求先在事务里
+     * 锁住商户账户再检查/变更余额，多笔订单排队依次处理）。不能用
+     * find()/findFromCache()：那两个要么走缓存要么是无锁的普通查询，
+     * 拿到的行在并发场景下不构成互斥，锁不住。调用方必须已经身处
+     * Hyperf\DbConnection\Db::transaction() 里，否则 lockForUpdate() 不生效
+     * （MySQL 的 SELECT ... FOR UPDATE 脱离事务毫无意义）。
+     */
+    public function lockForUpdate(int $id): ?Merchant
+    {
+        return $this->newQuery()->where('id', $id)->lockForUpdate()->first();
+    }
+
+    /**
      * 系统管理后台（web/admin）「商户列表」用（requirements.md 8.3），按创建时间倒序。
      *
      * 没有用 Hyperf\Database\Model\Builder::paginate()（会返回真正的
