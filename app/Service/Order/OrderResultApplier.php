@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
+use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantRebateDao;
 use App\Dao\OrderRechargeDao;
@@ -105,6 +106,29 @@ use Hyperf\Di\Annotation\Inject;
  * 插入返佣记录撞上唯一索引会抛 `QueryException`，这里捕获当幂等 no-op，
  * 跟 `BalanceService::deduct()`/`unfreeze()` 是同一个"插入撞车即已处理过"套路，
  * 不是重新发明。
+ *
+ * 【卡密写入，docs/modules.md 6 节"卡券下单（二期）"任务补上】`DriverResult::
+ * $cardList` 存在的目的就是让驱动把卡密带出来（见该字段类注释），但在这个任务
+ * 之前 `applySuccess()` 完全没用过它——卡密从驱动一路拿到，却从没被写进
+ * `order_recharges.card_no`/`card_pwd`。`Success` 且 `$cardList` 非空时，取
+ * **第一条**（requirements.md 7.1"一单一个"：这条业务线数量恒为 1，理论上
+ * `cardList` 只会有一条），用 `App\Crypto\Encryptor` 加密后写入这笔订单已有的
+ * `order_recharges` 行（下单时就已经建好，见
+ * `RechargeOrderPlacementService::place()`/`CardOrderPlacementService::
+ * place()`）。`card_no`/`card_password` 缺一个就只写有的那个，两个都没有就什么
+ * 都不写——不强行拼出一个假的空字符串密文。
+ *
+ * `cardList` 为空/缺失时的防御性分支：卡速售的状态映射规则（`KasushouStatusMapper`）
+ * 本身就规定卡类商品必须等 `card_list` 真的到了才判定 `Success`，所以这里理论上
+ * 不应该出现"卡类商品 Success 但没有 cardList"——但订单仍然应该正常走完成功流程
+ * （不能因为这个防御性判断让整笔已经成功的订单卷进异常），只是卡号卡密字段保留
+ * `null`，不额外记日志（这个类目前没有引入 LoggerFactory，为了这一个边界分支
+ * 单独引入日志依赖不划算；真的发生时商户查订单会发现卡号卡密缺失，比静默写错数据
+ * 更容易在客服侧被发现）。
+ *
+ * 这段逻辑加在共享的 `OrderResultApplier` 而不是任一下单 Service 里，
+ * `SupplierCallbackService` 异步回调推进 `processing` 订单到 `Success` 时
+ * 自动获得同样的能力，不需要在回调路径上再重复实现一遍。
  */
 class OrderResultApplier extends AbstractService
 {
@@ -140,6 +164,9 @@ class OrderResultApplier extends AbstractService
     #[Inject]
     protected ProductDao $productDao;
 
+    #[Inject]
+    protected Encryptor $encryptor;
+
     /**
      * @param null|Product $product 调用方已经手上有的商品行，见类注释"`Product`
      *                              从哪来"一节；只有 `Success` 分支会用到
@@ -170,7 +197,42 @@ class OrderResultApplier extends AbstractService
         $this->balanceService->deduct($order->merchant_id, $order->id, $order->sale_price);
         $this->merchantNotifyService->notify($order->id);
 
+        $this->persistCardSecretsIfPresent($order, $result);
         $this->generatePendingRebate($order, $product, $now);
+    }
+
+    /**
+     * 见类注释"卡密写入"一节。只在 `$result->cardList` 非空时才有动作，话费订单的
+     * `DriverResult` 永远不会带 `cardList`，这个方法对它们是无操作。
+     */
+    private function persistCardSecretsIfPresent(Order $order, DriverResult $result): void
+    {
+        if ($result->cardList === null || $result->cardList === []) {
+            return;
+        }
+
+        $first = $result->cardList[0];
+        $cardNo = $first['card_no'] ?? null;
+        $cardPassword = $first['card_password'] ?? null;
+
+        $updates = [];
+        if ($cardNo !== null) {
+            $updates['card_no'] = $this->encryptor->encrypt($cardNo);
+        }
+        if ($cardPassword !== null) {
+            $updates['card_pwd'] = $this->encryptor->encrypt($cardPassword);
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $recharge = $this->orderRechargeDao->find($order->id);
+        if ($recharge === null) {
+            return;
+        }
+
+        $recharge->fill($updates)->save();
     }
 
     private function generatePendingRebate(Order $order, ?Product $product, string $orderCompletedAt): void

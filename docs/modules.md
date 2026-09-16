@@ -130,7 +130,7 @@
 | 话费商品列表 | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
 | 话费下单 | ✅ | ✅ | ✅ | ✅ |<sup>④</sup>
 | 卡券商品列表（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 卡券下单（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 卡券下单（二期） | ✅ | ✅ | ✅ | ✅ |<sup>⑤</sup>
 | 电影票城市 / 影院 / 影片 / 场次 / 座位查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 电影票锁座（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 电影票确认出票（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -230,6 +230,44 @@ isOverDebtWarningThreshold()` 只提供判断本身，不含任何告警动作�
 测试见 `test/Cases/Service/Order/RechargeOrderPlacementServiceTest.php`（编排细节，
 含幂等重复提交只 freeze 一次的关键断言）+
 `test/Cases/OpenApi/RechargeOrderControllerTest.php`（真实 HTTP + 中间件栈）。
+**"卡券下单（二期）"任务落地时的回顾性重构**：本行"genuinely business-line-agnostic"
+的部分（幂等重放、订单号生成/建单竞态、冻结、路由失败切换循环、尝试记录、结果收尾）
+已被整段抽到新的 `App\Service\Order\AbstractOrderPlacementService`，
+`RechargeOrderPlacementService` 现在只剩话费专属的商品校验和 `order_recharges` 建行，
+`RechargeOrderPlacementServiceTest` 全套既有用例原样通过（未修改任何断言），
+证明这次抽取没有改变本行的行为，详见⑤。
+
+⑤ `卡券下单`（`POST /open-api/orders/card`，requirements.md 8.1「下单」的卡券一侧，
+原本标注在"二期"，本次任务提前做掉；话费参数不同、单独设计，见④）复用④抽出来的
+`App\Service\Order\AbstractOrderPlacementService`（路由/失败切换/尝试记录/结果收尾
+完全共享同一份实现，不是两份可能漂移的拷贝），新增
+`App\Service\Order\CardOrderPlacementService`（`businessLine()` 返回 `'card'`，
+`orderNoPrefix()` 返回 `'C'`，`isCardProduct()` 返回 `true`，每次驱动调用都会用到）、
+`App\Controller\OpenApi\CardOrderController`。**卡券专属的业务规则**：
+`products.card_type` 只有 `direct`（直充，需要目标账号）、`card_secret`（卡密，
+kasushou.md"下单参数"一行原文"卡密商品不传"）两种取值——直充类必须传
+`recharge_account`（跟话费复用同一个请求字段名，保持两条业务线参数命名一致），
+卡密类禁止传这个参数（传了直接 `HttpException(422)`，不是静默忽略，因为这意味着
+调用方对商品类型的理解有误）；这条校验在 `CardOrderPlacementService::
+validateRechargeAccountForCardType()`。**卡密落库，共享收益**：`App\Supplier\
+DriverResult::$cardList` 存在的目的就是让驱动带出卡号卡密，但此前
+`OrderResultApplier::applySuccess()` 从未使用过这个字段——本次任务把"取
+`cardList` 第一条（`requirements.md` 7.1"一单一个"）、用 `App\Crypto\Encryptor`
+加密后写入 `order_recharges.card_no`/`card_pwd`"这段逻辑补进共享的
+`OrderResultApplier`，不是 `CardOrderPlacementService` 私有逻辑，`App\Service\Order\
+SupplierCallbackService` 异步回调路径自动获得同样的能力。`cardList` 缺失/为空
+（理论上卡类商品在 `KasushouStatusMapper` 的映射规则下不应该出现"Success 但没
+card_list"）时防御性地保留 `card_no`/`card_pwd` 为 `null`，不额外记日志（这个类
+目前没有引入 `LoggerFactory`），不让订单成功流程崩溃。**返佣**：`App\Service\
+Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确工作（只是
+按 `products.business_line` 查 `merchant_level_business_rates`），用一条真实建了
+`(level_id, business_line='card')` 比例记录的测试确认，不是假设。**范围外**：跟④
+同样的限制（商户业务线开通校验、异步推进、熔断），以及"卡券商品列表（二期）"
+（本节单独一行，仍是 ⬜，不在本次任务范围）。测试见
+`test/Cases/Service/Order/CardOrderPlacementServiceTest.php`（直充/卡密两种
+`card_type` 的必填/禁止校验、卡密加密落库并解密还原、失败切换/余额不足/欠款暂停/
+幂等重放各留一条代表性用例、拒绝非卡券商品）+
+`test/Cases/OpenApi/CardOrderControllerTest.php`（真实 HTTP + 中间件栈）。
 
 ---
 
@@ -424,11 +462,11 @@ isOverDebtWarningThreshold()` 只提供判断本身，不含任何告警动作�
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
-| 开放 API 接口 | 15 | 5 | 0 | 10 |
+| 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
 | 系统管理后台 | 19 | 6 | 0 | 13 |
 | 异步任务与定时任务 | 10 | 1 | 0 | 9 |
-| **合计** | **106** | **27** | **5** | **74** |
+| **合计** | **106** | **28** | **5** | **73** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
