@@ -89,6 +89,9 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'merchant_level.manage', 'module' => 'merchant_level', 'name' => '商户等级管理', 'type' => 'action'],
         ['code' => 'product.view', 'module' => 'product', 'name' => '本地商品查看', 'type' => 'action'],
         ['code' => 'product.manage', 'module' => 'product', 'name' => '本地商品管理', 'type' => 'action'],
+        ['code' => 'order.view', 'module' => 'order', 'name' => '订单查看', 'type' => 'action'],
+        ['code' => 'order.manage', 'module' => 'order', 'name' => '订单手动查询供应商/重推回调', 'type' => 'action'],
+        ['code' => 'order.resolve', 'module' => 'order', 'name' => '异常单人工处理', 'type' => 'action'],
     ];
 
     #[Inject]

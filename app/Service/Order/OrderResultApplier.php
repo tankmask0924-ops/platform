@@ -60,9 +60,10 @@ use Hyperf\Logger\LoggerFactory;
  * `SupplierCallbackService` 不预置任何东西，直接把从 DB 读到的、订单上次持久化
  * 的 `cost_price` 当基准，符合"没有更权威的估算值就不瞎改"的原则。
  *
- * 【幂等】成功/明确失败两个终态分支用 `OrderDao::finishIfProcessing()` 条件更新落库，
- * 订单已经不是 `processing`（回调和定时查询同时推进同一笔订单时后到的一方）就直接
- * 返回，不扣款、不解冻、不通知。`BalanceService::deduct()`/`unfreeze()` 的
+ * 【幂等】成功/明确失败两个终态分支用 `OrderDao::finishIfStatus()` 以读到的状态为条件
+ * 更新落库，订单已经被别人推进（回调、定时查询、人工处理同时推进同一笔订单时后到的
+ * 一方）就直接返回，不扣款、不解冻、不通知。异常单也能落终态，供后台人工处理
+ * （`App\Service\Admin\OrderAdminService`）使用。`BalanceService::deduct()`/`unfreeze()` 的
  * `dedupe_order_key` 唯一索引和返佣的 `order_id` 唯一索引仍然是资金层面的兜底。
  * 调用方在调用前做的终态检查（`SupplierCallbackService::handle()`）只是省掉一次
  * 无用的查询，不再是唯一的保护。
@@ -123,6 +124,8 @@ use Hyperf\Logger\LoggerFactory;
 class OrderResultApplier extends AbstractService
 {
     private const REBATE_DUE_PERIOD_SETTING_KEY = 'rebate_due_period_days';
+
+    private const FINISHABLE_STATUSES = [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL];
 
     /**
      * requirements.md 5.4："固定期限在返佣管理后台设置，全平台统一，默认 7 天"——
@@ -347,14 +350,20 @@ class OrderResultApplier extends AbstractService
     }
 
     /**
-     * 终态只落一次：回调和定时查询可能同时推进同一笔订单，条件更新失败的一方
-     * 直接放弃，不再扣款/解冻/通知。调用方预置在内存里、还没保存的改动（比如
-     * 同步下单预置的 cost_price）一并写入。
+     * 终态只落一次：以调用方读到的订单状态为条件更新，回调、定时查询、人工处理同时
+     * 推进同一笔订单时，条件更新失败的一方直接放弃，不再扣款/解冻/通知。只有处理中
+     * （自动推进）和异常单（人工处理，自动路径在 SupplierRouter 已经拦掉）能落终态。
+     * 调用方预置在内存里、还没保存的改动（比如同步下单预置的 cost_price）一并写入。
      *
      * @param array<string, mixed> $attributes
      */
     private function finish(Order $order, array $attributes): bool
     {
-        return $this->orderDao->finishIfProcessing($order, array_merge($order->getDirty(), $attributes));
+        $loadedStatus = $order->getOriginal('status');
+        if (! in_array($loadedStatus, self::FINISHABLE_STATUSES, true)) {
+            return false;
+        }
+
+        return $this->orderDao->finishIfStatus($order, array_merge($order->getDirty(), $attributes), $loadedStatus);
     }
 }

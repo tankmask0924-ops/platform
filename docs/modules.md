@@ -326,12 +326,33 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商户等级：CRUD / 各业务线比例设置 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。**仍未做**：商品单独覆盖某等级比例（`product_level_rebates` 的后台接口），单独的后续任务 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜（生成+结算的业务逻辑已在第 1 节"返佣待到账生成 + 到期结算"完成，这行剩下的是后台管理 UI——`rebate_due_period_days` 目前只能直接改 `system_settings` 表、没有编辑接口，也没有"商户返佣明细/供应商返佣明细"的查询列表） |
-| 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | ⬜ | ⬜ | ⬜ |
+| 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | ⬜ | ⬜ | ⬜ |
 | 财务报表 | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | ⬜ | ⬜ | ⬜ |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | ⬜ | ⬜ | ⬜ |
+
+> 「订单管理」：`GET /admin/orders`（按 status / business_line / merchant_id / order_no /
+> merchant_order_no / created_from / created_to 筛选，id 倒序，每页最多 100）、`GET /admin/orders/{id}`
+> （订单含成本价和供应商、话费卡券明细、供应商尝试记录含请求/响应快照、资金流水、商户回调记录、返佣记录、
+> 人工操作记录；卡号卡密不明文展示，快照里的 `card_no`/`card_password`/`card_pwd` 打码）、
+> `POST /admin/orders/{id}/resolve`（异常单人工置成功/置失败，`result` + 必填 `remark` + 可选
+> `supplier_order_no`）、`POST /admin/orders/{id}/query-supplier`、`POST /admin/orders/{id}/renotify`。
+> 三个新权限：`order.view`、`order.manage`（查询供应商、重推回调）、`order.resolve`（异常单处理，会动钱，单独一档），
+> 已同步进 `KNOWN_PERMISSIONS`。
+> - **异常单人工处理**只允许 `abnormal`（其它 409）。置成功走 `OrderResultApplier` 照常扣款、生成返佣、通知商户，
+>   成本价沿用订单上的值；置失败照常解冻、通知商户，不切换供应商。`OrderResultApplier` 的终态条件更新从
+>   "必须是 processing"改成"必须还是读到时的状态（processing 或 abnormal）"，`OrderDao::finishIfStatus()`；
+>   自动路径（回调、定时查询）对异常单仍由 `SupplierRouter` 拦住。
+> - **卡密类卡券置成功**必须当场向供应商查到成功且带卡密，否则 409，避免商户拿到"成功但没有卡密"的订单；查到的卡密照常加密落库。
+> - **手动查询供应商**（processing / abnormal）复用定时查询的 `SupplierResultPollingService::queryLatestAttempt()`：
+>   处理中订单照常推进，异常单只把结果记到尝试记录上；查询失败返回 502。
+> - **重推回调**只允许 success / failed / cancelled / refunded，推一次新的通知任务（失败后照常按间隔重试）。
+> - 以上三个动作都写 `admin_operation_logs`（本次新增 `App\Model\AdminOperationLog` + `App\Dao\AdminOperationLogDao`，
+>   此前这张表还没有代码写入），异常单处理记录处理前后的订单快照和备注。
+> - 未做：部分退款处理（退款流程未建）、发起供应商撤单（驱动未实现撤单，第 2 节"撤单"行）。
+> - 测试：`test/Cases/Admin/OrderControllerTest.php`。
 
 > 「商户管理：启用禁用 / 调整等级 / 限流设置」：三个动作共用新权限编码 `merchant.manage`
 > （已同步进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。**启用禁用**只在 `active` ↔
@@ -542,9 +563,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
-| 系统管理后台 | 19 | 9 | 0 | 10 |
+| 系统管理后台 | 19 | 9 | 1 | 9 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **49** | **0** | **57** |
+| **合计** | **106** | **49** | **1** | **56** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

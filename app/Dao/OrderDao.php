@@ -13,6 +13,8 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\Order;
+use Hyperf\Database\Model\Builder;
+use Hyperf\Database\Model\Collection;
 
 class OrderDao extends AbstractDao
 {
@@ -66,20 +68,29 @@ class OrderDao extends AbstractDao
     }
 
     /**
-     * 把一笔 `processing` 订单推进到终态：带 `status = processing` 条件更新，
-     * 同一笔订单被回调和定时查询同时推进时只有一方返回 true。返回 false 说明别的
-     * 请求已经先落了终态，调用方不能再做扣款/解冻/通知。成功时 `$order` 的内存
-     * 属性同步成更新后的值。
+     * 把一笔 `processing` 订单推进到终态，见 finishIfStatus()。
      *
      * @param array<string, mixed> $attributes
      */
     public function finishIfProcessing(Order $order, array $attributes): bool
     {
+        return $this->finishIfStatus($order, $attributes, Order::STATUS_PROCESSING);
+    }
+
+    /**
+     * 带 `status = $expectedStatus` 条件更新订单：同一笔订单被回调、定时查询、人工处理
+     * 同时推进时只有一方返回 true。返回 false 说明订单已经不是调用方读到的状态，调用方
+     * 不能再做扣款/解冻/通知。成功时 `$order` 的内存属性同步成更新后的值。
+     *
+     * @param array<string, mixed> $attributes
+     */
+    public function finishIfStatus(Order $order, array $attributes, string $expectedStatus): bool
+    {
         $attributes['updated_at'] = date('Y-m-d H:i:s');
 
         $affected = $this->newQuery()
             ->where('id', $order->id)
-            ->where('status', 'processing')
+            ->where('status', $expectedStatus)
             ->update($attributes);
 
         if ($affected !== 1) {
@@ -120,5 +131,50 @@ class OrderDao extends AbstractDao
         }
 
         return $marked;
+    }
+
+    /**
+     * 后台订单列表，按 id 倒序（最新的在前）。
+     *
+     * @param array{status?: string, business_line?: string, merchant_id?: int, order_no?: string,
+     *     merchant_order_no?: string, created_from?: string, created_to?: string} $filters 已校验过的筛选条件
+     * @return Collection<int, Order>
+     */
+    public function paginateForAdmin(array $filters, int $page, int $perPage): Collection
+    {
+        return $this->adminFilterQuery($filters)
+            ->orderByDesc('id')
+            ->forPage($page, $perPage)
+            ->get();
+    }
+
+    /**
+     * @param array<string, mixed> $filters 同 paginateForAdmin()
+     */
+    public function countForAdmin(array $filters): int
+    {
+        return $this->adminFilterQuery($filters)->count();
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     */
+    private function adminFilterQuery(array $filters): Builder
+    {
+        $query = $this->newQuery();
+
+        foreach (['status', 'business_line', 'merchant_id', 'order_no', 'merchant_order_no'] as $column) {
+            if (isset($filters[$column])) {
+                $query->where($column, $filters[$column]);
+            }
+        }
+        if (isset($filters['created_from'])) {
+            $query->where('created_at', '>=', $filters['created_from']);
+        }
+        if (isset($filters['created_to'])) {
+            $query->where('created_at', '<=', $filters['created_to']);
+        }
+
+        return $query;
     }
 }

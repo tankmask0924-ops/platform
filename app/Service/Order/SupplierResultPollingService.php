@@ -15,13 +15,16 @@ namespace App\Service\Order;
 use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
 use App\Dao\SupplierDao;
+use App\Model\Order;
 use App\Model\OrderAttempt;
 use App\Service\AbstractService;
+use App\Supplier\DriverResult;
 use App\Supplier\SupplierDriverFactory;
 use Hyperf\Coroutine\Parallel;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
+use RuntimeException;
 use Throwable;
 
 /**
@@ -38,7 +41,8 @@ use Throwable;
  *   至少等一个间隔才查，避免供应商那边还没落库就被查成"没有这笔订单"。
  * - 查询本身失败（驱动构造失败、网络异常）只记日志并刷新 updated_at，下个间隔再查，
  *   不改订单。
- * - 超过异常单时长仍无结果的订单继续查询，转人工由"异常单标记"任务负责。
+ * - 只查处理中的订单；被标成异常单后不再定时查询，后台"手动查询供应商"也走
+ *   queryLatestAttempt()，异常单查到的结果只记到尝试记录上。
  * - 查询和处理之间订单可能已经被回调推进或切换到新的尝试，处理前重新确认。
  */
 class SupplierResultPollingService extends AbstractService
@@ -91,31 +95,49 @@ class SupplierResultPollingService extends AbstractService
     }
 
     /**
+     * 立即向供应商查询这笔订单最新一次尝试的结果，并像回调一样交给
+     * SupplierRouter::applyAttemptResult()（异常单只记录不改订单）。定时查询和后台
+     * "手动查询供应商"共用。驱动构造/查询失败的异常原样抛出。
+     *
+     * @return null|DriverResult 订单没有尝试记录时返回 null
+     */
+    public function queryLatestAttempt(Order $order): ?DriverResult
+    {
+        $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
+        if ($attempt === null) {
+            return null;
+        }
+
+        $supplier = $this->supplierDao->find((int) $attempt->supplier_id);
+        if ($supplier === null) {
+            throw new RuntimeException('supplier #' . $attempt->supplier_id . ' of order attempt #' . $attempt->id . ' not found');
+        }
+
+        $result = $this->supplierDriverFactory->build($supplier)
+            ->queryOrder($order->order_no . '-' . $attempt->attempt_no, $order->business_line === 'card');
+
+        // 查询期间可能已经有回调推进了订单或切到了下一家
+        $order->refresh();
+        $latest = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
+        if ($latest !== null && (int) $latest->id === (int) $attempt->id) {
+            $this->supplierRouter->applyAttemptResult($order, $latest, $result, (int) $supplier->id);
+        }
+
+        return $result;
+    }
+
+    /**
      * @return bool 是否真的调用了供应商查询
      */
     private function pollOne(OrderAttempt $attempt): bool
     {
         try {
             $order = $this->orderDao->find((int) $attempt->order_id);
-            $supplier = $this->supplierDao->find((int) $attempt->supplier_id);
-            if ($order === null || $supplier === null || $order->status !== 'processing') {
+            if ($order === null || $order->status !== Order::STATUS_PROCESSING) {
                 return false;
             }
 
-            $externalOrderNo = $order->order_no . '-' . $attempt->attempt_no;
-            $result = $this->supplierDriverFactory->build($supplier)
-                ->queryOrder($externalOrderNo, $order->business_line === 'card');
-
-            // 查询期间可能已经有回调推进了订单或切到了下一家
-            $order->refresh();
-            $latest = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
-            if ($order->status !== 'processing' || $latest === null || (int) $latest->id !== (int) $attempt->id) {
-                return true;
-            }
-
-            $this->supplierRouter->applyAttemptResult($order, $latest, $result, (int) $supplier->id);
-
-            return true;
+            return $this->queryLatestAttempt($order) !== null;
         } catch (Throwable $e) {
             $this->logger()->error('supplier result query failed', [
                 'order_attempt_id' => $attempt->id,
