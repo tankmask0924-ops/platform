@@ -12,16 +12,23 @@ declare(strict_types=1);
 
 namespace HyperfTest\Cases\Service\Supplier;
 
+use App\Exception\InvalidSupplierCallbackSignatureException;
+use App\Exception\SupplierNotFoundException;
+use App\Model\Supplier;
 use App\Model\SupplierProduct;
 use App\Model\SupplierProductPriceHistory;
 use App\Service\Supplier\ProductSyncService;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\SupplierDriverFactory;
 use Hyperf\Testing\TestCase;
 use Mockery;
+use RuntimeException;
 
 /**
- * App\Service\Supplier\ProductSyncService 的两个方法：applyNotification()（通知
- * 触发，验签+重新查权威值）和 applyFullSyncPage()（应用一页已取回的全量同步数据）。
+ * App\Service\Supplier\ProductSyncService：applyNotification()（通知触发，验签+
+ * 重新查权威值）、applyFullSyncPage()（应用一页已取回的全量同步数据），以及接入用的
+ * handleNotification()（按供应商编码找驱动）和 syncSupplier()/syncAllSuppliers()
+ * （每日全量校准的翻页）。
  * KasushouDriver 全部用 Mockery 双重（不发真实网络请求，跟
  * test/Cases/Supplier/Kasushou/KasushouDriverTest.php 同样的原则），这里只关心
  * Service 编排逻辑本身：验签结果如何驱动查询、映射行是否存在如何驱动 no-op、
@@ -36,6 +43,8 @@ class ProductSyncServiceTest extends TestCase
 
     private array $productIds = [];
 
+    private array $supplierIds = [];
+
     protected function tearDown(): void
     {
         foreach ($this->productIds as $id) {
@@ -43,6 +52,11 @@ class ProductSyncServiceTest extends TestCase
             SupplierProduct::destroy($id);
         }
         $this->productIds = [];
+
+        foreach ($this->supplierIds as $id) {
+            Supplier::destroy($id);
+        }
+        $this->supplierIds = [];
 
         parent::tearDown();
     }
@@ -167,16 +181,179 @@ class ProductSyncServiceTest extends TestCase
         $this->assertTrue(true);
     }
 
+    public function testHandleNotificationResolvesSupplierByCode()
+    {
+        $supplier = $this->createSupplier();
+        $code = $this->uniqueCode();
+        $product = $this->createProduct($code, costPrice: '10.00', supplierId: $supplier->id);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('parseProductChangeNotification')->once()->andReturn($code);
+        $driver->shouldReceive('queryProductDetail')->once()->andReturn([
+            'supplier_product_code' => $code, 'cost_price' => '9.50', 'status' => 'paused', 'stock' => 0,
+        ]);
+        $this->bindDrivers([$supplier->id => $driver]);
+
+        $this->service()->handleNotification($supplier->code, ['id' => $code, 'time' => '1700000000', 'sign' => 'x']);
+
+        $product->refresh();
+        $this->assertSame('9.50', $product->cost_price);
+        $this->assertSame('paused', $product->status);
+        $this->assertSame(0, $product->stock);
+    }
+
+    public function testHandleNotificationRejectsUnknownSupplierAndBadSignature()
+    {
+        $supplier = $this->createSupplier();
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('parseProductChangeNotification')->once()->andReturnNull();
+        $driver->shouldNotReceive('queryProductDetail');
+        $this->bindDrivers([$supplier->id => $driver]);
+
+        try {
+            $this->service()->handleNotification('no-such-supplier-' . uniqid(), []);
+            $this->fail('expected SupplierNotFoundException');
+        } catch (SupplierNotFoundException) {
+        }
+
+        $this->expectException(InvalidSupplierCallbackSignatureException::class);
+        $this->service()->handleNotification($supplier->code, ['id' => 'x', 'time' => '1', 'sign' => 'bad']);
+    }
+
+    public function testSyncSupplierWalksPagesUntilShortPage()
+    {
+        $supplier = $this->createSupplier();
+        $first = $this->createProduct($this->uniqueCode(), costPrice: '10.00', supplierId: $supplier->id);
+        $last = $this->createProduct($this->uniqueCode(), costPrice: '10.00', supplierId: $supplier->id);
+
+        $page1 = $this->page(ProductSyncService::FULL_SYNC_PAGE_SIZE, $first->supplier_product_code, '11.00');
+        $page2 = [$this->entry($last->supplier_product_code, '12.00')];
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('syncAllProducts')->once()->with(1, ProductSyncService::FULL_SYNC_PAGE_SIZE)->andReturn($page1);
+        $driver->shouldReceive('syncAllProducts')->once()->with(2, ProductSyncService::FULL_SYNC_PAGE_SIZE)->andReturn($page2);
+        $this->bindDrivers([$supplier->id => $driver]);
+
+        $this->assertSame(ProductSyncService::FULL_SYNC_PAGE_SIZE + 1, $this->service()->syncSupplier($supplier));
+
+        $this->assertSame('11.00', $first->refresh()->cost_price);
+        $this->assertSame('12.00', $last->refresh()->cost_price);
+        $this->assertNotNull($last->synced_at);
+    }
+
+    public function testSyncSupplierStopsWhenApiIgnoresPageNumber()
+    {
+        $supplier = $this->createSupplier();
+        $samePage = $this->page(ProductSyncService::FULL_SYNC_PAGE_SIZE, 'GOODS-X', '1.00');
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('syncAllProducts')->twice()->andReturn($samePage);
+        $this->bindDrivers([$supplier->id => $driver]);
+
+        $this->assertSame(ProductSyncService::FULL_SYNC_PAGE_SIZE, $this->service()->syncSupplier($supplier));
+    }
+
+    public function testSyncSupplierStopsOnEmptyPage()
+    {
+        $supplier = $this->createSupplier();
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('syncAllProducts')->once()->andReturn([]);
+        $this->bindDrivers([$supplier->id => $driver]);
+
+        $this->assertSame(0, $this->service()->syncSupplier($supplier));
+    }
+
+    public function testSyncAllSuppliersContinuesPastFailingSupplier()
+    {
+        $broken = $this->createSupplier();
+        $healthy = $this->createSupplier();
+        $disabled = $this->createSupplier('disabled');
+        $product = $this->createProduct($this->uniqueCode(), costPrice: '10.00', supplierId: $healthy->id);
+
+        $brokenDriver = Mockery::mock(KasushouDriver::class);
+        $brokenDriver->shouldReceive('syncAllProducts')->andThrow(new RuntimeException('http 500'));
+        $healthyDriver = Mockery::mock(KasushouDriver::class);
+        $healthyDriver->shouldReceive('syncAllProducts')->once()->andReturn([$this->entry($product->supplier_product_code, '13.00')]);
+        $disabledDriver = Mockery::mock(KasushouDriver::class);
+        $disabledDriver->shouldNotReceive('syncAllProducts');
+        $this->bindDrivers([$broken->id => $brokenDriver, $healthy->id => $healthyDriver, $disabled->id => $disabledDriver]);
+
+        $this->service()->syncAllSuppliers();
+
+        $this->assertSame('13.00', $product->refresh()->cost_price);
+    }
+
+    private function service(): ProductSyncService
+    {
+        return $this->getContainer()->get(ProductSyncService::class);
+    }
+
+    /**
+     * 测试库是共享的，不是本测试建的供应商一律让驱动构造失败（只记日志）。
+     *
+     * @param array<int, KasushouDriver> $driversBySupplierId
+     */
+    private function bindDrivers(array $driversBySupplierId): void
+    {
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldReceive('build')->andReturnUsing(static function (Supplier $s) use ($driversBySupplierId) {
+            return $driversBySupplierId[$s->id] ?? throw new RuntimeException('not a supplier of this test');
+        });
+        $this->instance(SupplierDriverFactory::class, $factory);
+    }
+
+    /**
+     * 一整页：第一条是给定的商品，其余用不存在映射的编码填满。
+     *
+     * @return list<array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}>
+     */
+    private function page(int $size, string $firstCode, string $firstCost): array
+    {
+        $entries = [$this->entry($firstCode, $firstCost)];
+        for ($i = 1; $i < $size; ++$i) {
+            $entries[] = $this->entry('UNMAPPED-' . $i, '1.00');
+        }
+
+        return $entries;
+    }
+
+    /**
+     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}
+     */
+    private function entry(string $code, string $cost): array
+    {
+        return ['supplier_product_code' => $code, 'cost_price' => $cost, 'status' => 'active', 'stock' => null];
+    }
+
+    private function createSupplier(string $status = 'active'): Supplier
+    {
+        $unique = uniqid('product_sync_test_supplier_', true);
+
+        $supplier = Supplier::create([
+            'name' => $unique,
+            'code' => substr(md5($unique), 0, 24),
+            'business_line' => 'recharge',
+            'driver' => 'kasushou',
+            'config' => 'unused-in-test-driver-factory-is-overridden',
+            'status' => $status,
+        ]);
+
+        $this->supplierIds[] = $supplier->id;
+
+        return $supplier;
+    }
+
     private function uniqueCode(): string
     {
         return 'GOODS-' . uniqid('', true);
     }
 
-    private function createProduct(string $code, string $costPrice): SupplierProduct
+    private function createProduct(string $code, string $costPrice, int $supplierId = self::SUPPLIER_ID): SupplierProduct
     {
         $product = SupplierProduct::create([
             'product_id' => random_int(100000, 999999),
-            'supplier_id' => self::SUPPLIER_ID,
+            'supplier_id' => $supplierId,
             'supplier_product_code' => $code,
             'cost_price' => $costPrice,
             'priority' => 1,

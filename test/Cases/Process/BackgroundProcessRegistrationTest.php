@@ -15,6 +15,7 @@ namespace HyperfTest\Cases\Process;
 use App\Crontab\AbnormalOrderCrontab;
 use App\Crontab\RebateSettlementCrontab;
 use App\Crontab\SupplierBalanceCrontab;
+use App\Crontab\SupplierProductSyncCrontab;
 use App\Crontab\SupplierResultQueryCrontab;
 use App\Process\CrontabDispatcherProcess;
 use App\Process\QueueConsumerProcess;
@@ -71,6 +72,18 @@ class BackgroundProcessRegistrationTest extends TestCase
         $this->assertSame('* * * * *', $annotation->rule);
         $this->assertTrue($annotation->onOneServer);
         $this->assertTrue($annotation->singleton);
+        $this->assertGreaterThanOrEqual(300, $annotation->mutexExpires, '锁不能比一批查询的最坏耗时先过期');
+    }
+
+    public function testSupplierProductFullSyncRunsDailyOnOneServer()
+    {
+        $annotation = AnnotationCollector::getClassesByAnnotation(Crontab::class)[SupplierProductSyncCrontab::class] ?? null;
+
+        $this->assertInstanceOf(Crontab::class, $annotation);
+        $this->assertSame('0 4 * * *', $annotation->rule);
+        $this->assertTrue($annotation->onOneServer);
+        $this->assertTrue($annotation->singleton);
+        $this->assertGreaterThanOrEqual(3600, $annotation->mutexExpires);
     }
 
     public function testAbnormalOrderMarkingRunsOnOneServer()

@@ -53,7 +53,7 @@
 | 查询订单 | ✅ `KasushouDriver::queryOrder()` | ✅ `App\Service\Order\SupplierResultPollingService`（定时查询，见第 9 节） | ✅ 同上 + `SupplierResultPollingServiceTest` | ✅ |
 | 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ✅ `App\Service\Order\SupplierCallbackService`（回调入口见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` + `NotifySupplierControllerTest` | ✅ |
 | 查询余额 | ✅ `KasushouDriver::queryBalance()` | ✅ `App\Service\Supplier\SupplierBalanceService`（余额监控，见第 9 节） | ✅ `KasushouDriverTest` + `SupplierBalanceServiceTest` | ✅ |
-| 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | 🔨 `App\Service\Supplier\ProductSyncService`（`applyNotification()`/`applyFullSyncPage()`）已建好，但**目前没有任何调用方接入、没有在生产环境跑起来**：商品变更通知需要的 webhook 路由/控制器是第 1 节"供应商回调入口与验签框架"，还是 ⬜；每日全量同步需要的 `#[Crontab]` 定时任务，依赖一个从哪里读供应商配置（baseUrl/userId/apiKey）的 Supplier 配置加载机制，同样还没建，本次任务范围明确不含这两者 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测） | 🔨 |
+| 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | ✅ `App\Service\Supplier\ProductSyncService`：商品变更通知 `POST /notify/{code}/goods`（`handleNotification()`）+ 每日全量校准（`App\Crontab\SupplierProductSyncCrontab` → `syncAllSuppliers()`），见第 9 节 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测）、`NotifySupplierControllerTest`（通知路由 200/403/404） | ✅ |
 | 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
@@ -111,7 +111,7 @@
 | 固定优先级路由与失败切换 | [requirements.md 6.5](requirements.md#65-路由与失败切换) | ✅ |
 | 切换时长限制 | [requirements.md 6.5](requirements.md#65-路由与失败切换) | ✅ |
 | 熔断判定与自动恢复（二期） | [requirements.md 6.6](requirements.md#66-熔断) | ⬜ |
-| 供应商商品成本价同步任务（卡速售自动，其余人工） | [requirements.md 6.4](requirements.md#64-商品映射与成本价) | ⬜ |
+| 供应商商品成本价同步任务（卡速售自动，其余人工） | [requirements.md 6.4](requirements.md#64-商品映射与成本价) | ✅ 自动：见第 9 节"供应商商品同步"；人工：后台商品映射改价（第 8 节） |
 | 结果未知 / 明确失败归类的统一处理框架 | [requirements.md 6.2](requirements.md#62-对接驱动的统一能力) | ⬜ |
 
 **路由与失败切换（6.5）**：`App\Service\Order\SupplierRouter`，话费、卡券共用；同步下单
@@ -469,7 +469,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商结果查询轮询 | Crontab | ✅ `App\Crontab\SupplierResultQueryCrontab` → `App\Service\Order\SupplierResultPollingService`，见下方说明 |
 | 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ✅ `App\Job\NotifyMerchantJob` 失败后按间隔自己重新入队（第 6 节"结果回调"时已实现，此前本表漏更新） |
 | 供应商余额监控 | Crontab | ✅ `App\Crontab\SupplierBalanceCrontab` → `App\Service\Supplier\SupplierBalanceService`，见下方说明 |
-| 供应商商品同步（每日全量校准） | Crontab | ⬜ |
+| 供应商商品同步（每日全量校准） | Crontab | ✅ `App\Crontab\SupplierProductSyncCrontab` → `App\Service\Supplier\ProductSyncService`，见下方说明 |
 | 熔断自动恢复（二期） | Crontab | ⬜ |
 | 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
@@ -516,6 +516,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - 测试：`test/Cases/Service/Supplier/SupplierBalanceServiceTest.php`（含下单时报预存款不足 → 刷新 → 下一笔不再分给它），
   `KasushouDriverTest` 的状态 -1 用例。
 
+**供应商商品同步**（kasushou.md 第 4 节，requirements.md 6.4）：此前 `ProductSyncService` 只有落库逻辑、没有调用方，这次接上两个触发源。
+- **商品变更通知**：`POST /notify/{code}/goods`（`NotifySupplierController::productChanged()`），需要在卡速售后台把商品变更通知地址配成它。
+  供应商不存在 404、验签失败 403、成功或商品没配映射 200 回 `ok`（文档没规定回复内容，沿用订单回调）。查商品详情失败走全局异常返回 500，
+  漏掉的由全量校准补上。验签通过后仍只把通知当触发、重新查权威值（原有设计）。
+- **每日全量校准**：每天 04:00（`onOneServer` + `singleton`，锁 1 小时），逐个启用中的供应商翻页拉商品列表（100 条/页）并 `applySync()`；
+  遇到空页、不满一页、**跟上一页完全相同**（接口忽略页码）或满 200 页时停止。单个供应商失败只记 `supplier-product-sync` 日志。
+  列表里没出现的映射不动——商品列表接口的字段/分页是猜的，没联调前不据此下架。
+- 顺带：`SupplierResultQueryCrontab` 的 singleton 锁有效期从默认 60 秒调到 300 秒（一批查询最坏耗时超过 60 秒，锁先过期会叠加执行）。
+- 测试：`ProductSyncServiceTest`（通知入口、翻页的三种停止条件、单个供应商失败不影响其它、停用的不同步）、`NotifySupplierControllerTest`、
+  `BackgroundProcessRegistrationTest`。
+
 ---
 
 ## 10. 进度总览
@@ -525,15 +536,15 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
-| 卡速售 2.0 驱动 | 8 | 5 | 1 | 2 |
+| 卡速售 2.0 驱动 | 8 | 6 | 0 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
-| 供应商路由与风控 | 5 | 2 | 0 | 3 |
+| 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
 | 系统管理后台 | 19 | 9 | 0 | 10 |
-| 异步任务与定时任务 | 10 | 5 | 0 | 5 |
-| **合计** | **106** | **46** | **1** | **59** |
+| 异步任务与定时任务 | 10 | 6 | 0 | 4 |
+| **合计** | **106** | **49** | **0** | **57** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

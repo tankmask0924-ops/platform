@@ -23,9 +23,10 @@ use Throwable;
  * 调度靠已注册的 App\Process\CrontabDispatcherProcess。
  *
  * 每分钟一次；onOneServer 避免多台部署重复查询，singleton 避免一批查询没跑完
- * （供应商慢时最多约 BATCH_SIZE / 并发数 × 10 秒）下一次又开始。
+ * （供应商慢时最多约 BATCH_SIZE / 并发数 × 10 秒）下一次又开始；锁的有效期默认只有
+ * 60 秒，比最坏耗时短，调到 300 秒。
  */
-#[Crontab(rule: '* * * * *', name: 'SupplierResultQuery', memo: '处理中/结果未知订单定时查询供应商（requirements.md 6.2）', singleton: true, onOneServer: true)]
+#[Crontab(rule: '* * * * *', name: 'SupplierResultQuery', memo: '处理中/结果未知订单定时查询供应商（requirements.md 6.2）', singleton: true, mutexExpires: 300, onOneServer: true)]
 class SupplierResultQueryCrontab
 {
     #[Inject]

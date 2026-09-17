@@ -17,6 +17,8 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\Order;
 use App\Model\Supplier;
+use App\Model\SupplierProduct;
+use App\Model\SupplierProductPriceHistory;
 use App\OpenApi\ErrorCode;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
@@ -96,6 +98,8 @@ class NotifySupplierControllerTest extends HttpTestCase
 
     private array $orderIds = [];
 
+    private array $supplierProductIds = [];
+
     protected function setUp(): void
     {
         ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
@@ -110,6 +114,12 @@ class NotifySupplierControllerTest extends HttpTestCase
             Order::destroy($id);
         }
         $this->orderIds = [];
+
+        foreach ($this->supplierProductIds as $id) {
+            SupplierProductPriceHistory::where('supplier_product_id', $id)->delete();
+            SupplierProduct::destroy($id);
+        }
+        $this->supplierProductIds = [];
 
         foreach ($this->supplierIds as $id) {
             Supplier::destroy($id);
@@ -336,6 +346,72 @@ class NotifySupplierControllerTest extends HttpTestCase
 
         $this->assertSame(404, $response->getStatusCode());
         $this->assertNotSame('ok', (string) $response->getBody());
+    }
+
+    public function testProductChangeNotificationUpdatesMappingAndRepliesOk()
+    {
+        $supplier = $this->createSupplier();
+        $mapping = SupplierProduct::create([
+            'product_id' => random_int(100000, 999999),
+            'supplier_id' => $supplier->id,
+            'supplier_product_code' => 'GOODS-NOTIFY-1',
+            'cost_price' => '10.00',
+            'priority' => 1,
+            'status' => 'active',
+        ]);
+        $this->supplierProductIds[] = $mapping->id;
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('parseProductChangeNotification')->once()->andReturn('GOODS-NOTIFY-1');
+        $driver->shouldReceive('queryProductDetail')->once()->with('GOODS-NOTIFY-1')->andReturn([
+            'supplier_product_code' => 'GOODS-NOTIFY-1', 'cost_price' => '10.80', 'status' => 'active', 'stock' => 3,
+        ]);
+        $this->bindDriver($supplier, $driver);
+
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/goods', [
+            'form_params' => ['id' => 'GOODS-NOTIFY-1', 'time' => (string) time(), 'sign' => 'irrelevant-mocked'],
+        ]);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame('ok', (string) $response->getBody());
+        $mapping->refresh();
+        $this->assertSame('10.80', $mapping->cost_price);
+        $this->assertSame(3, $mapping->stock);
+    }
+
+    public function testProductChangeNotificationWithBadSignatureIs403()
+    {
+        $supplier = $this->createSupplier();
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('parseProductChangeNotification')->once()->andReturnNull();
+        $driver->shouldNotReceive('queryProductDetail');
+        $this->bindDriver($supplier, $driver);
+
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/goods', [
+            'form_params' => ['id' => 'GOODS-X', 'time' => (string) time(), 'sign' => 'forged'],
+        ]);
+
+        $this->assertSame(403, $response->getStatusCode());
+        $this->assertNotSame('ok', (string) $response->getBody());
+    }
+
+    public function testProductChangeNotificationForUnknownSupplierIs404()
+    {
+        $response = $this->client->request('POST', '/notify/no-such-supplier-code/goods', [
+            'form_params' => ['id' => 'GOODS-X', 'time' => (string) time(), 'sign' => 'x'],
+        ]);
+
+        $this->assertSame(404, $response->getStatusCode());
+    }
+
+    private function bindDriver(Supplier $supplier, KasushouDriver $driver): void
+    {
+        $driverFactory = Mockery::mock(SupplierDriverFactory::class);
+        $driverFactory->shouldReceive('build')
+            ->with(Mockery::on(static fn (Supplier $s) => $s->id === $supplier->id))
+            ->andReturn($driver);
+
+        ApplicationContext::getContainer()->set(SupplierDriverFactory::class, $driverFactory);
     }
 
     private function mockDriverParseCallback(Supplier $supplier, ?DriverResult $result): void

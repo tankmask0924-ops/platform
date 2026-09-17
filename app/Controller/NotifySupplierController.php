@@ -16,6 +16,7 @@ use App\Exception\CallbackOrderNotFoundException;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
 use App\Service\Order\SupplierCallbackService;
+use App\Service\Supplier\ProductSyncService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\PostMapping;
@@ -23,7 +24,8 @@ use Psr\Http\Message\ResponseInterface as PsrResponseInterface;
 
 /**
  * 供应商回调统一入口（requirements.md 6.8，docs/modules.md 第 1 节"供应商回调入口
- * 与验签框架"）：`POST /notify/{code}`，`{code}` 是 `suppliers.code`。这是这个
+ * 与验签框架"）：`POST /notify/{code}`（订单结果回调）和 `POST /notify/{code}/goods`
+ * （商品变更通知），`{code}` 是 `suppliers.code`。这是这个
  * 代码库里第三套、独立于 `App\Controller\OpenApi\*`（商户 HMAC 签名）和
  * `App\Controller\Admin\*`（管理员 JWT）的路由命名空间——**故意不挂
  * `App\Middleware\OpenApiSignatureMiddleware` 或任何既有鉴权中间件**：
@@ -59,8 +61,16 @@ use Psr\Http\Message\ResponseInterface as PsrResponseInterface;
 #[Controller(prefix: '/notify')]
 class NotifySupplierController extends AbstractController
 {
+    /**
+     * 商品变更通知的成功回复。卡速售文档没有单独规定，沿用订单回调的 `ok`。
+     */
+    private const PRODUCT_NOTIFICATION_REPLY = 'ok';
+
     #[Inject]
     protected SupplierCallbackService $callbackService;
+
+    #[Inject]
+    protected ProductSyncService $productSyncService;
 
     #[PostMapping(path: '{code}')]
     public function handle(string $code): PsrResponseInterface
@@ -84,5 +94,25 @@ class NotifySupplierController extends AbstractController
         }
 
         return $this->response->raw($body)->withStatus(200);
+    }
+
+    /**
+     * 供应商商品变更通知（kasushou.md 第 4 节"商品同步"）：`POST /notify/{code}/goods`，
+     * 需要在供应商后台把商品变更通知地址配成这个。状态码约定同 handle()：供应商不存在
+     * 404、验签失败 403，其余（含商品没配映射）200 回 `ok`；查询商品详情失败走全局
+     * 异常处理返回 500，供应商视为失败，漏掉的由每日全量校准补上。
+     */
+    #[PostMapping(path: '{code}/goods')]
+    public function productChanged(string $code): PsrResponseInterface
+    {
+        try {
+            $this->productSyncService->handleNotification($code, $this->request->all());
+        } catch (SupplierNotFoundException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(404);
+        } catch (InvalidSupplierCallbackSignatureException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(403);
+        }
+
+        return $this->response->raw(self::PRODUCT_NOTIFICATION_REPLY)->withStatus(200);
     }
 }
