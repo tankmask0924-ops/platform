@@ -60,7 +60,7 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
     /**
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
-     *     refunded_amount: string, supplier_order_no: null|string, completed_at: null|string,
+     *     refunded_amount: string, completed_at: null|string,
      *     fail_code: null|int, fail_reason: null|string}
      */
     public function place(

@@ -226,7 +226,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
     /**
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
-     *     refunded_amount: string, supplier_order_no: null|string, completed_at: null|string,
+     *     refunded_amount: string, completed_at: null|string,
      *     fail_code: null|int, fail_reason: null|string}
      */
     protected function toResponseArray(Order $order): array
@@ -240,7 +240,6 @@ abstract class AbstractOrderPlacementService extends AbstractService
             'frozen_amount' => $order->frozen_amount,
             'deducted_amount' => $order->deducted_amount,
             'refunded_amount' => $order->refunded_amount,
-            'supplier_order_no' => $order->supplier_order_no,
             'completed_at' => $order->completed_at?->toDateTimeString(),
         ] + ErrorCode::presentOrderFailure($order->fail_reason);
     }

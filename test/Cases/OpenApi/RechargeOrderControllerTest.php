@@ -136,6 +136,9 @@ class RechargeOrderControllerTest extends HttpTestCase
         $this->assertSame(200, $first->getStatusCode());
         $this->assertSame(200, $second->getStatusCode());
         $this->assertSame($firstBody['data'], $secondBody['data']);
+        // requirements.md 8.1：对商户不暴露供应商信息（首次下单与幂等重放都不能带）
+        $this->assertArrayNotHasKey('supplier_order_no', $firstBody['data']);
+        $this->assertArrayNotHasKey('supplier_order_no', $secondBody['data']);
 
         $orders = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->get();
         $this->assertCount(1, $orders, '重复提交不能建出第二条订单');
