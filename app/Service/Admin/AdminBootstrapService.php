@@ -92,6 +92,8 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'order.view', 'module' => 'order', 'name' => '订单查看', 'type' => 'action'],
         ['code' => 'order.manage', 'module' => 'order', 'name' => '订单手动查询供应商/重推回调', 'type' => 'action'],
         ['code' => 'order.resolve', 'module' => 'order', 'name' => '异常单人工处理', 'type' => 'action'],
+        ['code' => 'aftersale.view', 'module' => 'aftersale', 'name' => '售后争议查看', 'type' => 'action'],
+        ['code' => 'aftersale.handle', 'module' => 'aftersale', 'name' => '售后争议处理（驳回/确认未到账退款）', 'type' => 'action'],
     ];
 
     #[Inject]

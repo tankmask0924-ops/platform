@@ -14,6 +14,7 @@ namespace App\Service\Merchant;
 
 use App\Dao\MerchantBalanceLogDao;
 use App\Dao\MerchantDao;
+use App\Dao\MerchantRebateDao;
 use App\Dao\SystemSettingDao;
 use App\Model\Merchant;
 use App\Model\MerchantRebate;
@@ -122,6 +123,9 @@ class BalanceService extends AbstractService
 
     #[Inject]
     protected MerchantBalanceLogDao $balanceLogDao;
+
+    #[Inject]
+    protected MerchantRebateDao $merchantRebateDao;
 
     #[Inject]
     protected SystemSettingDao $systemSettingDao;
@@ -315,6 +319,13 @@ class BalanceService extends AbstractService
                 throw new HttpException(404, '商户不存在');
             }
 
+            // 调用方手上的返佣可能已经过期：售后确认未到账会把它作废（先锁商户再锁返佣，
+            // 跟这里同一个顺序），锁住后重新确认还是待到账才入账。
+            $locked = $this->merchantRebateDao->lockForUpdate((int) $rebate->id);
+            if ($locked === null || $locked->status !== 'pending') {
+                return false;
+            }
+
             $availableBefore = $merchant->available_balance;
             $availableAfter = bcadd($availableBefore, $rebate->amount, self::SCALE);
             $frozenBefore = $merchant->frozen_balance;
@@ -341,9 +352,108 @@ class BalanceService extends AbstractService
 
             $this->persistBalance($merchant, $availableAfter, $frozenAfter);
 
-            $rebate->fill([
+            $locked->fill([
                 'status' => 'settled',
                 'settled_at' => date('Y-m-d H:i:s'),
+            ])->save();
+            $rebate->setRawAttributes($locked->getAttributes(), true);
+
+            return true;
+        });
+    }
+
+    /**
+     * 售后确认未到账（requirements.md 7.7）：把订单已扣的钱退回可用余额，记"退款"流水。
+     *
+     * `refund` 类型允许一笔订单多条（部分退款场景），流水表没有唯一索引兜底；调用方必须
+     * 在同一个事务里先用条件更新把订单从 success 改成 refunded，改成功了才调用这里，
+     * 由订单状态保证只退一次。
+     */
+    public function refundOrder(int $merchantId, int $orderId, string $amount, ?string $reason = null, ?int $operatorId = null): void
+    {
+        Db::transaction(function () use ($merchantId, $orderId, $amount, $reason, $operatorId) {
+            $merchant = $this->merchantDao->lockForUpdate($merchantId);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcadd($availableBefore, $amount, self::SCALE);
+
+            $this->balanceLogDao->create([
+                'merchant_id' => $merchantId,
+                'type' => 'refund',
+                'amount' => $amount,
+                'available_before' => $availableBefore,
+                'available_after' => $availableAfter,
+                'frozen_before' => $merchant->frozen_balance,
+                'frozen_after' => $merchant->frozen_balance,
+                'order_id' => $orderId,
+                'reason' => $reason,
+                'operator_id' => $operatorId,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->persistBalance($merchant, $availableAfter, $merchant->frozen_balance);
+        });
+    }
+
+    /**
+     * 已到账的返佣被扣回（requirements.md 5.4"扣回"、7.7）：从可用余额扣掉，记"返佣扣回"
+     * 流水，返佣状态改为 clawed_back。可用余额可能因此变成负数，按 4.5 负余额处理
+     * （persistBalance() 会记下 debt_since）。
+     *
+     * 幂等靠 dedupe_rebate_key（`{rebate_id}-rebate_clawback`），同 settleRebate()。
+     * 锁顺序同 settleRebate()：先商户后返佣。
+     *
+     * @return bool 是否真的扣回了（返佣不是已到账状态，或者已经扣回过，返回 false）
+     */
+    public function clawbackRebate(int $rebateId, ?string $reason = null, ?int $operatorId = null): bool
+    {
+        return Db::transaction(function () use ($rebateId, $reason, $operatorId) {
+            $snapshot = $this->merchantRebateDao->find($rebateId);
+            if ($snapshot === null) {
+                return false;
+            }
+
+            $merchant = $this->merchantDao->lockForUpdate((int) $snapshot->merchant_id);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $rebate = $this->merchantRebateDao->lockForUpdate($rebateId);
+            if ($rebate === null || $rebate->status !== 'settled') {
+                return false;
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcsub($availableBefore, $rebate->amount, self::SCALE);
+
+            try {
+                $this->balanceLogDao->create([
+                    'merchant_id' => $rebate->merchant_id,
+                    'type' => 'rebate_clawback',
+                    'amount' => $rebate->amount,
+                    'available_before' => $availableBefore,
+                    'available_after' => $availableAfter,
+                    'frozen_before' => $merchant->frozen_balance,
+                    'frozen_after' => $merchant->frozen_balance,
+                    'order_id' => $rebate->order_id,
+                    'rebate_id' => $rebate->id,
+                    'reason' => $reason,
+                    'operator_id' => $operatorId,
+                    'created_at' => date('Y-m-d H:i:s'),
+                ]);
+            } catch (QueryException $e) {
+                // dedupe_rebate_key 唯一索引命中：已经扣回过了
+                return false;
+            }
+
+            $this->persistBalance($merchant, $availableAfter, $merchant->frozen_balance);
+
+            $rebate->fill([
+                'status' => 'clawed_back',
+                'clawed_back_at' => date('Y-m-d H:i:s'),
             ])->save();
 
             return true;

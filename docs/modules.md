@@ -302,7 +302,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 资金流水：查询与导出 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | ✅ 只做"查询"（`GET /merchant/balance-logs`，支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明），"导出"不在本次任务范围内 |
 | 返佣：明细查询与导出 | ⬜ | ⬜ | ⬜ |
 | 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | 🔨 除导出外已完成：`GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价。测试 `test/Cases/Merchant/OrderControllerTest.php` |
-| 售后：未到账争议提交与查看 | ⬜ | ⬜ | ⬜ |
+| 售后：未到账争议提交与查看 | ✅ `App\Controller\Merchant\DisputeController` | ✅ `App\Service\Merchant\DisputeService` | ✅ `POST /merchant/disputes`（`order_no`）、`GET /merchant/disputes`（`status` 筛选）、`GET /merchant/disputes/{id}`；只接受话费、卡券成功订单，订单成功后 `dispute_deadline_days`（默认 7）天内，一笔订单只能提交一次（被驳回后不能再提）；处理结果、说明和凭证商户可见。表里没有商户描述字段，提交时只选订单。见第 8 节"售后处理"说明，测试 `test/Cases/Merchant/DisputeControllerTest.php` |
 | 接口文档：在线查看 / 下载签名示例 | ⬜ | ➖ | ⬜ |
 
 ---
@@ -327,11 +327,27 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜（生成+结算的业务逻辑已在第 1 节"返佣待到账生成 + 到期结算"完成，这行剩下的是后台管理 UI——`rebate_due_period_days` 目前只能直接改 `system_settings` 表、没有编辑接口，也没有"商户返佣明细/供应商返佣明细"的查询列表） |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
-| 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | ⬜ | ⬜ | ⬜ |
+| 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | ⬜ | ⬜ | ⬜ |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | ⬜ | ⬜ | ⬜ |
+
+> 「售后处理：话费卡券争议处理」（requirements.md 7.7）：`GET /admin/disputes`（status / merchant_id 筛选）、
+> `GET /admin/disputes/{id}`（含订单和返佣状态）、`POST /admin/disputes/{id}/reject`（确认已到账：`remark` + 必填
+> `evidence` 字符串列表，最多 20 项）、`POST /admin/disputes/{id}/confirm`（确认未到账：`remark`，`evidence` 可选）。
+> 权限 `aftersale.view` / `aftersale.handle`（已进 `KNOWN_PERMISSIONS`，部署后执行 `admin:sync-permissions`），
+> 两个动作都写 `admin_operation_logs`（module = aftersale），只能处理"处理中"的争议（否则 409）。
+> - **确认未到账**走新的 `App\Service\Order\OrderRefundService::refundUndelivered()`，跟争议状态在同一个事务里：订单
+>   `success → refunded`（条件更新，只退一次）、`refunded_amount` = 已扣款、`BalanceService::refundOrder()` 退回可用余额
+>   记 `refund` 流水（带操作人和原因）；返佣待到账的作废（`MerchantRebateDao::voidIfPending()`），已到账的
+>   `BalanceService::clawbackRebate()` 从可用余额扣回记 `rebate_clawback` 流水（可能扣成负数，按 4.5 负余额处理）；提交后通知商户。
+>   "供应商主动全额退款"也应该走这个服务，检测链路（成功订单的供应商状态变化）还没建。
+> - **争议期间返佣暂停到账**：`MerchantRebateDao::findDuePending()` 排除有处理中争议的订单，驳回后恢复。
+>   `BalanceService::settleRebate()` 改成锁住返佣行后重新确认仍是 pending 才入账（锁顺序：商户 → 返佣，跟退款/扣回一致），
+>   避免结算任务手上的旧数据把已作废的返佣发出去——此前只靠流水去重，拦不住这种情况。
+> - 未做：通过卡速售售后接口提交给供应商并接收结果（驱动未实现售后接口，第 2 节）。
+> - 测试：`test/Cases/Admin/DisputeControllerTest.php`、`test/Cases/Service/Order/OrderRefundServiceTest.php`。
 
 > 「订单管理」：`GET /admin/orders`（按 status / business_line / merchant_id / order_no /
 > merchant_order_no / created_from / created_to 筛选，id 倒序，每页最多 100）、`GET /admin/orders/{id}`
@@ -562,10 +578,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 6 | 1 | 9 |
-| 系统管理后台 | 19 | 9 | 1 | 9 |
+| 商户管理后台 | 16 | 7 | 1 | 8 |
+| 系统管理后台 | 19 | 9 | 2 | 8 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **49** | **2** | **55** |
+| **合计** | **106** | **50** | **3** | **53** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

@@ -20,8 +20,7 @@ class MerchantRebateDao extends AbstractDao
     protected string $model = MerchantRebate::class;
 
     /**
-     * 按 order_id 查返佣记录（`merchant_rebates.order_id` 唯一），目前只给测试用，
-     * 验证"一笔订单只生成一条返佣记录"/"零返佣订单不生成记录"。
+     * 按 order_id 查返佣记录（`merchant_rebates.order_id` 唯一）。
      */
     public function findByOrderId(int $orderId): ?MerchantRebate
     {
@@ -34,13 +33,42 @@ class MerchantRebateDao extends AbstractDao
      * 用。`due_at` 为 `null` 的行（订单本身完成时间还没到，比如快递未签收，本次
      * 任务范围内的话费返佣不会出现这种情况，但字段设计上允许）不会被
      * `<=` 比较命中，天然被排除，不需要额外加 `whereNotNull`。
+     *
+     * 订单有处理中的售后争议时暂停到账（requirements.md 5.4"争议暂停"），争议处理完
+     * 再按结果作废或正常到账。
      */
     public function findDuePending(): Collection
     {
         return $this->newQuery()
             ->where('status', 'pending')
             ->where('due_at', '<=', date('Y-m-d H:i:s'))
+            ->whereNotExists(static function ($query) {
+                $query->selectRaw('1')
+                    ->from('aftersale_disputes')
+                    ->whereColumn('aftersale_disputes.order_id', 'merchant_rebates.order_id')
+                    ->where('aftersale_disputes.status', 'processing');
+            })
             ->get();
+    }
+
+    /**
+     * 调用方必须已经在事务里。
+     */
+    public function lockForUpdate(int $id): ?MerchantRebate
+    {
+        return $this->newQuery()->where('id', $id)->lockForUpdate()->first();
+    }
+
+    /**
+     * 待到账的返佣作废（requirements.md 5.4"作废"）。带 `status = pending` 条件更新，
+     * 已经到账的不会被改；返回是否真的作废了。
+     */
+    public function voidIfPending(int $id): bool
+    {
+        return $this->newQuery()
+            ->where('id', $id)
+            ->where('status', 'pending')
+            ->update(['status' => 'voided', 'voided_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s')]) === 1;
     }
 
     /**
