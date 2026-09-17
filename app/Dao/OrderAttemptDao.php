@@ -76,4 +76,30 @@ class OrderAttemptDao extends AbstractDao
             ->where('attempt_no', $attemptNo)
             ->first();
     }
+
+    /**
+     * 需要定时查询的尝试：订单仍是 processing、这次尝试是该订单最新的一次、结果还是
+     * 处理中/未知，且距上次更新（下单、回调或上一次查询）已经超过 `$updatedBefore`。
+     * 最久没动的排前面。
+     *
+     * @return Collection<int, OrderAttempt>
+     */
+    public function listDueForQuery(string $updatedBefore, int $limit): Collection
+    {
+        return $this->newQuery()
+            ->select('order_attempts.*')
+            ->join('orders', 'orders.id', '=', 'order_attempts.order_id')
+            ->where('orders.status', 'processing')
+            ->whereIn('order_attempts.result', ['processing', 'unknown'])
+            ->where('order_attempts.updated_at', '<=', $updatedBefore)
+            ->whereNotExists(static function ($query) {
+                $query->selectRaw('1')
+                    ->from('order_attempts as later')
+                    ->whereColumn('later.order_id', 'order_attempts.order_id')
+                    ->whereColumn('later.attempt_no', '>', 'order_attempts.attempt_no');
+            })
+            ->orderBy('order_attempts.updated_at')
+            ->limit($limit)
+            ->get();
+    }
 }

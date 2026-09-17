@@ -49,10 +49,10 @@
 
 | 能力 | Driver 方法 | Service 接入 | 单测 | 状态 |
 |---|---|---|---|---|
-| 下单 | ✅ `App\Supplier\Kasushou\KasushouDriver::placeOrder()` | ⬜（无订单处理 Service 调用，路由/供应商配置基础设施未建） | ✅ `test/Cases/Supplier/Kasushou/KasushouDriverTest.php` | 🔨 |
-| 查询订单 | ✅ `KasushouDriver::queryOrder()` | ⬜ 同上 | ✅ 同上 | 🔨 |
-| 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ⬜ 同上（回调入口/验签框架本身也还是 ⬜，见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` | 🔨 |
-| 查询余额 | ✅ `KasushouDriver::queryBalance()` | ⬜ 同上 | ✅ `KasushouDriverTest` | 🔨 |
+| 下单 | ✅ `App\Supplier\Kasushou\KasushouDriver::placeOrder()` | ✅ `App\Service\Order\SupplierRouter`（同步下单与失败切换，见第 5 节） | ✅ `test/Cases/Supplier/Kasushou/KasushouDriverTest.php` | ✅ |
+| 查询订单 | ✅ `KasushouDriver::queryOrder()` | ✅ `App\Service\Order\SupplierResultPollingService`（定时查询，见第 9 节） | ✅ 同上 + `SupplierResultPollingServiceTest` | ✅ |
+| 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ✅ `App\Service\Order\SupplierCallbackService`（回调入口见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` + `NotifySupplierControllerTest` | ✅ |
+| 查询余额 | ✅ `KasushouDriver::queryBalance()` | ⬜（余额监控任务未建，见第 9 节） | ✅ `KasushouDriverTest` | 🔨 |
 | 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | 🔨 `App\Service\Supplier\ProductSyncService`（`applyNotification()`/`applyFullSyncPage()`）已建好，但**目前没有任何调用方接入、没有在生产环境跑起来**：商品变更通知需要的 webhook 路由/控制器是第 1 节"供应商回调入口与验签框架"，还是 ⬜；每日全量同步需要的 `#[Crontab]` 定时任务，依赖一个从哪里读供应商配置（baseUrl/userId/apiKey）的 Supplier 配置加载机制，同样还没建，本次任务范围明确不含这两者 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测） | 🔨 |
 | 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -468,7 +468,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 任务 | 触发方式 | 状态 |
 |---|---|---|
 | 供应商下单异步执行 | 队列 Job | ⬜ |
-| 供应商结果查询轮询 | 队列 Job / Crontab | ⬜ |
+| 供应商结果查询轮询 | Crontab | ✅ `App\Crontab\SupplierResultQueryCrontab` → `App\Service\Order\SupplierResultPollingService`，见下方说明 |
 | 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ⬜ |
 | 供应商余额监控 | Crontab | ⬜ |
 | 供应商商品同步（每日全量校准） | Crontab | ⬜ |
@@ -477,6 +477,21 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ⬜ |
+
+**供应商结果查询轮询**（requirements.md 6.2 / 7.1）：每分钟一次（`onOneServer` + `singleton`），
+取"订单处理中、最新一次尝试仍是处理中/未知、距上次更新超过 60 秒"的尝试，每批最多 100 条、
+10 个并发，用 `{order_no}-{attempt_no}` 调驱动 `queryOrder()`，结果跟回调一样交给
+`SupplierRouter::applyAttemptResult()`（明确失败——包括查询确认供应商没有这笔订单——按切换
+规则换下一家）。
+- 查询间隔按 `order_attempts.updated_at` 计，下单、回调、每次查询都会刷新；刚下单的订单至少
+  等 60 秒才查，避免供应商还没落库就被查成"没有这笔订单"。查询失败只记 `order` 日志并刷新时间。
+- 查询期间订单被回调推进或切到下一家时，放弃这次结果。
+- **终态只落一次**：新增 `OrderDao::finishIfProcessing()`（带 `status = processing` 的条件更新），
+  `OrderResultApplier` 的成功/失败分支和"没有可用供应商"分支都改用它，回调和定时查询同时推进
+  同一笔订单时后到的一方不再扣款/解冻/通知商户（此前只有资金层面的唯一索引兜底，商户会收到两次通知）。
+- 超过异常单时长仍无结果的订单继续查询；转人工由"异常单标记"负责（未做）。
+- 测试：`test/Cases/Service/Order/SupplierResultPollingServiceTest.php`，调度注册见
+  `BackgroundProcessRegistrationTest`。
 
 ---
 
@@ -487,15 +502,15 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
-| 卡速售 2.0 驱动 | 8 | 1 | 5 | 2 |
+| 卡速售 2.0 驱动 | 8 | 4 | 2 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
-| 供应商路由与风控 | 5 | 0 | 0 | 5 |
+| 供应商路由与风控 | 5 | 2 | 0 | 3 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
 | 系统管理后台 | 19 | 9 | 0 | 10 |
-| 异步任务与定时任务 | 10 | 1 | 0 | 9 |
-| **合计** | **106** | **36** | **5** | **65** |
+| 异步任务与定时任务 | 10 | 2 | 0 | 8 |
+| **合计** | **106** | **42** | **2** | **62** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

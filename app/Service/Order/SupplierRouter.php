@@ -13,12 +13,14 @@ declare(strict_types=1);
 namespace App\Service\Order;
 
 use App\Dao\OrderAttemptDao;
+use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
 use App\Dao\SupplierDao;
 use App\Dao\SupplierProductDao;
 use App\Dao\SystemSettingDao;
 use App\Model\Order;
+use App\Model\OrderAttempt;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierProduct;
@@ -47,6 +49,10 @@ use Throwable;
  * 4. 切换时长：从下单（orders.created_at）起超过 system_settings.switch_duration_minutes
  *    （默认 30 分钟）后，明确失败不再换下一家，订单失败、解冻。
  * 5. 所有供应商都明确失败 → 订单失败、解冻。
+ *
+ * 【受理后拿到的结果】供应商回调（SupplierCallbackService）和定时查询
+ * （SupplierResultPollingService）确认了某次尝试的结果后都交给 applyAttemptResult()：
+ * 明确失败按切换规则决定换不换，其余直接落到订单上。
  *
  * 【受理后异步回调失败也要换下一家】平台订单号对商户不变，换的只是背后的供应商，
  * 每次尝试用 "{order_no}-{attempt_no}" 作为供应商侧单号区分。
@@ -83,6 +89,9 @@ class SupplierRouter extends AbstractService
 
     #[Inject]
     protected OrderAttemptDao $orderAttemptDao;
+
+    #[Inject]
+    protected OrderDao $orderDao;
 
     #[Inject]
     protected OrderRechargeDao $orderRechargeDao;
@@ -165,6 +174,30 @@ class SupplierRouter extends AbstractService
         if ($outcome !== false) {
             $this->finalize($order, $product, ...$outcome);
         }
+    }
+
+    /**
+     * 受理后某次尝试拿到了确认结果（回调或定时查询）：先记到这次尝试上，再决定
+     * 订单怎么变。调用方负责确认 `$attempt` 是这笔订单最新的一次尝试；老订单可能
+     * 没有尝试记录，此时 `$attempt` 为 null。
+     */
+    public function applyAttemptResult(Order $order, ?OrderAttempt $attempt, DriverResult $result, int $supplierId): void
+    {
+        if ($attempt !== null) {
+            $attempt->fill([
+                'result' => self::RESULT_MAP[$result->result->name],
+                'fail_reason' => $result->failReason ?? $attempt->fail_reason,
+            ]);
+            // 结果没变也要刷新 updated_at，定时查询靠它控制查询间隔
+            $attempt->isDirty() ? $attempt->save() : $attempt->touch();
+        }
+
+        if ($result->result === UnifiedResult::DefiniteFailure) {
+            $this->continueAfterDefiniteFailure($order, $result, $supplierId);
+            return;
+        }
+
+        $this->orderResultApplier->apply($order, $result, $supplierId);
     }
 
     /**
@@ -293,12 +326,15 @@ class SupplierRouter extends AbstractService
 
     private function failWithoutSupplier(Order $order): void
     {
-        $order->fill([
+        $finished = $this->orderDao->finishIfProcessing($order, [
             'status' => 'failed',
             'cost_price' => '0.00',
             'fail_reason' => ErrorCode::NoSupplierAvailable->message(),
             'finished_at' => date('Y-m-d H:i:s'),
-        ])->save();
+        ]);
+        if (! $finished) {
+            return;
+        }
 
         $this->balanceService->unfreeze($order->merchant_id, $order->id, $order->frozen_amount);
         $this->merchantNotifyService->notify($order->id);

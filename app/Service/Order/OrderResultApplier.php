@@ -15,6 +15,7 @@ namespace App\Service\Order;
 use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantRebateDao;
+use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
 use App\Dao\SystemSettingDao;
@@ -59,14 +60,12 @@ use Hyperf\Logger\LoggerFactory;
  * `SupplierCallbackService` 不预置任何东西，直接把从 DB 读到的、订单上次持久化
  * 的 `cost_price` 当基准，符合"没有更权威的估算值就不瞎改"的原则。
  *
- * 【幂等】依赖调用方保证：只有订单当前仍是 `processing` 时才应该调用 `apply()`——
- * 见 `SupplierCallbackService::handle()` 的显式状态检查。`apply()` 本身不检查
- * `$order->status`，也不需要检查：`BalanceService::deduct()`/`unfreeze()`
- * 各自已经靠 `merchant_balance_logs.dedupe_order_key` 唯一索引做到"同一
- * `order_id` 只处理一次"（见 `BalanceService` 类注释），真正兜底重复调用的是那
- * 一层，不需要在这里重复造轮子；但"要不要调用 `apply()`"这个更早的判断（订单是否
- * 已经是终态）必须由调用方在调用前做，`apply()` 假设"调用我就意味着这次结果应该
- * 被应用"，不会自己去反悔。
+ * 【幂等】成功/明确失败两个终态分支用 `OrderDao::finishIfProcessing()` 条件更新落库，
+ * 订单已经不是 `processing`（回调和定时查询同时推进同一笔订单时后到的一方）就直接
+ * 返回，不扣款、不解冻、不通知。`BalanceService::deduct()`/`unfreeze()` 的
+ * `dedupe_order_key` 唯一索引和返佣的 `order_id` 唯一索引仍然是资金层面的兜底。
+ * 调用方在调用前做的终态检查（`SupplierCallbackService::handle()`）只是省掉一次
+ * 无用的查询，不再是唯一的保护。
  *
  * 【返佣待到账记录生成，requirements.md 5.4】订单成功且拿到返佣基数时，在
  * `BalanceService::deduct()` + 通知之后，紧接着按当前（"下单成功这一刻"，不是
@@ -153,6 +152,9 @@ class OrderResultApplier extends AbstractService
     protected MerchantDao $merchantDao;
 
     #[Inject]
+    protected OrderDao $orderDao;
+
+    #[Inject]
     protected OrderRechargeDao $orderRechargeDao;
 
     #[Inject]
@@ -178,7 +180,7 @@ class OrderResultApplier extends AbstractService
     {
         $now = date('Y-m-d H:i:s');
 
-        $order->fill([
+        $finished = $this->finish($order, [
             'status' => 'success',
             'cost_price' => $result->actualCost ?? $order->cost_price,
             'supplier_id' => $supplierId,
@@ -186,7 +188,10 @@ class OrderResultApplier extends AbstractService
             'deducted_amount' => $order->sale_price,
             'completed_at' => $now,
             'finished_at' => $now,
-        ])->save();
+        ]);
+        if (! $finished) {
+            return;
+        }
 
         $this->balanceService->deduct($order->merchant_id, $order->id, $order->sale_price);
         $this->merchantNotifyService->notify($order->id);
@@ -292,7 +297,7 @@ class OrderResultApplier extends AbstractService
     /**
      * `orders.fail_reason` 只写平台统一文案（database-design.md「不透传供应商原始信息」），
      * 商户通过订单查询和回调看到的就是这一份。驱动给的原始原因留在内部：同步下单路径
-     * 已经写进 `order_attempts.fail_reason`，回调路径没有尝试记录可写，这里记一条日志。
+     * 同时写进 `order_attempts.fail_reason`，这里再记一条日志。
      */
     private function applyDefiniteFailure(Order $order, DriverResult $result, int $supplierId): void
     {
@@ -304,12 +309,15 @@ class OrderResultApplier extends AbstractService
             ]);
         }
 
-        $order->fill([
+        $finished = $this->finish($order, [
             'status' => 'failed',
             'supplier_id' => $supplierId,
             'fail_reason' => ErrorCode::OrderFailed->message(),
             'finished_at' => date('Y-m-d H:i:s'),
-        ])->save();
+        ]);
+        if (! $finished) {
+            return;
+        }
 
         $this->balanceService->unfreeze($order->merchant_id, $order->id, $order->frozen_amount);
         $this->merchantNotifyService->notify($order->id);
@@ -336,5 +344,17 @@ class OrderResultApplier extends AbstractService
         }
 
         $order->fill($updates)->save();
+    }
+
+    /**
+     * 终态只落一次：回调和定时查询可能同时推进同一笔订单，条件更新失败的一方
+     * 直接放弃，不再扣款/解冻/通知。调用方预置在内存里、还没保存的改动（比如
+     * 同步下单预置的 cost_price）一并写入。
+     *
+     * @param array<string, mixed> $attributes
+     */
+    private function finish(Order $order, array $attributes): bool
+    {
+        return $this->orderDao->finishIfProcessing($order, array_merge($order->getDirty(), $attributes));
     }
 }

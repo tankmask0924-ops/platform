@@ -21,7 +21,6 @@ use App\Exception\SupplierNotFoundException;
 use App\Model\Order;
 use App\Service\AbstractService;
 use App\Supplier\SupplierDriverFactory;
-use App\Supplier\UnifiedResult;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\Logger\LoggerFactory;
 
@@ -33,9 +32,8 @@ use Hyperf\Logger\LoggerFactory;
  * 几种异常映射成 HTTP 状态码），业务逻辑全部在这里，符合这个代码库
  * Controller/Service 分层的既有约定。
  *
- * 【只解决"回调正常到达"这一条路径，不是异常单兜底】kasushou.md 描述的"结果未知，
- * 按 external_orderno 定时查询"是给回调彻底丢失/从未到达的订单兜底的，那是一个
- * 独立的 `#[Crontab]` 定时扫描任务（本次任务范围明确不含，见类注释"范围外"）。
+ * 【只解决"回调正常到达"这一条路径】回调丢失/从未到达的订单由定时查询兜底
+ * （`App\Service\Order\SupplierResultPollingService`）。
  * 本类只处理"供应商真的把回调打过来了"这一种情况，包括供应商按 kasushou.md
  * 文档重试同一个回调（5/10/15/20/25 分钟，最多 5 次）的情况——重试也是"回调正常
  * 到达"，只是到达了不止一次，靠下面的幂等检查处理，不是"回调丢失"那个更难的问题。
@@ -52,9 +50,9 @@ use Hyperf\Logger\LoggerFactory;
  * random_int(100000, 999999)`）不含 `-`，所以从第一个 `-` 前面截出来的子串就是
  * 原始 `order_no`，不需要更复杂的解析；`-` 后面是这次尝试的 `attempt_no`。
  *
- * 【明确失败 -> 交给路由继续切换】受理后异步回调失败也要换下一家供应商
- * （requirements.md 6.5），在切换时长内由 `SupplierRouter::continueAfterDefiniteFailure()`
- * 决定换不换；成功/处理中/未知直接交给 `OrderResultApplier`。
+ * 【结果交给路由】验签、找订单、过期检查之后，结果交给
+ * `SupplierRouter::applyAttemptResult()`：明确失败在切换时长内换下一家
+ * （requirements.md 6.5），成功/处理中/未知直接落到订单上。定时查询走同一个方法。
  *
  * 【过期回调】订单已经切到后面的尝试之后，前一次尝试的回调（包括供应商按间隔重推的
  * 同一个失败回调）按 `attempt_no`/供应商跟最新一次尝试对不上来识别，只回复 `ok`，
@@ -64,15 +62,9 @@ use Hyperf\Logger\LoggerFactory;
  * 验签之前先用回调里原始的 `external_orderno` 找到订单，只用来决定 `isCardProduct`；
  * 验签后驱动查询得到的权威单号必须指向同一笔订单，否则按找不到订单处理。
  *
- * 【幂等：只在订单仍是 `processing` 时才应用结果】`App\Service\Merchant\
- * BalanceService::deduct()`/`unfreeze()` 本身已经是幂等的（`merchant_balance_logs.
- * dedupe_order_key` 唯一索引兜底，见该类类注释），但那只保证"钱不会被扣/解冻
- * 两次"，不保证"不会对一笔已经是终态的订单重复调用 `MerchantNotifyService::
- * notify()`（多推一次通知任务）或者把已经落定的 `fail_reason`/`completed_at`
- * 等字段用一次旧的/重复的驱动结果覆盖掉"。所以这里显式检查 `$order->status`，
- * 已经是 `success`/`failed` 等终态就直接短路回复 `ok`，不调用
- * `OrderResultApplier::apply()`——这不是重新发明幂等，是 `BalanceService` 幂等
- * 保证覆盖范围之外、这一层必须自己补上的另一半。
+ * 【幂等】订单已经是终态就直接回复 `ok`，不再往下处理（省掉旧结果覆盖已落定字段的
+ * 可能）。跟定时查询同时推进同一笔订单的竞争由 `OrderResultApplier` 的条件更新兜住，
+ * 资金层面还有 `BalanceService` 的唯一索引。
  *
  * 【返回值是驱动特定的裸文本，不是这个代码库其它地方常见的 {code,message,data}
  * 信封】kasushou.md 要求回调响应体必须是字面字符串 `ok` 才算"平台已接收"，否则
@@ -86,8 +78,7 @@ use Hyperf\Logger\LoggerFactory;
  *
  * 【范围外，见任务说明】商品变更通知 webhook（`App\Service\Supplier\
  * ProductSyncService::applyNotification()` 已有原语，路由未建，是另一个更小的
- * 后续任务，不在本类）、IP 白名单/限流、除卡速售外的其它驱动、定时重查询兜底
- * （见上）——一律不在本类职责内。
+ * 后续任务，不在本类）、IP 白名单/限流、除卡速售外的其它驱动——一律不在本类职责内。
  */
 class SupplierCallbackService extends AbstractService
 {
@@ -111,9 +102,6 @@ class SupplierCallbackService extends AbstractService
 
     #[Inject]
     protected SupplierDriverFactory $supplierDriverFactory;
-
-    #[Inject]
-    protected OrderResultApplier $orderResultApplier;
 
     #[Inject]
     protected SupplierRouter $supplierRouter;
@@ -177,18 +165,9 @@ class SupplierCallbackService extends AbstractService
 
                 return self::KASUSHOU_SUCCESS_REPLY;
             }
-
-            $latest->fill([
-                'result' => SupplierRouter::RESULT_MAP[$result->result->name],
-                'fail_reason' => $result->failReason ?? $latest->fail_reason,
-            ])->save();
         }
 
-        if ($result->result === UnifiedResult::DefiniteFailure) {
-            $this->supplierRouter->continueAfterDefiniteFailure($order, $result, $supplier->id);
-        } else {
-            $this->orderResultApplier->apply($order, $result, $supplier->id);
-        }
+        $this->supplierRouter->applyAttemptResult($order, $latest, $result, (int) $supplier->id);
 
         return self::KASUSHOU_SUCCESS_REPLY;
     }

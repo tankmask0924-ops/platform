@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Process;
 
 use App\Crontab\RebateSettlementCrontab;
+use App\Crontab\SupplierResultQueryCrontab;
 use App\Process\CrontabDispatcherProcess;
 use App\Process\QueueConsumerProcess;
 use Hyperf\AsyncQueue\Process\ConsumerProcess;
@@ -55,6 +56,19 @@ class BackgroundProcessRegistrationTest extends TestCase
         $this->assertInstanceOf(Crontab::class, $annotation);
         $this->assertSame('RebateSettlement', $annotation->name);
         $this->assertTrue($annotation->onOneServer);
+    }
+
+    /**
+     * 供应商结果查询每分钟一次，只在一台机器上跑，上一批没跑完不叠加。
+     */
+    public function testSupplierResultQueryIsScheduledEveryMinuteOnOneServer()
+    {
+        $annotation = AnnotationCollector::getClassesByAnnotation(Crontab::class)[SupplierResultQueryCrontab::class] ?? null;
+
+        $this->assertInstanceOf(Crontab::class, $annotation);
+        $this->assertSame('* * * * *', $annotation->rule);
+        $this->assertTrue($annotation->onOneServer);
+        $this->assertTrue($annotation->singleton);
     }
 
     /**

@@ -64,4 +64,30 @@ class OrderDao extends AbstractDao
             ->where('order_no', $orderNo)
             ->first();
     }
+
+    /**
+     * 把一笔 `processing` 订单推进到终态：带 `status = processing` 条件更新，
+     * 同一笔订单被回调和定时查询同时推进时只有一方返回 true。返回 false 说明别的
+     * 请求已经先落了终态，调用方不能再做扣款/解冻/通知。成功时 `$order` 的内存
+     * 属性同步成更新后的值。
+     *
+     * @param array<string, mixed> $attributes
+     */
+    public function finishIfProcessing(Order $order, array $attributes): bool
+    {
+        $attributes['updated_at'] = date('Y-m-d H:i:s');
+
+        $affected = $this->newQuery()
+            ->where('id', $order->id)
+            ->where('status', 'processing')
+            ->update($attributes);
+
+        if ($affected !== 1) {
+            return false;
+        }
+
+        $order->forceFill($attributes)->syncOriginal();
+
+        return true;
+    }
 }
