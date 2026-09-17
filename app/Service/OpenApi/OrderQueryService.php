@@ -75,7 +75,7 @@ class OrderQueryService extends AbstractService
             'order_no' => $order->order_no,
             'merchant_order_no' => $order->merchant_order_no,
             'business_line' => $order->business_line,
-            'status' => $order->status,
+            'status' => $order->merchantFacingStatus(),
             'sale_price' => $order->sale_price,
             'frozen_amount' => $order->frozen_amount,
             'deducted_amount' => $order->deducted_amount,

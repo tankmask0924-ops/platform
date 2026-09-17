@@ -37,6 +37,14 @@ use Carbon\Carbon;
  */
 class Order extends Model
 {
+    public const STATUS_PROCESSING = 'processing';
+
+    /**
+     * 超过异常单时长仍没有结果、转人工的订单（requirements.md 7.4），只能人工改成
+     * 成功或失败。
+     */
+    public const STATUS_ABNORMAL = 'abnormal';
+
     protected ?string $table = 'orders';
 
     protected array $fillable = [
@@ -67,4 +75,13 @@ class Order extends Model
         'completed_at',
         'finished_at',
     ];
+
+    /**
+     * 开放 API 和商户回调里展示的状态。异常单是平台内部转人工的状态，对商户来说
+     * 订单仍然没有结果、余额仍然冻结，所以显示为处理中。
+     */
+    public function merchantFacingStatus(): string
+    {
+        return $this->status === self::STATUS_ABNORMAL ? self::STATUS_PROCESSING : $this->status;
+    }
 }

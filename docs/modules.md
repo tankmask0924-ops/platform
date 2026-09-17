@@ -476,7 +476,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
-| 异常单标记 | Crontab | ⬜ |
+| 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
 
 **供应商结果查询轮询**（requirements.md 6.2 / 7.1）：每分钟一次（`onOneServer` + `singleton`），
 取"订单处理中、最新一次尝试仍是处理中/未知、距上次更新超过 60 秒"的尝试，每批最多 100 条、
@@ -489,9 +489,23 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - **终态只落一次**：新增 `OrderDao::finishIfProcessing()`（带 `status = processing` 的条件更新），
   `OrderResultApplier` 的成功/失败分支和"没有可用供应商"分支都改用它，回调和定时查询同时推进
   同一笔订单时后到的一方不再扣款/解冻/通知商户（此前只有资金层面的唯一索引兜底，商户会收到两次通知）。
-- 超过异常单时长仍无结果的订单继续查询；转人工由"异常单标记"负责（未做）。
+- 订单被标成异常单后不再查询（只查 `processing`）。
 - 测试：`test/Cases/Service/Order/SupplierResultPollingServiceTest.php`，调度注册见
   `BackgroundProcessRegistrationTest`。
+
+**异常单标记**（requirements.md 7.1 / 7.4）：每 5 分钟一次（`onOneServer` + `singleton`），把下单
+超过 `system_settings.abnormal_order_hours`（默认 24，非正数按默认）仍是 `processing` 的订单
+改成 `abnormal`，每批最多 500 笔，逐笔带 `status = processing` 条件更新，被标记的订单 id 记
+`order` warning 日志。
+- 余额保持冻结，不通知商户（7.6 只在成功/失败/取消/退款时通知）。
+- **商户侧仍显示处理中**：`Order::merchantFacingStatus()`，下单幂等重放、订单查询、商户回调签名体
+  三个出口都改用它。需求没有规定商户怎么看到异常单，按"对商户仍是没有结果、余额仍冻结"处理，
+  不暴露平台内部的转人工状态。
+- 标记后不再定时查询；迟到的回调结果只写到对应尝试记录上供人工核实，`SupplierRouter::
+  applyAttemptResult()` 对非 `processing` 订单直接返回，不改订单、不扣款、**不切换供应商**
+  （此前如果切换时长被配得比异常单时长还长，异常单收到失败回调会去下一家下单）。
+- 不含：人工置成功/置失败、发起撤单（第 8 节"订单管理"）、异常单积压告警（第 8 节"告警"）。
+- 测试：`test/Cases/Service/Order/AbnormalOrderServiceTest.php`。
 
 ---
 
@@ -509,8 +523,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
 | 系统管理后台 | 19 | 9 | 0 | 10 |
-| 异步任务与定时任务 | 10 | 2 | 0 | 8 |
-| **合计** | **106** | **42** | **2** | **62** |
+| 异步任务与定时任务 | 10 | 3 | 0 | 7 |
+| **合计** | **106** | **43** | **2** | **61** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

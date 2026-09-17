@@ -212,7 +212,7 @@ class NotifyMerchantJob extends Job
             'order_no' => $order->order_no,
             'merchant_order_no' => $order->merchant_order_no,
             'business_line' => $order->business_line,
-            'status' => $order->status,
+            'status' => $order->merchantFacingStatus(),
             'completed_at' => $order->completed_at?->toDateTimeString(),
             ...ErrorCode::presentOrderFailure($order->fail_reason),
             'app_key' => $merchant->app_key,

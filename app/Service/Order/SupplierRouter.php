@@ -33,6 +33,8 @@ use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Carbon\Carbon;
 use Hyperf\Di\Annotation\Inject;
+use Hyperf\Logger\LoggerFactory;
+use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
@@ -114,6 +116,9 @@ class SupplierRouter extends AbstractService
     #[Inject]
     protected MerchantNotifyService $merchantNotifyService;
 
+    #[Inject]
+    protected LoggerFactory $loggerFactory;
+
     /**
      * 按优先级排好序的可用供应商。
      *
@@ -178,7 +183,7 @@ class SupplierRouter extends AbstractService
 
     /**
      * 受理后某次尝试拿到了确认结果（回调或定时查询）：先记到这次尝试上，再决定
-     * 订单怎么变。调用方负责确认 `$attempt` 是这笔订单最新的一次尝试；老订单可能
+     * 订单怎么变；订单已经不是处理中（比如已转异常单）时只记录。调用方负责确认 `$attempt` 是这笔订单最新的一次尝试；老订单可能
      * 没有尝试记录，此时 `$attempt` 为 null。
      */
     public function applyAttemptResult(Order $order, ?OrderAttempt $attempt, DriverResult $result, int $supplierId): void
@@ -190,6 +195,17 @@ class SupplierRouter extends AbstractService
             ]);
             // 结果没变也要刷新 updated_at，定时查询靠它控制查询间隔
             $attempt->isDirty() ? $attempt->save() : $attempt->touch();
+        }
+
+        if ($order->status !== Order::STATUS_PROCESSING) {
+            // 异常单只能人工处理：结果留在尝试记录上供核实，不改订单、不切换供应商
+            $this->logger()->info('supplier result for non-processing order recorded only', [
+                'order_id' => $order->id,
+                'order_status' => $order->status,
+                'supplier_id' => $supplierId,
+                'result' => $result->result->name,
+            ]);
+            return;
         }
 
         if ($result->result === UnifiedResult::DefiniteFailure) {
@@ -383,5 +399,10 @@ class SupplierRouter extends AbstractService
     private function buildSupplierNotifyUrl(Supplier $supplier): string
     {
         return sprintf('https://platform.example.com/notify/%s', $supplier->code);
+    }
+
+    private function logger(): LoggerInterface
+    {
+        return $this->loggerFactory->get('order');
     }
 }

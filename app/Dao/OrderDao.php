@@ -90,4 +90,35 @@ class OrderDao extends AbstractDao
 
         return true;
     }
+
+    /**
+     * 把下单时间早于 `$createdBefore` 仍在处理中的订单标成异常单，每次最多 `$limit` 笔。
+     * 带 `status = processing` 条件更新，跟同时到达的回调/定时查询竞争时只有一方生效。
+     *
+     * @return list<int> 实际被标记的订单 id
+     */
+    public function markAbnormalCreatedBefore(string $createdBefore, int $limit): array
+    {
+        $ids = $this->newQuery()
+            ->where('status', Order::STATUS_PROCESSING)
+            ->where('created_at', '<=', $createdBefore)
+            ->orderBy('id')
+            ->limit($limit)
+            ->pluck('id')
+            ->map(static fn ($id) => (int) $id)
+            ->all();
+
+        $marked = [];
+        foreach ($ids as $id) {
+            $affected = $this->newQuery()
+                ->where('id', $id)
+                ->where('status', Order::STATUS_PROCESSING)
+                ->update(['status' => Order::STATUS_ABNORMAL, 'updated_at' => date('Y-m-d H:i:s')]);
+            if ($affected === 1) {
+                $marked[] = $id;
+            }
+        }
+
+        return $marked;
+    }
 }
