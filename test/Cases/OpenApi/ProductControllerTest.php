@@ -73,22 +73,29 @@ class ProductControllerTest extends HttpTestCase
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, $levelId);
 
+        // 共享测试库里可能有别的用例留下的上架话费商品，名字带上唯一后缀，
+        // 断言时只看本用例自己建的商品，不依赖全库只有这几条。
+        $suffix = ' #' . uniqid('', true);
+        $nameA = '移动 100 元快充' . $suffix;
+        $nameB = '联通 200 元快充' . $suffix;
+        $nameC = '电信 50 元快充（已下架）' . $suffix;
+
         // 商品 A：没有单独覆盖，用等级默认 60%：0.50 × 0.60 = 0.30。
-        $productA = $this->createProduct('recharge', '0.50', 'on_shelf', [
-            'name' => '移动 100 元快充',
+        $this->createProduct('recharge', '0.50', 'on_shelf', [
+            'name' => $nameA,
             'operator' => 'mobile',
         ]);
 
         // 商品 B：对该等级单独覆盖成 90%（等级默认是 60%），验证覆盖优先：1.00 × 0.90 = 0.90。
         $productB = $this->createProduct('recharge', '1.00', 'on_shelf', [
-            'name' => '联通 200 元快充',
+            'name' => $nameB,
             'operator' => 'unicom',
         ]);
         $this->createProductOverride($productB->id, $levelId, '0.9000');
 
         // 商品 C：下架商品，必须被排除在列表之外。
         $this->createProduct('recharge', '0.50', 'off_shelf', [
-            'name' => '电信 50 元快充（已下架）',
+            'name' => $nameC,
             'operator' => 'telecom',
         ]);
 
@@ -100,21 +107,21 @@ class ProductControllerTest extends HttpTestCase
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame(0, $body['code']);
-        $this->assertCount(2, $body['data']);
 
-        $this->assertSame('移动 100 元快充', $body['data'][0]['name']);
-        $this->assertSame('mobile', $body['data'][0]['operator']);
-        $this->assertSame('100.00', $body['data'][0]['face_value']);
-        $this->assertSame('99.20', $body['data'][0]['sale_price']);
-        $this->assertSame('0.30', $body['data'][0]['rebate']);
+        $rows = array_column(
+            array_filter($body['data'], fn (array $row) => str_ends_with($row['name'], $suffix)),
+            null,
+            'name'
+        );
+        $this->assertSame([$nameA, $nameB], array_keys($rows));
 
-        $this->assertSame('联通 200 元快充', $body['data'][1]['name']);
-        $this->assertSame('unicom', $body['data'][1]['operator']);
-        $this->assertSame('0.90', $body['data'][1]['rebate']);
+        $this->assertSame('mobile', $rows[$nameA]['operator']);
+        $this->assertSame('100.00', $rows[$nameA]['face_value']);
+        $this->assertSame('99.20', $rows[$nameA]['sale_price']);
+        $this->assertSame('0.30', $rows[$nameA]['rebate']);
 
-        foreach ($body['data'] as $row) {
-            $this->assertNotSame('电信 50 元快充（已下架）', $row['name']);
-        }
+        $this->assertSame('unicom', $rows[$nameB]['operator']);
+        $this->assertSame('0.90', $rows[$nameB]['rebate']);
     }
 
     public function testCardBusinessLineIsRejectedWithCleanFailureEnvelope()

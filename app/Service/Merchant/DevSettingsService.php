@@ -41,10 +41,9 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *   邮箱唯一性做的兜底捕获——那是因为手机号只有十进制 11 位、场景可预期到并发注册撞同一个
  *   手机号，这里的随机 128 bit key 撞库属于天文数字级别，暂不处理）。
  *
- * ip_whitelist 空数组的含义：与 App\Middleware\OpenApiSignatureMiddleware 现状一致地
- * 「不做限制」——该中间件目前完全没有读取/校验 ip_whitelist 字段（IP 白名单强制执行是
- * docs/modules.md 里另一个独立的 ⬜ 任务，这里只做配置 CRUD），所以“空数组”与“从未配置”
- * 在效果上等价，都是不限制，未来落地强制校验时按“空/null 即放行”实现即可。
+ * ip_whitelist 空数组的含义：「不做限制」——“空数组”与“从未配置（null）”效果等价。
+ * 强制校验在 App\Middleware\OpenApiSignatureMiddleware 里（判定规则见
+ * App\Network\IpWhitelist，按“空/null 即放行”实现），这里只做配置 CRUD。
  */
 class DevSettingsService extends AbstractService
 {

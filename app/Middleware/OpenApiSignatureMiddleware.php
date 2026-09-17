@@ -14,19 +14,31 @@ namespace App\Middleware;
 
 use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
+use App\Network\ClientIpResolver;
+use App\Network\IpWhitelist;
 use App\Signature\NonceGuard;
 use App\Signature\SignatureSigner;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Base\Response;
 use Hyperf\HttpMessage\Stream\SwooleStream;
+use Hyperf\Logger\LoggerFactory;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 
 /**
- * 开放 API 签名鉴权中间件（requirements.md 8.1）：校验 app_key/timestamp/nonce/sign，
- * IP 白名单和按商户限流不在这个中间件的职责范围内（见 docs/modules.md 对应行）。
+ * 开放 API 签名鉴权中间件（requirements.md 8.1）：校验 app_key/timestamp/nonce/sign
+ * 以及商户 IP 白名单；按商户限流不在这个中间件的职责范围内（见 docs/modules.md 对应行）。
+ *
+ * 校验顺序按 requirements.md 7.1 时序图「验签 / IP 白名单 / 防重放 / 限流」：
+ * 验签通过后才查白名单（没有 AppSecret 的人无法借 40008/40005 的区别探测某个 app_key
+ * 的白名单配置），白名单放在 timestamp/nonce 之前（被拒的请求不消耗 nonce）。
+ * 白名单判定规则见 App\Network\IpWhitelist，客户端 IP 的取法（默认不信任
+ * X-Forwarded-For，只有配置了 OPEN_API_TRUSTED_PROXIES 才按可信代理链解析）
+ * 见 App\Network\ClientIpResolver。之所以放进这个中间件而不是单独再挂一个中间件：
+ * 所有开放 API Controller 都已经挂了本中间件，合在一起不会出现「某个 Controller
+ * 忘了挂白名单中间件」的漏洞，也不用再按 app_key 重复查一次商户。
  *
  * 不注册进 config/autoload/middlewares.php 的全局 http 中间件列表（会连带拦住
  * 跟开放 API 无关的 / 和 /users 路由），而是在开放 API Controller 上通过 #[Middleware] 类级注解
@@ -52,6 +64,7 @@ use Psr\Http\Server\RequestHandlerInterface;
  *   40005 签名校验失败
  *   40006 timestamp 超出 ±5 分钟窗口
  *   40007 nonce 重复（重放）
+ *   40008 来源 IP 不在商户 IP 白名单内（HTTP 403）
  */
 class OpenApiSignatureMiddleware implements MiddlewareInterface
 {
@@ -71,6 +84,8 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
 
     private const CODE_NONCE_REPLAYED = 40007;
 
+    private const CODE_IP_NOT_WHITELISTED = 40008;
+
     #[Inject]
     protected SignatureSigner $signer;
 
@@ -82,6 +97,12 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
 
     #[Inject]
     protected Encryptor $encryptor;
+
+    #[Inject]
+    protected ClientIpResolver $clientIpResolver;
+
+    #[Inject]
+    protected LoggerFactory $loggerFactory;
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
@@ -115,6 +136,19 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
 
         if (! $this->signer->verify($params, $secret)) {
             return $this->reject(self::CODE_INVALID_SIGNATURE, 'invalid signature', 401);
+        }
+
+        if (IpWhitelist::isConfigured($merchant->ip_whitelist)) {
+            $clientIp = $this->clientIpResolver->resolve($request);
+            if (! IpWhitelist::allows($merchant->ip_whitelist, $clientIp)) {
+                $this->loggerFactory->get('open_api')->warning('open api request rejected by ip whitelist', [
+                    'merchant_id' => $merchant->id,
+                    'client_ip' => $clientIp,
+                ]);
+
+                // 响应里不回显白名单内容，也不回显解析出的 IP，避免泄露配置/代理拓扑
+                return $this->reject(self::CODE_IP_NOT_WHITELISTED, 'ip not allowed', 403);
+            }
         }
 
         if (abs(time() - (int) $timestamp) > self::TIMESTAMP_WINDOW_SECONDS) {
