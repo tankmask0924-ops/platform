@@ -20,9 +20,11 @@ use App\Model\AdminUser;
 use App\Service\Admin\MerchantAdminService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
+use Hyperf\HttpServer\Annotation\DeleteMapping;
 use Hyperf\HttpServer\Annotation\GetMapping;
 use Hyperf\HttpServer\Annotation\Middleware;
 use Hyperf\HttpServer\Annotation\PostMapping;
+use Hyperf\HttpServer\Annotation\PutMapping;
 
 /**
  * 系统管理后台（web/admin）「商户管理 - 商户列表」（requirements.md 8.3），
@@ -150,5 +152,53 @@ class MerchantController extends AbstractController
         $type = $this->request->input('type');
 
         return $this->merchantAdminService->balanceLogs($id, $page, $perPage, $type);
+    }
+
+    /**
+     * 启用 / 禁用已审核商户。启用禁用、调整等级、限流设置三个动作共用独立权限编码
+     * 'merchant.manage'——都是运营对已入驻商户的日常管理，跟入驻审核
+     * （merchant.review）和改余额（merchant.balance_adjust）不是同一档权限。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.manage')]
+    #[PostMapping(path: '{id}/status')]
+    public function changeStatus(int $id): array
+    {
+        $this->merchantAdminService->changeStatus($id, $this->request->input('status'));
+
+        return ['success' => true];
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.manage')]
+    #[PutMapping(path: '{id}/level')]
+    public function changeLevel(int $id): array
+    {
+        $this->merchantAdminService->changeLevel($id, $this->request->input('level_id'));
+
+        return ['success' => true];
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.manage')]
+    #[PutMapping(path: '{id}/rate-limit')]
+    public function setRateLimit(int $id): array
+    {
+        return $this->merchantAdminService->setRateLimit($id, $this->request->input('limit_per_second'));
+    }
+
+    /**
+     * 删除单独限流配置，回落到全局默认值。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('merchant.manage')]
+    #[DeleteMapping(path: '{id}/rate-limit')]
+    public function resetRateLimit(int $id): array
+    {
+        return $this->merchantAdminService->resetRateLimit($id);
     }
 }

@@ -78,6 +78,7 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'merchant.view', 'module' => 'merchant', 'name' => '商户列表查看', 'type' => 'action'],
         ['code' => 'merchant.review', 'module' => 'merchant', 'name' => '商户入驻审核', 'type' => 'action'],
         ['code' => 'merchant.balance_adjust', 'module' => 'merchant', 'name' => '商户余额手动调账', 'type' => 'action'],
+        ['code' => 'merchant.manage', 'module' => 'merchant', 'name' => '商户启用禁用/等级/限流管理', 'type' => 'action'],
         ['code' => 'supplier.view', 'module' => 'supplier', 'name' => '供应商配置查看', 'type' => 'action'],
         ['code' => 'supplier.manage', 'module' => 'supplier', 'name' => '供应商配置管理', 'type' => 'action'],
         ['code' => 'product_mapping.view', 'module' => 'product_mapping', 'name' => '商品映射查看', 'type' => 'action'],

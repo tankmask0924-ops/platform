@@ -284,6 +284,30 @@ class AuthControllerTest extends HttpTestCase
         $this->assertSame('2026-02-01 09:30:00', $body['debt_since']);
     }
 
+    /**
+     * 登录后才被后台禁用：之前签发的 token 仍在有效期内，也必须被拦下。
+     */
+    public function testMeWithTokenIssuedBeforeDisableReturns401()
+    {
+        $merchant = $this->createActiveMerchant(['phone' => '132' . random_int(10000000, 99999999)]);
+
+        $login = $this->client->request('POST', '/merchant/auth/login', [
+            'form_params' => [
+                'username' => $merchant->phone,
+                'password' => 'correct-password',
+            ],
+        ]);
+        $token = json_decode((string) $login->getBody(), true)['token'];
+
+        $merchant->fill(['status' => 'disabled'])->save();
+
+        $response = $this->client->request('GET', '/merchant/auth/me', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $this->assertSame(401, $response->getStatusCode());
+    }
+
     public function testMeWithoutAuthorizationHeaderReturns401()
     {
         $response = $this->client->request('GET', '/merchant/auth/me');

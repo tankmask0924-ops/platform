@@ -70,6 +70,15 @@ class MerchantAuthMiddleware implements MiddlewareInterface
             throw new HttpException(401, '未登录或登录已过期');
         }
 
+        // 后台禁用商户（App\Service\Admin\MerchantAdminService::changeStatus()）之前
+        // 签发的 token 在 7 天 TTL 内仍然验签通过，必须在这里按实时状态拦下，否则
+        // 禁用只挡得住重新登录。用 401 而不是登录接口用的 403：前端见 401 会清掉
+        // 登录态跳回登录页，再登录时就能看到登录接口给出的「账号已被禁用」。
+        // pending/rejected 商户仍需进后台看审核状态、重新提交资质，不拦。
+        if ($merchant->status === 'disabled') {
+            throw new HttpException(401, '账号已被禁用');
+        }
+
         return $handler->handle($request->withAttribute('merchant', $merchant));
     }
 }

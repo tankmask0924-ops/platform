@@ -17,6 +17,8 @@ use App\Dao\MerchantBalanceLogDao;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantLevelDao;
 use App\Dao\MerchantQualificationDao;
+use App\Dao\MerchantRateLimitDao;
+use App\Dao\SystemSettingDao;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantQualification;
@@ -31,12 +33,30 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 系统管理后台（web/admin）「商户管理 - 商户列表 / 详情 / 入驻审核」（requirements.md 4.1、8.3），
  * docs/modules.md 第 8 节。
  *
- * 列表接口原本故意做得很薄（见历史提交），本任务在此基础上补上详情 + 审核通过/驳回——
- * 仍然不碰启用禁用 / 等级调整（针对已 active 商户的后续变更）/ 限流设置，那些是
- * 单独的、更大的后续工作。
+ * 列表接口原本故意做得很薄（见历史提交），之后陆续补上详情 + 审核通过/驳回、
+ * 手动调账、资金流水，以及针对已审核商户的后续变更：启用禁用 / 调整等级 / 限流设置。
  */
 class MerchantAdminService extends AbstractService
 {
+    /**
+     * docs/database-design.md「system_settings」里的默认限流 key，及零配置时的
+     * 代码级兜底值（跟文档里的默认值 50 一致）。
+     */
+    public const DEFAULT_RATE_LIMIT_SETTING_KEY = 'default_rate_limit_per_second';
+
+    public const DEFAULT_RATE_LIMIT_PER_SECOND = 50;
+
+    /**
+     * 单独限流值的上限，只是防手滑（多敲几个 0）的合理性校验，不是业务规则。
+     */
+    public const MAX_RATE_LIMIT_PER_SECOND = 100000;
+
+    /**
+     * 启用禁用只在这两个状态之间切换；pending/rejected 走入驻审核流程，不能用
+     * 启用禁用绕过审核。
+     */
+    private const TOGGLEABLE_STATUSES = ['active', 'disabled'];
+
     #[Inject]
     protected MerchantDao $merchantDao;
 
@@ -54,6 +74,12 @@ class MerchantAdminService extends AbstractService
 
     #[Inject]
     protected MerchantBalanceLogDao $balanceLogDao;
+
+    #[Inject]
+    protected MerchantRateLimitDao $merchantRateLimitDao;
+
+    #[Inject]
+    protected SystemSettingDao $systemSettingDao;
 
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
@@ -98,6 +124,7 @@ class MerchantAdminService extends AbstractService
             'level_id' => $merchant->level_id,
             'created_at' => $merchant->created_at?->toDateTimeString(),
             'qualification' => $qualification ? $this->formatQualification($qualification) : null,
+            'rate_limit' => $this->formatRateLimit($merchantId),
         ];
     }
 
@@ -212,6 +239,89 @@ class MerchantAdminService extends AbstractService
         ];
     }
 
+    /**
+     * 启用 / 禁用（requirements.md 8.3「启用/禁用」），只允许 active <-> disabled。
+     * 禁用后的拦截点都在读 merchants.status 的地方，这里只改状态：开放 API
+     * （App\Middleware\OpenApiSignatureMiddleware，非 active 一律拒绝）、商户后台登录
+     * （App\Service\Merchant\AuthService::login()）和已登录的商户后台请求
+     * （App\Middleware\MerchantAuthMiddleware，禁用前签发的 token 也会被拦下）。
+     * 禁用不动余额、冻结金额和等级，已经在途的订单照常走完，重新启用即恢复原样。
+     * 目标状态跟当前状态相同时视为幂等成功。
+     */
+    public function changeStatus(int $merchantId, mixed $status): void
+    {
+        if (! is_string($status) || ! in_array($status, self::TOGGLEABLE_STATUSES, true)) {
+            throw new HttpException(422, 'status 只能是 active 或 disabled');
+        }
+
+        $merchant = $this->findMerchantOrFail($merchantId);
+        if (! in_array($merchant->status, self::TOGGLEABLE_STATUSES, true)) {
+            throw new HttpException(409, '只有已审核通过的商户才能启用或禁用');
+        }
+
+        if ($merchant->status === $status) {
+            return;
+        }
+
+        $merchant->fill(['status' => $status])->save();
+    }
+
+    /**
+     * 调整等级（requirements.md 5.2「商户等级之后运营可调整」）：只针对审核通过过的
+     * 商户（active/disabled），pending 商户的首次分配走 approve()。返佣是在订单
+     * 成功那一刻按商户当时的等级算的（见 App\Service\Order\OrderResultApplier），
+     * 所以改完对之后成功的订单立即生效，已生成的返佣记录不回溯。
+     */
+    public function changeLevel(int $merchantId, mixed $levelId): void
+    {
+        $merchant = $this->findMerchantOrFail($merchantId);
+
+        $level = is_numeric($levelId) ? $this->merchantLevelDao->find((int) $levelId) : null;
+        if (! $level) {
+            throw new HttpException(422, 'level_id 不能为空，且必须对应一个存在的商户等级');
+        }
+
+        if (! in_array($merchant->status, self::TOGGLEABLE_STATUSES, true)) {
+            throw new HttpException(409, '只有已审核通过的商户才能调整等级，待审核商户请在审核通过时分配');
+        }
+
+        if ((int) $merchant->level_id === (int) $level->id) {
+            return;
+        }
+
+        $merchant->fill(['level_id' => $level->id])->save();
+    }
+
+    /**
+     * 设置单独限流值（requirements.md 8.1/8.3），覆盖全局默认。只存配置，不关心
+     * 商户当前状态——给待审核商户预先配好也没有副作用。
+     *
+     * @return array{limit_per_second: int, is_custom: bool}
+     */
+    public function setRateLimit(int $merchantId, mixed $limitPerSecond): array
+    {
+        $this->findMerchantOrFail($merchantId);
+
+        $limit = $this->normalizeRateLimit($limitPerSecond);
+        $this->merchantRateLimitDao->upsertLimit($merchantId, $limit);
+
+        return $this->formatRateLimit($merchantId);
+    }
+
+    /**
+     * 删除单独限流值，商户回落到全局默认。本来就没有单独配置时也返回成功（幂等）。
+     *
+     * @return array{limit_per_second: int, is_custom: bool}
+     */
+    public function resetRateLimit(int $merchantId): array
+    {
+        $this->findMerchantOrFail($merchantId);
+
+        $this->merchantRateLimitDao->deleteByMerchantId($merchantId);
+
+        return $this->formatRateLimit($merchantId);
+    }
+
     private function normalizeBalanceLogTypeFilter(mixed $type): ?string
     {
         if ($type === null || $type === '') {
@@ -244,6 +354,47 @@ class MerchantAdminService extends AbstractService
             'reason' => $log->reason,
             'operator_id' => $log->operator_id,
             'created_at' => $log->created_at?->toDateTimeString(),
+        ];
+    }
+
+    /**
+     * 只接受正整数（JSON 数字或纯数字字符串），拒绝 0、负数、小数和超出上限的值。
+     */
+    private function normalizeRateLimit(mixed $value): int
+    {
+        if (is_string($value) && preg_match('/^\d+$/', $value) === 1) {
+            $value = (int) $value;
+        }
+
+        if (! is_int($value) || $value < 1 || $value > self::MAX_RATE_LIMIT_PER_SECOND) {
+            throw new HttpException(
+                422,
+                sprintf('limit_per_second 必须是 1 到 %d 之间的整数', self::MAX_RATE_LIMIT_PER_SECOND)
+            );
+        }
+
+        return $value;
+    }
+
+    /**
+     * 商户实际生效的限流值：有单独配置就用单独配置，否则用全局默认。
+     * `is_custom` 让后台能区分「单独设成了 50」和「没设、走默认 50」。
+     *
+     * @return array{limit_per_second: int, is_custom: bool}
+     */
+    private function formatRateLimit(int $merchantId): array
+    {
+        $custom = $this->merchantRateLimitDao->findByMerchantId($merchantId);
+        if ($custom) {
+            return ['limit_per_second' => $custom->limit_per_second, 'is_custom' => true];
+        }
+
+        return [
+            'limit_per_second' => (int) $this->systemSettingDao->getValue(
+                self::DEFAULT_RATE_LIMIT_SETTING_KEY,
+                self::DEFAULT_RATE_LIMIT_PER_SECOND
+            ),
+            'is_custom' => false,
         ];
     }
 
