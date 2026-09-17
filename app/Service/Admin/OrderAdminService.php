@@ -117,11 +117,11 @@ class OrderAdminService extends AbstractService
         $page = max(1, (int) ($query['page'] ?? 1));
         $perPage = min(self::MAX_PER_PAGE, max(1, (int) ($query['per_page'] ?? 15)));
 
-        $orders = $this->orderDao->paginateForAdmin($filters, $page, $perPage);
+        $orders = $this->orderDao->paginateFiltered($filters, $page, $perPage);
 
         return [
             'data' => $orders->map(fn (Order $order) => $this->formatOrder($order))->values()->all(),
-            'total' => $this->orderDao->countForAdmin($filters),
+            'total' => $this->orderDao->countFiltered($filters),
             'page' => $page,
             'per_page' => $perPage,
         ];

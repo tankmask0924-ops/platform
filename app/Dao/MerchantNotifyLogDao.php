@@ -46,8 +46,8 @@ class MerchantNotifyLogDao extends AbstractDao
     }
 
     /**
-     * 按订单查回调记录，按时间倒序（商户后台"回调记录"用得到，这里先留一个基础查询，
-     * 不做分页/过滤，等真正的后台接口出现再按需扩展）。
+     * 按订单查回调记录，按时间倒序（系统管理后台、商户后台的订单详情用）。一笔订单
+     * 最多 7 次自动尝试加上手动重推，不分页。
      */
     public function findByOrderId(int $orderId): Collection
     {

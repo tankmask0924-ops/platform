@@ -301,7 +301,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 充值：提交申请 / 查看记录 | ✅ `App\Controller\Merchant\RechargeRequestController` | ✅ `App\Service\Merchant\RechargeRequestService` | ✅ |
 | 资金流水：查询与导出 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | ✅ 只做"查询"（`GET /merchant/balance-logs`，支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明），"导出"不在本次任务范围内 |
 | 返佣：明细查询与导出 | ⬜ | ⬜ | ⬜ |
-| 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | ⬜ | ⬜ | ⬜ |
+| 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | 🔨 除导出外已完成：`GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价。测试 `test/Cases/Merchant/OrderControllerTest.php` |
 | 售后：未到账争议提交与查看 | ⬜ | ⬜ | ⬜ |
 | 接口文档：在线查看 / 下载签名示例 | ⬜ | ➖ | ⬜ |
 
@@ -562,10 +562,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 6 | 0 | 10 |
+| 商户管理后台 | 16 | 6 | 1 | 9 |
 | 系统管理后台 | 19 | 9 | 1 | 9 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **49** | **1** | **56** |
+| **合计** | **106** | **49** | **2** | **55** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

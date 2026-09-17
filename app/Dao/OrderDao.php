@@ -134,39 +134,43 @@ class OrderDao extends AbstractDao
     }
 
     /**
-     * 后台订单列表，按 id 倒序（最新的在前）。
+     * 订单列表（系统管理后台、商户后台共用），按 id 倒序（最新的在前）。商户后台调用时
+     * 必须带上 merchant_id。
      *
-     * @param array{status?: string, business_line?: string, merchant_id?: int, order_no?: string,
+     * @param array{status?: list<string>|string, business_line?: string, merchant_id?: int, order_no?: string,
      *     merchant_order_no?: string, created_from?: string, created_to?: string} $filters 已校验过的筛选条件
      * @return Collection<int, Order>
      */
-    public function paginateForAdmin(array $filters, int $page, int $perPage): Collection
+    public function paginateFiltered(array $filters, int $page, int $perPage): Collection
     {
-        return $this->adminFilterQuery($filters)
+        return $this->filterQuery($filters)
             ->orderByDesc('id')
             ->forPage($page, $perPage)
             ->get();
     }
 
     /**
-     * @param array<string, mixed> $filters 同 paginateForAdmin()
+     * @param array<string, mixed> $filters 同 paginateFiltered()
      */
-    public function countForAdmin(array $filters): int
+    public function countFiltered(array $filters): int
     {
-        return $this->adminFilterQuery($filters)->count();
+        return $this->filterQuery($filters)->count();
     }
 
     /**
      * @param array<string, mixed> $filters
      */
-    private function adminFilterQuery(array $filters): Builder
+    private function filterQuery(array $filters): Builder
     {
         $query = $this->newQuery();
 
         foreach (['status', 'business_line', 'merchant_id', 'order_no', 'merchant_order_no'] as $column) {
-            if (isset($filters[$column])) {
-                $query->where($column, $filters[$column]);
+            if (! isset($filters[$column])) {
+                continue;
             }
+            is_array($filters[$column])
+                ? $query->whereIn($column, $filters[$column])
+                : $query->where($column, $filters[$column]);
         }
         if (isset($filters['created_from'])) {
             $query->where('created_at', '>=', $filters['created_from']);
