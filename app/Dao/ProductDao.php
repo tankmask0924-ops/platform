@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\Product;
+use Hyperf\Database\Model\Builder;
 use Hyperf\Database\Model\Collection;
 
 class ProductDao extends AbstractDao
@@ -42,5 +43,40 @@ class ProductDao extends AbstractDao
             ->where('status', 'on_shelf')
             ->orderBy('created_at')
             ->get();
+    }
+
+    /**
+     * 系统管理后台（web/admin）「本地商品库 - 列表」用，不限 status（跟上面
+     * listOnShelfByBusinessLine() 只给开放 API 用、只看在架商品不同——运营在后台
+     * 需要看到全部商品，包括已下架的，才能重新上架），可选按 business_line/status
+     * 过滤。跟 App\Dao\SupplierDao::paginate() 同样的手写分页原因（`hyperf/paginator`
+     * 未安装），按创建时间倒序。
+     */
+    public function paginate(int $page, int $perPage, ?string $businessLine, ?string $status): Collection
+    {
+        return $this->filteredQuery($businessLine, $status)
+            ->orderByDesc('created_at')
+            ->forPage($page, $perPage)
+            ->get();
+    }
+
+    public function count(?string $businessLine, ?string $status): int
+    {
+        return $this->filteredQuery($businessLine, $status)->count();
+    }
+
+    private function filteredQuery(?string $businessLine, ?string $status): Builder
+    {
+        $query = $this->newQuery();
+
+        if ($businessLine !== null) {
+            $query->where('business_line', $businessLine);
+        }
+
+        if ($status !== null) {
+            $query->where('status', $status);
+        }
+
+        return $query;
     }
 }

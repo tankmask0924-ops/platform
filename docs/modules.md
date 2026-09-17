@@ -308,7 +308,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商户管理：启用禁用 / 调整等级（针对已 active 商户的后续变更）/ 限流设置 | ⬜ | ⬜ | ⬜ |
 | 服务开通审核 | ⬜ | ⬜ | ⬜ |
 | 充值与调账：充值审核 / 手动调账 | ✅ `App\Controller\Admin\RechargeRequestController`（充值审核）/ ✅ `App\Controller\Admin\MerchantController`（手动调账） | ✅ `App\Service\Admin\RechargeRequestAdminService`（充值审核）/ ✅ `App\Service\Admin\MerchantAdminService`（手动调账） | ✅ 充值申请审核（此前完成）+ 手动加扣余额（调账，`POST /admin/merchants/{id}/balance-adjustments`，`merchant_balance_logs.type = 'adjustment'`，"必填原因，直接生效，不需要二次审核"，独立权限编码 `merchant.balance_adjust`）两半都已完成，见第 1 节"商户余额冻结/扣款/解冻/返佣结算"行 `adjust()` 部分的说明 |
-| 本地商品库：CRUD | ⬜ | ⬜ | ⬜ |
+| 本地商品库：CRUD | ✅ `App\Controller\Admin\ProductController` | ✅ `App\Service\Admin\ProductAdminService` | ✅ `GET/POST /admin/products`、`GET/PUT /admin/products/{id}`、`POST /admin/products/{id}/status`、`PUT/DELETE /admin/products/{id}/level-rebates/{levelId}`；权限 `product.view` / `product.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。这是 `App\Model\Product`/`App\Dao\ProductDao`（commit 233d5d9）此前一直缺失的写入侧——那次提交只建了模型和开放 API 用的只读查询，商品行此前只能靠测试直接用 Dao 插入。新建商品默认下架（`status` 默认 `off_shelf`：避免刚建好、字段可能还没配置齐全的商品被意外立即上架，需运营显式上架）；`business_line` 只接受 recharge/card（这个代码库目前只有这两条业务线建了下单路由基础设施，即便数据库列本身不限制取值也主动拒绝其它值）；按 recharge/card 分别要求 `operator`/`card_type` 必填，供错业务线的字段（如给 recharge 商品传 `card_type`）直接拒绝，清晰 4xx 而非静默接受；详情接口带出该商品全部 `ProductLevelRebate` 覆盖（联表 `level_name`，同 `ProductMappingAdminService` 联表供应商名称的做法）。等级比例覆盖的写入/删除结构跟商户等级任务（commit 4de61e8）一致：设置用 `ProductLevelRebateDao::upsertRate()`（数据库原生 upsert，按 `(product_id, level_id)` 唯一索引原地更新，跟 `MerchantLevelBusinessRateDao::upsertRate()` 同一技术）；新增 `DELETE /admin/products/{id}/level-rebates/{levelId}`（商户等级任务没有的接口——删除有实际业务含义：回退到该等级在该业务线的默认比例，对不存在的覆盖行删除返回 404 而非静默成功），已用真实联调测试验证：设置覆盖后 `RebateCalculator` 读到 `rateSource='product_level'`，删除覆盖后回退读到 `rateSource='level'`。测试 `test/Cases/Admin/ProductControllerTest.php`。**范围之外**：5.5 的价格/返佣保护提示（低于成本价、毛利为负、返佣比例超 100%）与操作日志记录均未建（没有后台前端展示 / 没有操作日志基础设施，见 `ProductAdminService` 类注释）；不含 `supplier_products` 商品映射（已是独立功能，`ProductMappingController`） |
 | 供应商管理：配置 CRUD（新建/列表/详情/修改/启用禁用，requirements.md 6.3） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Admin\SupplierAdminService` | ✅ |
 | 供应商管理：商品映射（新建/列表/改价（必留痕）/优先级/启停，requirements.md 6.4） | ✅ `App\Controller\Admin\ProductMappingController` | ✅ `App\Service\Admin\ProductMappingAdminService` | ✅ |
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
@@ -464,9 +464,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
-| 系统管理后台 | 19 | 7 | 0 | 12 |
+| 系统管理后台 | 19 | 8 | 0 | 11 |
 | 异步任务与定时任务 | 10 | 1 | 0 | 9 |
-| **合计** | **106** | **29** | **5** | **72** |
+| **合计** | **106** | **30** | **5** | **71** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
