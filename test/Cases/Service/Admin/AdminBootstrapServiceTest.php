@@ -213,6 +213,16 @@ class AdminBootstrapServiceTest extends TestCase
         $this->assertSame(1, AdminRolePermission::where('role_id', $admin->role_id)->where('permission_id', $permission->id)->count());
     }
 
+    public function testSyncDoesNothingWhenSuperAdminRoleDoesNotExist()
+    {
+        if (AdminRole::where('name', self::ROLE_NAME)->exists()) {
+            $this->markTestSkipped('共享库里已有 super_admin 角色，无法验证角色不存在的分支');
+        }
+
+        $this->assertNull($this->getContainer()->get(AdminBootstrapService::class)->syncSuperAdminPermissions());
+        $this->assertFalse(AdminRole::where('name', self::ROLE_NAME)->exists(), '同步不应该凭空建出空角色');
+    }
+
     private function uniqueUsername(): string
     {
         return 'admin_' . uniqid('', true);

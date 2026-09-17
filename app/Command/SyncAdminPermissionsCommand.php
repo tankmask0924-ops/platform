@@ -42,6 +42,11 @@ class SyncAdminPermissionsCommand extends HyperfCommand
     public function handle(): int
     {
         $granted = $this->adminBootstrapService->syncSuperAdminPermissions();
+        if ($granted === null) {
+            $this->warn('还没有超级管理员角色，请先用 admin:create 创建管理员账号（会自动带上全部权限）');
+
+            return self::SUCCESS;
+        }
 
         $this->info($granted > 0 ? "已为超级管理员补充 {$granted} 个权限" : '超级管理员权限已是最新，无需补充');
 

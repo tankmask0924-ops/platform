@@ -135,12 +135,18 @@ class AdminBootstrapService extends AbstractService
      * 把 KNOWN_PERMISSIONS 里的权限补齐到超级管理员角色上（缺的权限行一并建出来）。
      * 新增权限编码后，已有的超级管理员账号不会自动拿到——createSuperAdmin() 只在
      * 新建账号时顺带补一次——部署后执行 `admin:sync-permissions` 调这里。幂等。
+     * 还没有超级管理员角色（从没执行过 admin:create）时什么都不建，返回 null。
      *
-     * @return int 这次新授予的权限数
+     * @return null|int 这次新授予的权限数
      */
-    public function syncSuperAdminPermissions(): int
+    public function syncSuperAdminPermissions(): ?int
     {
-        return Db::transaction(fn () => $this->ensureRoleHasKnownPermissions($this->ensureSuperAdminRole()));
+        $role = $this->findSuperAdminRole();
+        if ($role === null) {
+            return null;
+        }
+
+        return Db::transaction(fn () => $this->ensureRoleHasKnownPermissions($role));
     }
 
     private function validate(string $username, string $password): void
@@ -165,9 +171,14 @@ class AdminBootstrapService extends AbstractService
         return $realName !== '' ? $realName : $username;
     }
 
+    private function findSuperAdminRole(): ?AdminRole
+    {
+        return $this->adminRoleDao->newQuery()->where('name', self::SUPER_ADMIN_ROLE_NAME)->first();
+    }
+
     private function ensureSuperAdminRole(): AdminRole
     {
-        $role = $this->adminRoleDao->newQuery()->where('name', self::SUPER_ADMIN_ROLE_NAME)->first();
+        $role = $this->findSuperAdminRole();
         if ($role) {
             return $role;
         }

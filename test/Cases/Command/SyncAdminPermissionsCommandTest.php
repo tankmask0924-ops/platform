@@ -30,7 +30,7 @@ class SyncAdminPermissionsCommandTest extends TestCase
     public function testCommandReportsGrantedCount()
     {
         $service = Mockery::mock(AdminBootstrapService::class);
-        $service->shouldReceive('syncSuperAdminPermissions')->twice()->andReturn(3, 0);
+        $service->shouldReceive('syncSuperAdminPermissions')->times(3)->andReturn(3, 0, null);
 
         $command = new SyncAdminPermissionsCommand($service);
         $this->assertSame('admin:sync-permissions', $command->getName());
@@ -42,6 +42,9 @@ class SyncAdminPermissionsCommandTest extends TestCase
 
         $this->assertSame(0, $tester->execute([]));
         $this->assertStringContainsString('无需补充', $tester->getDisplay());
+
+        $this->assertSame(0, $tester->execute([]));
+        $this->assertStringContainsString('admin:create', $tester->getDisplay());
     }
 
     public function testCommandIsResolvableFromContainer()
