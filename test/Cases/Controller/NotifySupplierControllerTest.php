@@ -17,6 +17,7 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\Order;
 use App\Model\Supplier;
+use App\OpenApi\ErrorCode;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
 use App\Supplier\SupplierDriverFactory;
@@ -180,7 +181,8 @@ class NotifySupplierControllerTest extends HttpTestCase
 
         $order->refresh();
         $this->assertSame('failed', $order->status);
-        $this->assertSame('kasushou: order status 4', $order->fail_reason);
+        // 供应商原始原因不落到订单上，订单只存平台统一文案
+        $this->assertSame(ErrorCode::OrderFailed->message(), $order->fail_reason);
         $this->assertNotNull($order->finished_at);
 
         $merchant->refresh();

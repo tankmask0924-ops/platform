@@ -13,40 +13,28 @@ declare(strict_types=1);
 namespace App\Controller\OpenApi;
 
 use App\Controller\AbstractController;
+use App\OpenApi\ApiResponse;
+use App\OpenApi\ErrorCode;
 
 /**
- * 开放 API Controller 的公共基类。requirements.md 8.1 要求所有开放 API 响应都是
- * {code, message, data} 形状，但项目级的"统一返回格式与错误码"（docs/modules.md 第 1 节）
- * 还没做（没有完整错误码体系），这里只提供成功/业务失败路径的最小封装；鉴权失败的错误响应由
- * App\Middleware\OpenApiSignatureMiddleware 自己短路返回，不经过这里。
- *
- * fail() 是本项目第一个「业务逻辑」失败（不是中间件鉴权失败）：HTTP 状态码统一保持 200，
- * 失败与否完全由响应体里的 code 是否为 0 表达（requirements.md 8.1 原文："统一返回：
- * {code, message, data}...code 非 0 表示失败"，读作应用层信封，不依赖 HTTP 状态码）。
- * 这跟 OpenApiSignatureMiddleware 用 401/403/400 表达鉴权失败是两套不同的约定——
- * 鉴权失败发生在业务逻辑之前，属于「请求本身有没有资格进来」，用 HTTP 状态码表达更符合
- * 网关/日志层面的语义；业务失败（比如订单不存在）发生在鉴权通过之后，是这次调用本身
- * 明确处理了的正常业务分支，所以延续 requirements.md 8.1 的 envelope-only 读法。
- * 错误码延用中间件里占位编号的风格（40001 等），不是平台统一错误码体系
- * （那是 docs/modules.md 第 1 节另一个独立的 ⬜ 任务）。
+ * 开放 API Controller 的公共基类，返回 requirements.md 8.1 的 {code, message, data} 信封。
+ * 错误码统一定义在 App\OpenApi\ErrorCode；鉴权失败由 App\Middleware\OpenApiSignatureMiddleware
+ * 直接返回，Service 层的业务失败抛 App\Exception\OpenApiException，由
+ * App\Exception\Handler\OpenApiExceptionHandler 转成信封，都不经过这里。
  */
 abstract class AbstractOpenApiController extends AbstractController
 {
     protected function success(mixed $data = null): array
     {
-        return [
-            'code' => 0,
-            'message' => 'ok',
-            'data' => $data,
-        ];
+        return ApiResponse::successBody($data);
     }
 
-    protected function fail(int $code, string $message): array
+    /**
+     * 参数/业务类失败，HTTP 200 + 信封里的错误码（见 App\OpenApi\ErrorCode 的分段说明）。
+     * `$message` 只在需要比错误码默认文案更具体时才传，必须是可以给商户看的文案。
+     */
+    protected function fail(ErrorCode $code, ?string $message = null): array
     {
-        return [
-            'code' => $code,
-            'message' => $message,
-            'data' => null,
-        ];
+        return ApiResponse::errorBody($code, $message);
     }
 }

@@ -113,7 +113,7 @@ class BalanceControllerTest extends HttpTestCase
         $this->assertSame(401, $response->getStatusCode());
         $this->assertSame([
             'code' => 40005,
-            'message' => 'invalid signature',
+            'message' => '签名错误',
             'data' => null,
         ], json_decode((string) $response->getBody(), true));
     }

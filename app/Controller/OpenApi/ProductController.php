@@ -14,6 +14,7 @@ namespace App\Controller\OpenApi;
 
 use App\Middleware\OpenApiSignatureMiddleware;
 use App\Model\Merchant;
+use App\OpenApi\ErrorCode;
 use App\Service\OpenApi\ProductListService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -39,8 +40,6 @@ use Hyperf\HttpServer\Annotation\Middleware;
 #[Middleware(OpenApiSignatureMiddleware::class)]
 class ProductController extends AbstractOpenApiController
 {
-    private const CODE_UNSUPPORTED_BUSINESS_LINE = 40011;
-
     private const SUPPORTED_BUSINESS_LINE = 'recharge';
 
     #[Inject]
@@ -55,8 +54,8 @@ class ProductController extends AbstractOpenApiController
         $businessLine = $this->request->input('business_line');
         if ($businessLine !== self::SUPPORTED_BUSINESS_LINE) {
             return $this->fail(
-                self::CODE_UNSUPPORTED_BUSINESS_LINE,
-                'business_line must be recharge (card is not supported yet)'
+                ErrorCode::UnsupportedBusinessLine,
+                'business_line 目前只支持 recharge'
             );
         }
 

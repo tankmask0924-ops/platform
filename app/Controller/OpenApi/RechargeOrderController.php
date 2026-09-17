@@ -14,6 +14,7 @@ namespace App\Controller\OpenApi;
 
 use App\Middleware\OpenApiSignatureMiddleware;
 use App\Model\Merchant;
+use App\OpenApi\ErrorCode;
 use App\Service\Order\RechargeOrderPlacementService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -30,22 +31,14 @@ use Hyperf\HttpServer\Annotation\PostMapping;
  * App\Service\Order\RechargeOrderPlacementService 里，跟这个代码库「Controller
  * 不写业务逻辑」的既有分层约定一致。
  *
- * 错误码占位（跟 OpenApiSignatureMiddleware 的 40001~40007、OrderController 的
- * 40010/40404、ProductController 的 40011 一个风格，不是平台统一错误码）：
- *   40020 必填参数缺失或形状不对（merchant_order_no/product_id/recharge_account/callback_url）
- *
- * 商品不存在/不是话费业务线/未上架，由 Service 直接抛 Hyperf\HttpMessage\Exception\
- * HttpException（跟 App\Service\Merchant\BalanceService、App\Service\Admin\
- * ProductMappingAdminService 等既有 Service 同样的约定），不经过这里的 fail()
- * envelope——这类"调用方传参不合法"场景在这个代码库里一贯用 HTTP 状态码表达，
- * 不强行套进 {code,message,data} 信封。
+ * 必填参数缺失或形状不对返回 ErrorCode::InvalidParams。商品不存在/不是话费业务线/
+ * 未上架由 Service 抛 App\Exception\OpenApiException，经
+ * App\Exception\Handler\OpenApiExceptionHandler 同样转成信封。
  */
 #[Controller(prefix: '/open-api')]
 #[Middleware(OpenApiSignatureMiddleware::class)]
 class RechargeOrderController extends AbstractOpenApiController
 {
-    private const CODE_INVALID_PARAMS = 40020;
-
     #[Inject]
     protected RechargeOrderPlacementService $placementService;
 
@@ -67,8 +60,8 @@ class RechargeOrderController extends AbstractOpenApiController
             || filter_var($callbackUrl, FILTER_VALIDATE_URL) === false
         ) {
             return $this->fail(
-                self::CODE_INVALID_PARAMS,
-                'merchant_order_no/product_id/recharge_account/callback_url is missing or malformed'
+                ErrorCode::InvalidParams,
+                'merchant_order_no/product_id/recharge_account/callback_url 缺失或格式错误'
             );
         }
 

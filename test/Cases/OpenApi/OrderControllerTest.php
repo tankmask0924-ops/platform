@@ -16,6 +16,7 @@ use App\Crypto\Encryptor;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Model\OrderRecharge;
+use App\OpenApi\ErrorCode;
 use App\Signature\SignatureSigner;
 use HyperfTest\HttpTestCase;
 
@@ -111,7 +112,7 @@ class OrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40404, $body['code']);
+        $this->assertSame(42005, $body['code']);
         $this->assertNull($body['data']);
         $this->assertArrayNotHasKey('card_no', $body);
     }
@@ -166,7 +167,7 @@ class OrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40404, $body['code']);
+        $this->assertSame(42005, $body['code']);
         $this->assertNull($body['data']);
     }
 
@@ -182,7 +183,7 @@ class OrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40010, $body['code']);
+        $this->assertSame(41001, $body['code']);
     }
 
     public function testSupplyingBothOrderIdentifiersIsRejected()
@@ -201,7 +202,46 @@ class OrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40010, $body['code']);
+        $this->assertSame(41001, $body['code']);
+    }
+
+    /**
+     * 历史数据或其它路径写进 orders.fail_reason 的供应商原始信息不能透传给商户。
+     */
+    public function testFailedOrderExposesOnlyPlatformFailCodeAndMessage()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret);
+        $order = $this->createOrder($merchant->id, 'recharge', 'failed');
+        $order->fill(['fail_reason' => 'kasushou: order status 4, upstream msg'])->save();
+
+        $response = $this->client->request('GET', '/open-api/order', [
+            'query' => $this->signedParams($merchant->app_key, $secret, ['order_no' => $order->order_no]),
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertSame(0, $body['code']);
+        $this->assertSame(ErrorCode::OrderFailed->value, $body['data']['fail_code']);
+        $this->assertSame(ErrorCode::OrderFailed->message(), $body['data']['fail_reason']);
+        $this->assertStringNotContainsString('kasushou', (string) $response->getBody());
+    }
+
+    public function testSuccessfulOrderHasNullFailFields()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret);
+        $order = $this->createOrder($merchant->id, 'recharge', 'success');
+
+        $response = $this->client->request('GET', '/open-api/order', [
+            'query' => $this->signedParams($merchant->app_key, $secret, ['order_no' => $order->order_no]),
+        ]);
+
+        $data = json_decode((string) $response->getBody(), true)['data'];
+
+        $this->assertArrayHasKey('fail_code', $data);
+        $this->assertNull($data['fail_code']);
+        $this->assertNull($data['fail_reason']);
     }
 
     private function signedParams(string $appKey, string $secret, array $extra): array

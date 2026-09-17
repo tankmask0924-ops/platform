@@ -14,6 +14,7 @@ namespace App\Controller\OpenApi;
 
 use App\Middleware\OpenApiSignatureMiddleware;
 use App\Model\Merchant;
+use App\OpenApi\ErrorCode;
 use App\Service\OpenApi\OrderQueryService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -26,19 +27,14 @@ use Hyperf\HttpServer\Annotation\Middleware;
  * App\Controller\OpenApi\BalanceController 定下的模式（#[Middleware] 类级注解，
  * 不能用 #[Controller(options: ['middleware' => [...]])]，原因见该类注释）。
  *
- * 错误码占位（跟 OpenApiSignatureMiddleware 的 40001~40007 一个风格，不是平台统一错误码）：
- *   40010 order_no / merchant_order_no 必须二选一（都没传或都传了）
- *   40404 订单不存在（或不属于当前商户，两者对外表现一致，不区分「不存在」和「不是你的」，
- *         避免向调用方泄露「这个单号存在但是别人的」这类信息）
+ * order_no / merchant_order_no 都没传或都传了返回 ErrorCode::InvalidParams；
+ * 订单不存在或不属于当前商户都返回 ErrorCode::OrderNotFound，对外不区分这两种情况，
+ * 避免向调用方泄露「这个单号存在但是别人的」这类信息。
  */
 #[Controller(prefix: '/open-api')]
 #[Middleware(OpenApiSignatureMiddleware::class)]
 class OrderController extends AbstractOpenApiController
 {
-    private const CODE_INVALID_QUERY = 40010;
-
-    private const CODE_ORDER_NOT_FOUND = 40404;
-
     #[Inject]
     protected OrderQueryService $orderQueryService;
 
@@ -52,12 +48,12 @@ class OrderController extends AbstractOpenApiController
         $merchantOrderNo = $this->normalize($this->request->input('merchant_order_no'));
 
         if (($orderNo === null) === ($merchantOrderNo === null)) {
-            return $this->fail(self::CODE_INVALID_QUERY, 'exactly one of order_no or merchant_order_no is required');
+            return $this->fail(ErrorCode::InvalidParams, 'order_no 和 merchant_order_no 必须且只能传一个');
         }
 
         $result = $this->orderQueryService->find($merchant, $orderNo, $merchantOrderNo);
         if ($result === null) {
-            return $this->fail(self::CODE_ORDER_NOT_FOUND, 'order not found');
+            return $this->fail(ErrorCode::OrderNotFound);
         }
 
         return $this->success($result);

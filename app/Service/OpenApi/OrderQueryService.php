@@ -16,6 +16,7 @@ use App\Crypto\Encryptor;
 use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
 use App\Model\Merchant;
+use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 
@@ -50,11 +51,11 @@ class OrderQueryService extends AbstractService
      * 不抛异常——是否算「参数错误」由 Controller 的输入校验负责，这一层
      * 只关心「给定条件下查不查得到订单」。
      *
-     * 查不到时返回 null，由 Controller 转成 fail(40404, ...)。
+     * 查不到时返回 null，由 Controller 转成 ErrorCode::OrderNotFound。
      *
      * @return null|array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
-     *     refunded_amount: string, completed_at: null|string, fail_reason: null|string,
+     *     refunded_amount: string, completed_at: null|string, fail_code: null|int, fail_reason: null|string,
      *     card_no?: string, card_pwd?: string}
      */
     public function find(Merchant $merchant, ?string $orderNo, ?string $merchantOrderNo): ?array
@@ -80,8 +81,7 @@ class OrderQueryService extends AbstractService
             'deducted_amount' => $order->deducted_amount,
             'refunded_amount' => $order->refunded_amount,
             'completed_at' => $order->completed_at?->toDateTimeString(),
-            'fail_reason' => $order->fail_reason,
-        ];
+        ] + ErrorCode::presentOrderFailure($order->fail_reason);
 
         if (in_array($order->business_line, self::CARD_BUSINESS_LINES, true)) {
             $this->appendCardSecrets($result, $order->id);

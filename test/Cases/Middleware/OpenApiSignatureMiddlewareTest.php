@@ -218,7 +218,7 @@ class OpenApiSignatureMiddlewareTest extends TestCase
 
         $this->assertSame(403, $response->getStatusCode());
         $this->assertSame(
-            ['code' => 40008, 'message' => 'ip not allowed', 'data' => null],
+            ['code' => 40008, 'message' => '来源 IP 不在白名单内', 'data' => null],
             $this->decodeBody($response)
         );
 

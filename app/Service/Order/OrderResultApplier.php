@@ -20,6 +20,7 @@ use App\Dao\ProductDao;
 use App\Dao\SystemSettingDao;
 use App\Model\Order;
 use App\Model\Product;
+use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
@@ -29,6 +30,7 @@ use App\Supplier\UnifiedResult;
 use Carbon\Carbon;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
+use Hyperf\Logger\LoggerFactory;
 
 /**
  * 把一次驱动调用/查询得到的 `DriverResult` 应用到一笔已存在的 `Order` 上——
@@ -142,6 +144,9 @@ class OrderResultApplier extends AbstractService
 
     #[Inject]
     protected BalanceService $balanceService;
+
+    #[Inject]
+    protected LoggerFactory $loggerFactory;
 
     #[Inject]
     protected MerchantNotifyService $merchantNotifyService;
@@ -295,12 +300,25 @@ class OrderResultApplier extends AbstractService
         return $this->productDao->find($recharge->product_id);
     }
 
+    /**
+     * `orders.fail_reason` 只写平台统一文案（database-design.md「不透传供应商原始信息」），
+     * 商户通过订单查询和回调看到的就是这一份。驱动给的原始原因留在内部：同步下单路径
+     * 已经写进 `order_attempts.fail_reason`，回调路径没有尝试记录可写，这里记一条日志。
+     */
     private function applyDefiniteFailure(Order $order, DriverResult $result, int $supplierId): void
     {
+        if ($result->failReason !== null) {
+            $this->loggerFactory->get('order')->info('order failed by supplier', [
+                'order_id' => $order->id,
+                'supplier_id' => $supplierId,
+                'supplier_fail_reason' => $result->failReason,
+            ]);
+        }
+
         $order->fill([
             'status' => 'failed',
             'supplier_id' => $supplierId,
-            'fail_reason' => $result->failReason ?? '供应商明确下单失败',
+            'fail_reason' => ErrorCode::OrderFailed->message(),
             'finished_at' => date('Y-m-d H:i:s'),
         ])->save();
 

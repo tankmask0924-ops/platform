@@ -16,13 +16,13 @@ use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Network\ClientIpResolver;
 use App\Network\IpWhitelist;
+use App\OpenApi\ApiResponse;
+use App\OpenApi\ErrorCode;
 use App\Service\Merchant\RateLimitSettingService;
 use App\Signature\MerchantRateLimiter;
 use App\Signature\NonceGuard;
 use App\Signature\SignatureSigner;
 use Hyperf\Di\Annotation\Inject;
-use Hyperf\HttpMessage\Base\Response;
-use Hyperf\HttpMessage\Stream\SwooleStream;
 use Hyperf\Logger\LoggerFactory;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -64,40 +64,12 @@ use Throwable;
  * 验签通过后会把查到的 Merchant 通过 `$request->withAttribute('merchant', $merchant)`
  * 传给下一个 handler，开放 API Controller 直接从请求属性里取，不用重新按 app_key 查一次。
  *
- * 统一返回格式（{code, message, data}）还没有平台级方案（另一个 ⬜ 任务），
- * 这里失败时直接返回同样形状的 JSON，错误码是本中间件内部的占位编号，
- * 不是平台统一错误码：
- *   40001 缺少必要参数（app_key/timestamp/nonce）
- *   40002 app_key 不存在
- *   40003 商户状态不是 active
- *   40004 商户尚未配置 app_secret
- *   40005 签名校验失败
- *   40006 timestamp 超出 ±5 分钟窗口
- *   40007 nonce 重复（重放）
- *   40008 来源 IP 不在商户 IP 白名单内（HTTP 403）
- *   40009 超出商户每秒请求上限（HTTP 429）
+ * 失败时直接返回 {code, message, data} 信封，错误码和 HTTP 状态码见 App\OpenApi\ErrorCode
+ * 的 400xx 段（缺参数/签名/时间戳/nonce 401，商户状态/密钥/白名单 403，限流 429）。
  */
 class OpenApiSignatureMiddleware implements MiddlewareInterface
 {
     private const TIMESTAMP_WINDOW_SECONDS = 300;
-
-    private const CODE_MISSING_PARAMS = 40001;
-
-    private const CODE_UNKNOWN_APP_KEY = 40002;
-
-    private const CODE_MERCHANT_NOT_ACTIVE = 40003;
-
-    private const CODE_APP_SECRET_NOT_CONFIGURED = 40004;
-
-    private const CODE_INVALID_SIGNATURE = 40005;
-
-    private const CODE_TIMESTAMP_OUT_OF_WINDOW = 40006;
-
-    private const CODE_NONCE_REPLAYED = 40007;
-
-    private const CODE_IP_NOT_WHITELISTED = 40008;
-
-    private const CODE_RATE_LIMITED = 40009;
 
     #[Inject]
     protected SignatureSigner $signer;
@@ -135,26 +107,26 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
             || ! is_string($nonce) || $nonce === ''
             || ! is_numeric($timestamp)
         ) {
-            return $this->reject(self::CODE_MISSING_PARAMS, 'missing or invalid app_key/timestamp/nonce');
+            return ApiResponse::error(ErrorCode::MissingAuthParams);
         }
 
         $merchant = $this->merchantDao->findByAppKey($appKey);
         if (! $merchant) {
-            return $this->reject(self::CODE_UNKNOWN_APP_KEY, 'unknown app_key', 401);
+            return ApiResponse::error(ErrorCode::UnknownAppKey);
         }
 
         if ($merchant->status !== 'active') {
-            return $this->reject(self::CODE_MERCHANT_NOT_ACTIVE, 'merchant is not active', 403);
+            return ApiResponse::error(ErrorCode::MerchantNotActive);
         }
 
         if (! is_string($merchant->app_secret) || $merchant->app_secret === '') {
-            return $this->reject(self::CODE_APP_SECRET_NOT_CONFIGURED, 'app_secret is not configured', 403);
+            return ApiResponse::error(ErrorCode::AppSecretNotConfigured);
         }
 
         $secret = $this->encryptor->decrypt($merchant->app_secret);
 
         if (! $this->signer->verify($params, $secret)) {
-            return $this->reject(self::CODE_INVALID_SIGNATURE, 'invalid signature', 401);
+            return ApiResponse::error(ErrorCode::InvalidSignature);
         }
 
         if (IpWhitelist::isConfigured($merchant->ip_whitelist)) {
@@ -166,20 +138,20 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
                 ]);
 
                 // 响应里不回显白名单内容，也不回显解析出的 IP，避免泄露配置/代理拓扑
-                return $this->reject(self::CODE_IP_NOT_WHITELISTED, 'ip not allowed', 403);
+                return ApiResponse::error(ErrorCode::IpNotAllowed);
             }
         }
 
         if (abs(time() - (int) $timestamp) > self::TIMESTAMP_WINDOW_SECONDS) {
-            return $this->reject(self::CODE_TIMESTAMP_OUT_OF_WINDOW, 'timestamp out of window', 401);
+            return ApiResponse::error(ErrorCode::TimestampOutOfWindow);
         }
 
         if (! $this->nonceGuard->consume($appKey, $nonce)) {
-            return $this->reject(self::CODE_NONCE_REPLAYED, 'nonce replayed', 401);
+            return ApiResponse::error(ErrorCode::NonceReplayed);
         }
 
         if (! $this->withinRateLimit($merchant->id)) {
-            return $this->reject(self::CODE_RATE_LIMITED, 'too many requests', 429);
+            return ApiResponse::error(ErrorCode::RateLimited);
         }
 
         return $handler->handle($request->withAttribute('merchant', $merchant));
@@ -199,15 +171,5 @@ class OpenApiSignatureMiddleware implements MiddlewareInterface
 
             return true;
         }
-    }
-
-    private function reject(int $code, string $message, int $status = 400): ResponseInterface
-    {
-        $body = (string) json_encode(['code' => $code, 'message' => $message, 'data' => null], JSON_UNESCAPED_UNICODE);
-
-        return (new Response())
-            ->withStatus($status)
-            ->withHeader('Content-Type', 'application/json')
-            ->withBody(new SwooleStream($body));
     }
 }

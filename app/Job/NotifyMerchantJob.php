@@ -19,6 +19,7 @@ use App\Dao\OrderDao;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Notify\CallbackUrlGuard;
+use App\OpenApi\ErrorCode;
 use App\Signature\SignatureSigner;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
@@ -200,7 +201,7 @@ class NotifyMerchantJob extends Job
      * App\Signature\SignatureSigner::sign() 这同一个类/同一套算法，不写第二套签名逻辑。
      *
      * 通知内容本身只包含订单状态相关字段（不含卡密，见类注释），字段为空
-     * （比如订单还没有 fail_reason/completed_at）时不参与签名，跟 sign() 忽略
+     * （比如订单还没有 fail_code/fail_reason/completed_at）时不参与签名，跟 sign() 忽略
      * sign 字段是同一个道理——array_filter 去掉 null 之后剩下的都是标量。
      *
      * @return array<string, scalar>
@@ -213,7 +214,7 @@ class NotifyMerchantJob extends Job
             'business_line' => $order->business_line,
             'status' => $order->status,
             'completed_at' => $order->completed_at?->toDateTimeString(),
-            'fail_reason' => $order->fail_reason,
+            ...ErrorCode::presentOrderFailure($order->fail_reason),
             'app_key' => $merchant->app_key,
             'timestamp' => (string) time(),
             'nonce' => bin2hex(random_bytes(16)),

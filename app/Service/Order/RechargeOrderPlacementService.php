@@ -12,9 +12,10 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
+use App\Exception\OpenApiException;
 use App\Model\Merchant;
 use App\Model\Product;
-use Hyperf\HttpMessage\Exception\HttpException;
+use App\OpenApi\ErrorCode;
 
 /**
  * 话费下单编排（requirements.md 8.1「下单」的话费一侧，卡券参数不同、单独设计，
@@ -129,15 +130,15 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
     {
         $product = $this->productDao->find($productId);
         if ($product === null) {
-            throw new HttpException(404, '商品不存在');
+            throw new OpenApiException(ErrorCode::ProductNotFound);
         }
 
         if ($product->business_line !== self::BUSINESS_LINE) {
-            throw new HttpException(422, '商品不是话费业务线');
+            throw new OpenApiException(ErrorCode::ProductBusinessLineMismatch, '商品不是话费业务线');
         }
 
         if ($product->status !== 'on_shelf') {
-            throw new HttpException(422, '商品未上架');
+            throw new OpenApiException(ErrorCode::ProductNotOnShelf);
         }
 
         return $product;

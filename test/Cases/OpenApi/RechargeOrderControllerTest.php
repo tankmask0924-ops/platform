@@ -106,7 +106,8 @@ class RechargeOrderControllerTest extends HttpTestCase
         $this->assertSame(0, $body['code']);
         $this->assertSame('failed', $body['data']['status']);
         $this->assertSame($merchantOrderNo, $body['data']['merchant_order_no']);
-        $this->assertSame('无可用供应商', $body['data']['fail_reason']);
+        $this->assertSame(43002, $body['data']['fail_code']);
+        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
 
         $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
         $this->assertNotNull($order);
@@ -142,7 +143,7 @@ class RechargeOrderControllerTest extends HttpTestCase
         $this->orderIds[] = $orders->first()->id;
     }
 
-    public function testMissingRequiredFieldIsRejectedWith40020()
+    public function testMissingRequiredFieldIsRejectedWithInvalidParams()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -156,11 +157,11 @@ class RechargeOrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40020, $body['code']);
+        $this->assertSame(41001, $body['code']);
         $this->assertNull($body['data']);
     }
 
-    public function testMalformedCallbackUrlIsRejectedWith40020()
+    public function testMalformedCallbackUrlIsRejectedWithInvalidParams()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -176,10 +177,10 @@ class RechargeOrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40020, $body['code']);
+        $this->assertSame(41001, $body['code']);
     }
 
-    public function testNonRechargeProductPropagatesAsHttp422ThroughRealMiddlewareStack()
+    public function testNonRechargeProductIsRejectedWithEnvelopeThroughRealMiddlewareStack()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -192,7 +193,8 @@ class RechargeOrderControllerTest extends HttpTestCase
             'callback_url' => 'https://merchant.example.com/notify',
         ]);
 
-        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(42003, json_decode((string) $response->getBody(), true)['code']);
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('business_line', 'card')->first());
     }

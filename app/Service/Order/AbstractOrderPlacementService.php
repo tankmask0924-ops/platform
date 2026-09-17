@@ -18,11 +18,13 @@ use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
 use App\Dao\SupplierDao;
 use App\Dao\SupplierProductDao;
+use App\Exception\OpenApiException;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierProduct;
+use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
@@ -32,7 +34,6 @@ use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
-use Hyperf\HttpMessage\Exception\HttpException;
 use RuntimeException;
 use Throwable;
 
@@ -154,7 +155,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
     protected function assertMerchantNotSuspended(Merchant $merchant): void
     {
         if ($this->balanceService->isSuspended($merchant)) {
-            throw new HttpException(422, '商户当前存在欠款，已暂停下单，请充值补足欠款后再试');
+            throw new OpenApiException(ErrorCode::MerchantSuspended);
         }
     }
 
@@ -234,7 +235,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
         $order->fill([
             'status' => 'failed',
             'frozen_amount' => '0.00',
-            'fail_reason' => '商户可用余额不足，下单前冻结失败',
+            'fail_reason' => ErrorCode::InsufficientBalance->message(),
             'finished_at' => date('Y-m-d H:i:s'),
         ])->save();
 
@@ -296,7 +297,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
      *     refunded_amount: string, supplier_order_no: null|string, completed_at: null|string,
-     *     fail_reason: null|string}
+     *     fail_code: null|int, fail_reason: null|string}
      */
     protected function toResponseArray(Order $order): array
     {
@@ -311,8 +312,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
             'refunded_amount' => $order->refunded_amount,
             'supplier_order_no' => $order->supplier_order_no,
             'completed_at' => $order->completed_at?->toDateTimeString(),
-            'fail_reason' => $order->fail_reason,
-        ];
+        ] + ErrorCode::presentOrderFailure($order->fail_reason);
     }
 
     private function generateOrderNo(): string
@@ -438,7 +438,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
         $order->fill([
             'status' => 'failed',
             'cost_price' => '0.00',
-            'fail_reason' => '无可用供应商',
+            'fail_reason' => ErrorCode::NoSupplierAvailable->message(),
             'finished_at' => date('Y-m-d H:i:s'),
         ])->save();
 

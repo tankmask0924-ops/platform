@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Service\Order;
 
 use App\Crypto\Encryptor;
+use App\Exception\OpenApiException;
 use App\Job\NotifyMerchantJob;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
@@ -24,6 +25,7 @@ use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierProduct;
+use App\OpenApi\ErrorCode;
 use App\Service\Order\CardOrderPlacementService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
@@ -31,7 +33,6 @@ use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
-use Hyperf\HttpMessage\Exception\HttpException;
 use Hyperf\Testing\TestCase;
 use Mockery;
 
@@ -145,7 +146,7 @@ class CardOrderPlacementServiceTest extends TestCase
         $this->assertNull($recharge->card_no, '直充类商品不应该有卡号');
     }
 
-    public function testDirectCardMissingRechargeAccountThrowsHttpExceptionWithoutSideEffects()
+    public function testDirectCardMissingRechargeAccountThrowsOpenApiExceptionWithoutSideEffects()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00', 'direct');
@@ -160,9 +161,9 @@ class CardOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, null, 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for missing recharge_account on direct card product');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for missing recharge_account on direct card product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::InvalidParams, $e->errorCode);
         }
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
@@ -214,7 +215,7 @@ class CardOrderPlacementServiceTest extends TestCase
         $this->assertSame('sekret-pwd-1', $encryptor->decrypt($recharge->card_pwd), '卡密密文必须能解密还原成 mock 时的明文');
     }
 
-    public function testCardSecretWithRechargeAccountThrowsHttpExceptionAndCreatesNoOrder()
+    public function testCardSecretWithRechargeAccountThrowsOpenApiExceptionAndCreatesNoOrder()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00', 'card_secret');
@@ -229,9 +230,9 @@ class CardOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, 'should-not-be-here', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for recharge_account supplied on card_secret product');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for recharge_account supplied on card_secret product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::InvalidParams, $e->errorCode);
         }
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
@@ -351,7 +352,7 @@ class CardOrderPlacementServiceTest extends TestCase
         $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
 
         $this->assertSame('failed', $order->status);
-        $this->assertStringContainsString('余额不足', (string) $order->fail_reason);
+        $this->assertSame(ErrorCode::InsufficientBalance->message(), $order->fail_reason);
         $this->assertSame(0, OrderAttempt::where('order_id', $order->id)->count());
     }
 
@@ -370,9 +371,9 @@ class CardOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, 'game-account-4', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for merchant currently in debt');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for merchant currently in debt');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::MerchantSuspended, $e->errorCode);
             $this->assertStringContainsString('欠款', $e->getMessage());
         }
 
@@ -414,7 +415,7 @@ class CardOrderPlacementServiceTest extends TestCase
         );
     }
 
-    public function testNonCardProductThrowsHttpExceptionWithoutSideEffects()
+    public function testNonCardProductThrowsOpenApiExceptionWithoutSideEffects()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00', null, 'on_shelf', '0.00', 'recharge');
@@ -424,9 +425,9 @@ class CardOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, '13800000000', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for non-card product');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for non-card product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::ProductBusinessLineMismatch, $e->errorCode);
         }
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());

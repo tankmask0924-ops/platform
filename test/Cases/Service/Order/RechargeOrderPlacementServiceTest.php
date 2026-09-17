@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace HyperfTest\Cases\Service\Order;
 
+use App\Exception\OpenApiException;
 use App\Job\NotifyMerchantJob;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
@@ -21,6 +22,7 @@ use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierProduct;
+use App\OpenApi\ErrorCode;
 use App\Service\Merchant\BalanceService;
 use App\Service\Order\RechargeOrderPlacementService;
 use App\Supplier\DriverResult;
@@ -29,7 +31,6 @@ use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
-use Hyperf\HttpMessage\Exception\HttpException;
 use Hyperf\Testing\TestCase;
 use Mockery;
 
@@ -235,7 +236,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
 
         $this->assertSame('failed', $order->status);
-        $this->assertSame('kasushou: order status 4', $order->fail_reason);
+        $this->assertSame(ErrorCode::OrderFailed->message(), $order->fail_reason);
         $this->assertSame('8.00', $order->cost_price);
         $this->assertNotNull($order->finished_at);
 
@@ -299,7 +300,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         $this->assertSame('failed', $order->status);
         $this->assertSame('0.00', $order->frozen_amount, '冻结失败时没有真的冻结任何钱');
-        $this->assertStringContainsString('余额不足', (string) $order->fail_reason);
+        $this->assertSame(ErrorCode::InsufficientBalance->message(), $order->fail_reason);
 
         $this->assertSame(0, OrderAttempt::where('order_id', $order->id)->count());
         $this->assertNull(OrderRecharge::where('order_id', $order->id)->first());
@@ -339,9 +340,9 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, '13800000013', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for merchant currently in debt');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for merchant currently in debt');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::MerchantSuspended, $e->errorCode);
             $this->assertStringContainsString('欠款', $e->getMessage());
         }
 
@@ -443,9 +444,9 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $rejectedMerchantOrderNo = $this->uniqueMerchantOrderNo();
         try {
             $service->place($merchant, $rejectedMerchantOrderNo, $product->id, '13800000015', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException while merchant is currently in debt');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException while merchant is currently in debt');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::MerchantSuspended, $e->errorCode);
             $this->assertStringContainsString('欠款', $e->getMessage());
         }
 
@@ -541,7 +542,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
 
         $this->assertSame('failed', $order->status);
-        $this->assertSame('无可用供应商', $order->fail_reason);
+        $this->assertSame(ErrorCode::NoSupplierAvailable->message(), $order->fail_reason);
         $this->assertSame('0.00', $order->cost_price);
 
         $merchant->refresh();
@@ -577,11 +578,11 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
 
         $this->assertSame('failed', $order->status);
-        $this->assertSame('无可用供应商', $order->fail_reason);
+        $this->assertSame(ErrorCode::NoSupplierAvailable->message(), $order->fail_reason);
         $this->assertSame(0, OrderAttempt::where('order_id', $order->id)->count());
     }
 
-    public function testNonRechargeProductThrowsHttpExceptionWithoutSideEffects()
+    public function testNonRechargeProductThrowsOpenApiExceptionWithoutSideEffects()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00', 'card');
@@ -591,9 +592,9 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, '13800000010', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for non-recharge product');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for non-recharge product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::ProductBusinessLineMismatch, $e->errorCode);
         }
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
@@ -603,7 +604,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
-    public function testOffShelfProductThrowsHttpExceptionWithoutSideEffects()
+    public function testOffShelfProductThrowsOpenApiExceptionWithoutSideEffects()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00', 'recharge', 'off_shelf');
@@ -613,15 +614,15 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $merchantOrderNo, $product->id, '13800000011', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for off-shelf product');
-        } catch (HttpException $e) {
-            $this->assertSame(422, $e->getStatusCode());
+            $this->fail('expected OpenApiException for off-shelf product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::ProductNotOnShelf, $e->errorCode);
         }
 
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
     }
 
-    public function testUnknownProductIdThrowsNotFoundHttpException()
+    public function testUnknownProductIdThrowsProductNotFound()
     {
         $merchant = $this->createMerchant('100.00');
 
@@ -629,9 +630,9 @@ class RechargeOrderPlacementServiceTest extends TestCase
 
         try {
             $service->place($merchant, $this->uniqueMerchantOrderNo(), 999999999, '13800000012', 'https://merchant.example.com/notify');
-            $this->fail('expected HttpException for unknown product');
-        } catch (HttpException $e) {
-            $this->assertSame(404, $e->getStatusCode());
+            $this->fail('expected OpenApiException for unknown product');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::ProductNotFound, $e->errorCode);
         }
     }
 

@@ -136,7 +136,7 @@ class ProductControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40011, $body['code']);
+        $this->assertSame(41002, $body['code']);
         $this->assertNull($body['data']);
     }
 
@@ -152,7 +152,7 @@ class ProductControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40011, $body['code']);
+        $this->assertSame(41002, $body['code']);
     }
 
     private function signedParams(string $appKey, string $secret, array $extra): array

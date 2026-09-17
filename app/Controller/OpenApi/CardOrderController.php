@@ -14,6 +14,7 @@ namespace App\Controller\OpenApi;
 
 use App\Middleware\OpenApiSignatureMiddleware;
 use App\Model\Merchant;
+use App\OpenApi\ErrorCode;
 use App\Service\Order\CardOrderPlacementService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -29,21 +30,14 @@ use Hyperf\HttpServer\Annotation\PostMapping;
  * 本 Controller 只做输入的「有没有传、形状对不对」这类浅层校验；`recharge_account`
  * 该不该必填这条业务规则（取决于商品的 `card_type`）需要先查一次商品才能判断，
  * 这里管不了，留给 `App\Service\Order\CardOrderPlacementService` 抛
- * `HttpException(422)`——跟商品是否存在/是否卡券业务线/是否上架同一套既有约定
- * （不经过这里的 `fail()` envelope）。这里只负责一件事："传了就必须是非空字符串"，
- * 不判断"该不该传"。
- *
- * 错误码占位（跟 `RechargeOrderController` 的 40020 同一个风格，不是平台统一
- * 错误码）：
- *   40021 必填参数缺失或形状不对（merchant_order_no/product_id/callback_url 缺失，
- *          或 recharge_account 传了但不是非空字符串）
+ * `OpenApiException`，跟商品是否存在/是否卡券业务线/是否上架同一套约定。
+ * 这里只负责一件事："传了就必须是非空字符串"，不判断"该不该传"。
+ * 必填参数缺失或形状不对返回 ErrorCode::InvalidParams。
  */
 #[Controller(prefix: '/open-api')]
 #[Middleware(OpenApiSignatureMiddleware::class)]
 class CardOrderController extends AbstractOpenApiController
 {
-    private const CODE_INVALID_PARAMS = 40021;
-
     #[Inject]
     protected CardOrderPlacementService $placementService;
 
@@ -67,8 +61,8 @@ class CardOrderController extends AbstractOpenApiController
             $rechargeAccount = $this->normalizeString($rechargeAccountProvided);
             if ($rechargeAccount === null) {
                 return $this->fail(
-                    self::CODE_INVALID_PARAMS,
-                    'recharge_account is malformed'
+                    ErrorCode::InvalidParams,
+                    'recharge_account 格式错误'
                 );
             }
         }
@@ -79,8 +73,8 @@ class CardOrderController extends AbstractOpenApiController
             || filter_var($callbackUrl, FILTER_VALIDATE_URL) === false
         ) {
             return $this->fail(
-                self::CODE_INVALID_PARAMS,
-                'merchant_order_no/product_id/callback_url is missing or malformed'
+                ErrorCode::InvalidParams,
+                'merchant_order_no/product_id/callback_url 缺失或格式错误'
             );
         }
 

@@ -99,7 +99,8 @@ class CardOrderControllerTest extends HttpTestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame(0, $body['code']);
         $this->assertSame('failed', $body['data']['status']);
-        $this->assertSame('无可用供应商', $body['data']['fail_reason']);
+        $this->assertSame(43002, $body['data']['fail_code']);
+        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
 
         $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
         $this->assertNotNull($order);
@@ -127,14 +128,15 @@ class CardOrderControllerTest extends HttpTestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame(0, $body['code']);
         $this->assertSame('failed', $body['data']['status']);
-        $this->assertSame('无可用供应商', $body['data']['fail_reason']);
+        $this->assertSame(43002, $body['data']['fail_code']);
+        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
 
         $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
         $this->assertNotNull($order);
         $this->orderIds[] = $order->id;
     }
 
-    public function testCardSecretProductWithRechargeAccountRejectedWith422()
+    public function testCardSecretProductWithRechargeAccountIsRejectedWithInvalidParams()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -148,11 +150,12 @@ class CardOrderControllerTest extends HttpTestCase
             'callback_url' => 'https://merchant.example.com/notify',
         ]);
 
-        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(41001, json_decode((string) $response->getBody(), true)['code']);
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
     }
 
-    public function testDirectProductMissingRechargeAccountRejectedWith422()
+    public function testDirectProductMissingRechargeAccountIsRejectedWithInvalidParams()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -165,7 +168,8 @@ class CardOrderControllerTest extends HttpTestCase
             'callback_url' => 'https://merchant.example.com/notify',
         ]);
 
-        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(41001, json_decode((string) $response->getBody(), true)['code']);
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
     }
 
@@ -198,7 +202,7 @@ class CardOrderControllerTest extends HttpTestCase
         $this->orderIds[] = $orders->first()->id;
     }
 
-    public function testMissingRequiredFieldIsRejectedWith40021()
+    public function testMissingRequiredFieldIsRejectedWithInvalidParams()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -211,11 +215,11 @@ class CardOrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(40021, $body['code']);
+        $this->assertSame(41001, $body['code']);
         $this->assertNull($body['data']);
     }
 
-    public function testNonCardProductPropagatesAsHttp422ThroughRealMiddlewareStack()
+    public function testNonCardProductIsRejectedWithEnvelopeThroughRealMiddlewareStack()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -228,7 +232,8 @@ class CardOrderControllerTest extends HttpTestCase
             'callback_url' => 'https://merchant.example.com/notify',
         ]);
 
-        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(42003, json_decode((string) $response->getBody(), true)['code']);
         $this->assertNull(Order::where('merchant_id', $merchant->id)->where('business_line', 'card')->first());
     }
 

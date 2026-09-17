@@ -12,9 +12,10 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
+use App\Exception\OpenApiException;
 use App\Model\Merchant;
 use App\Model\Product;
-use Hyperf\HttpMessage\Exception\HttpException;
+use App\OpenApi\ErrorCode;
 
 /**
  * 卡券下单编排（requirements.md 8.1「下单」的卡券一侧，话费参数不同、单独设计，
@@ -30,10 +31,10 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *   - `card_secret`（卡密，卡号+密码由商户拿去交给自己的终端用户）：
  *     kasushou.md"下单参数"一行原文"卡密商品不传"——没有任何动态参数，
  *     `recharge_account` 必须缺失，传了视为调用方对商品类型的理解有误，直接
- *     拒绝（4xx），不是静默忽略。
+ *     拒绝，不是静默忽略。
  * 校验放在 `validateRechargeAccountForCardType()`，在商品校验通过之后、建订单行
  * 之前执行——跟话费商品校验不通过时的既有约定一致：不创建任何 Order 行，直接抛
- * `HttpException(422)`。
+ * `OpenApiException(ErrorCode::InvalidParams)`。
  *
  * 【`isCardProduct: true`】卡速售驱动的 `placeOrder()`/`queryOrder()`/
  * `parseCallback()` 都要求这个业务线传 `true`（`KasushouStatusMapper` 内部靠它
@@ -123,15 +124,15 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
     {
         $product = $this->productDao->find($productId);
         if ($product === null) {
-            throw new HttpException(404, '商品不存在');
+            throw new OpenApiException(ErrorCode::ProductNotFound);
         }
 
         if ($product->business_line !== self::BUSINESS_LINE) {
-            throw new HttpException(422, '商品不是卡券业务线');
+            throw new OpenApiException(ErrorCode::ProductBusinessLineMismatch, '商品不是卡券业务线');
         }
 
         if ($product->status !== 'on_shelf') {
-            throw new HttpException(422, '商品未上架');
+            throw new OpenApiException(ErrorCode::ProductNotOnShelf);
         }
 
         return $product;
@@ -147,13 +148,13 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
     {
         if ($product->card_type === self::CARD_TYPE_DIRECT) {
             if ($rechargeAccount === null) {
-                throw new HttpException(422, '直充类卡券商品下单必须传 recharge_account');
+                throw new OpenApiException(ErrorCode::InvalidParams, '直充类卡券商品下单必须传 recharge_account');
             }
             return;
         }
 
         if ($rechargeAccount !== null) {
-            throw new HttpException(422, '卡密类卡券商品不支持传 recharge_account');
+            throw new OpenApiException(ErrorCode::InvalidParams, '卡密类卡券商品不支持传 recharge_account');
         }
     }
 }
