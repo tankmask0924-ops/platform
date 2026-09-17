@@ -27,6 +27,10 @@ namespace App\Supplier;
  * 不可能凭空产生。所以这里加一个可选的 cardList 字段承载卡密列表，
  * 是本次实现在 6.2 字面要求之外做的必要补充，不是文档遗漏了要求去发明字段。
  * 其他不返回卡密的能力（查询余额等）此字段恒为 null。
+ *
+ * `supplierBalanceInsufficient`：明确失败的原因是平台在该供应商的预存款不足（卡速售
+ * 状态 -1）。requirements.md 6.7 要求这种情况告警财务并立即刷新该供应商余额，路由层
+ * 靠这个标志识别，不去解析 failReason 文本。
  */
 final class DriverResult
 {
@@ -45,6 +49,7 @@ final class DriverResult
         public readonly array $rawRequest = [],
         public readonly array $rawResponse = [],
         public readonly ?array $cardList = null,
+        public readonly bool $supplierBalanceInsufficient = false,
     ) {
     }
 }

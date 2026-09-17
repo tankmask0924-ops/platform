@@ -14,6 +14,7 @@ namespace HyperfTest\Cases\Process;
 
 use App\Crontab\AbnormalOrderCrontab;
 use App\Crontab\RebateSettlementCrontab;
+use App\Crontab\SupplierBalanceCrontab;
 use App\Crontab\SupplierResultQueryCrontab;
 use App\Process\CrontabDispatcherProcess;
 use App\Process\QueueConsumerProcess;
@@ -75,6 +76,15 @@ class BackgroundProcessRegistrationTest extends TestCase
     public function testAbnormalOrderMarkingRunsOnOneServer()
     {
         $annotation = AnnotationCollector::getClassesByAnnotation(Crontab::class)[AbnormalOrderCrontab::class] ?? null;
+
+        $this->assertInstanceOf(Crontab::class, $annotation);
+        $this->assertSame('*/5 * * * *', $annotation->rule);
+        $this->assertTrue($annotation->onOneServer);
+    }
+
+    public function testSupplierBalanceRefreshRunsOnOneServer()
+    {
+        $annotation = AnnotationCollector::getClassesByAnnotation(Crontab::class)[SupplierBalanceCrontab::class] ?? null;
 
         $this->assertInstanceOf(Crontab::class, $annotation);
         $this->assertSame('*/5 * * * *', $annotation->rule);

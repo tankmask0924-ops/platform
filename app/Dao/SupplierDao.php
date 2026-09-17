@@ -48,6 +48,16 @@ class SupplierDao extends AbstractDao
             ->get();
     }
 
+    /**
+     * 启用中的供应商，余额监控用。停用的不再分配新订单，不需要监控余额。
+     *
+     * @return Collection<int, Supplier>
+     */
+    public function listActive(): Collection
+    {
+        return $this->newQuery()->where('status', 'active')->orderBy('id')->get();
+    }
+
     public function count(): int
     {
         return $this->newQuery()->count();

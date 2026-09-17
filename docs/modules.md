@@ -52,7 +52,7 @@
 | 下单 | ✅ `App\Supplier\Kasushou\KasushouDriver::placeOrder()` | ✅ `App\Service\Order\SupplierRouter`（同步下单与失败切换，见第 5 节） | ✅ `test/Cases/Supplier/Kasushou/KasushouDriverTest.php` | ✅ |
 | 查询订单 | ✅ `KasushouDriver::queryOrder()` | ✅ `App\Service\Order\SupplierResultPollingService`（定时查询，见第 9 节） | ✅ 同上 + `SupplierResultPollingServiceTest` | ✅ |
 | 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ✅ `App\Service\Order\SupplierCallbackService`（回调入口见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` + `NotifySupplierControllerTest` | ✅ |
-| 查询余额 | ✅ `KasushouDriver::queryBalance()` | ⬜（余额监控任务未建，见第 9 节） | ✅ `KasushouDriverTest` | 🔨 |
+| 查询余额 | ✅ `KasushouDriver::queryBalance()` | ✅ `App\Service\Supplier\SupplierBalanceService`（余额监控，见第 9 节） | ✅ `KasushouDriverTest` + `SupplierBalanceServiceTest` | ✅ |
 | 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | 🔨 `App\Service\Supplier\ProductSyncService`（`applyNotification()`/`applyFullSyncPage()`）已建好，但**目前没有任何调用方接入、没有在生产环境跑起来**：商品变更通知需要的 webhook 路由/控制器是第 1 节"供应商回调入口与验签框架"，还是 ⬜；每日全量同步需要的 `#[Crontab]` 定时任务，依赖一个从哪里读供应商配置（baseUrl/userId/apiKey）的 Supplier 配置加载机制，同样还没建，本次任务范围明确不含这两者 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测） | 🔨 |
 | 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -173,10 +173,8 @@
 `App\Job\NotifyMerchantJob`（一次尝试对应一个 Job 实例，签名复用
 `App\Signature\SignatureSigner`，按 1 分钟/5 分钟/15 分钟/1 小时/2 小时/6 小时的
 间隔自我重新入队重试，最多 7 次尝试）、`App\Service\MerchantNotifyService`（唯一入口
-`notify(int $orderId)`，以 delay=0 派发首次尝试）。**真正在订单成功/失败/取消/已退款
-等生命周期节点调用 `MerchantNotifyService::notify()` 的那部分代码还没有实现**——目前
-没有任何订单生命周期/供应商对接驱动代码存在，等那部分工作（第 2/3/4 节驱动 +
-订单处理流程）落地时接进来即可。
+`notify(int $orderId)`，以 delay=0 派发首次尝试）。订单成功/失败时由 `App\Service\Order\OrderResultApplier`
+调用 `MerchantNotifyService::notify()`（后来的下单/路由任务接上的）；取消、已退款所在的流程还没建。
 
 ③ `话费商品列表`只支持 `business_line=recharge`：`App\Model\Product`/`ProductLevelRebate`/
 `MerchantLevelBusinessRate`、对应的 `App\Dao\ProductDao`（`listOnShelfByBusinessLine`）/
@@ -469,8 +467,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 |---|---|---|
 | 供应商下单异步执行 | 队列 Job | ⬜ |
 | 供应商结果查询轮询 | Crontab | ✅ `App\Crontab\SupplierResultQueryCrontab` → `App\Service\Order\SupplierResultPollingService`，见下方说明 |
-| 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ⬜ |
-| 供应商余额监控 | Crontab | ⬜ |
+| 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ✅ `App\Job\NotifyMerchantJob` 失败后按间隔自己重新入队（第 6 节"结果回调"时已实现，此前本表漏更新） |
+| 供应商余额监控 | Crontab | ✅ `App\Crontab\SupplierBalanceCrontab` → `App\Service\Supplier\SupplierBalanceService`，见下方说明 |
 | 供应商商品同步（每日全量校准） | Crontab | ⬜ |
 | 熔断自动恢复（二期） | Crontab | ⬜ |
 | 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
@@ -507,6 +505,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - 不含：人工置成功/置失败、发起撤单（第 8 节"订单管理"）、异常单积压告警（第 8 节"告警"）。
 - 测试：`test/Cases/Service/Order/AbnormalOrderServiceTest.php`。
 
+**供应商余额监控**（requirements.md 6.7）：每 5 分钟一次（`onOneServer` + `singleton`），对所有启用中的
+供应商调驱动 `queryBalance()`（5 个并发），写回 `suppliers.balance`（截到两位小数）和
+`balance_synced_at`；路由已有的余额筛选据此跳过余额低于成本价的供应商。停用的供应商不查。
+- 查询失败或返回值不是普通十进制数：记 `supplier` error 日志，保留上次余额（不清空，清空会被路由当成"余额未知"继续分单）。
+- 低于 `balance_warning_threshold`：记 `supplier` warning 日志。`alerts` 表是二期才建，告警模块落地后改成写告警记录。
+- **预存款不足即时刷新**：`DriverResult` 新增 `supplierBalanceInsufficient`，卡速售状态 -1 时为 true。`SupplierRouter` 在同步下单和
+  回调/定时查询拿到这种结果时，调 `SupplierBalanceService::reportInsufficient()`：记财务告警日志，并推
+  `App\Job\RefreshSupplierBalanceJob` 异步刷新该供应商余额（不拖慢下单请求），订单本身照常按明确失败换下一家。计入熔断统计等熔断（二期）时再接。
+- 测试：`test/Cases/Service/Supplier/SupplierBalanceServiceTest.php`（含下单时报预存款不足 → 刷新 → 下一笔不再分给它），
+  `KasushouDriverTest` 的状态 -1 用例。
+
 ---
 
 ## 10. 进度总览
@@ -516,15 +525,15 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
-| 卡速售 2.0 驱动 | 8 | 4 | 2 | 2 |
+| 卡速售 2.0 驱动 | 8 | 5 | 1 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 2 | 0 | 3 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
 | 系统管理后台 | 19 | 9 | 0 | 10 |
-| 异步任务与定时任务 | 10 | 3 | 0 | 7 |
-| **合计** | **106** | **43** | **2** | **61** |
+| 异步任务与定时任务 | 10 | 5 | 0 | 5 |
+| **合计** | **106** | **46** | **1** | **59** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 

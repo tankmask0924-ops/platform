@@ -28,6 +28,7 @@ use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
+use App\Service\Supplier\SupplierBalanceService;
 use App\Supplier\DriverResult;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
@@ -117,6 +118,9 @@ class SupplierRouter extends AbstractService
     protected MerchantNotifyService $merchantNotifyService;
 
     #[Inject]
+    protected SupplierBalanceService $supplierBalanceService;
+
+    #[Inject]
     protected LoggerFactory $loggerFactory;
 
     /**
@@ -196,6 +200,8 @@ class SupplierRouter extends AbstractService
             // 结果没变也要刷新 updated_at，定时查询靠它控制查询间隔
             $attempt->isDirty() ? $attempt->save() : $attempt->touch();
         }
+
+        $this->reportSupplierSideProblems($supplierId, $result, $order);
 
         if ($order->status !== Order::STATUS_PROCESSING) {
             // 异常单只能人工处理：结果留在尝试记录上供核实，不改订单、不切换供应商
@@ -281,6 +287,7 @@ class SupplierRouter extends AbstractService
             }
 
             $result = $this->callSupplier($order, $mapping, $supplier, $rechargeAccount, $attemptNo);
+            $this->reportSupplierSideProblems((int) $supplier->id, $result, $order);
             $attempt->fill([
                 'result' => self::RESULT_MAP[$result->result->name],
                 'fail_reason' => $result->failReason,
@@ -399,6 +406,17 @@ class SupplierRouter extends AbstractService
     private function buildSupplierNotifyUrl(Supplier $supplier): string
     {
         return sprintf('https://platform.example.com/notify/%s', $supplier->code);
+    }
+
+    /**
+     * requirements.md 6.7：预存款不足除了按明确失败换下一家，还要告警财务并立即刷新余额，
+     * 刷新后路由的余额筛选就会跳过它。
+     */
+    private function reportSupplierSideProblems(int $supplierId, DriverResult $result, Order $order): void
+    {
+        if ($result->supplierBalanceInsufficient) {
+            $this->supplierBalanceService->reportInsufficient($supplierId, 'order ' . $order->order_no);
+        }
     }
 
     private function logger(): LoggerInterface

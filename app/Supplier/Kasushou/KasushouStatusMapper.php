@@ -33,6 +33,11 @@ use App\Supplier\UnifiedResult;
 class KasushouStatusMapper
 {
     /**
+     * 未支付：平台在该站点的预存款不足。
+     */
+    public const STATUS_UNPAID = -1;
+
+    /**
      * @param null|array<int, mixed> $cardList 订单详情返回的卡密列表，非卡密类商品/未拿到时传 null
      * @param bool $isCardProduct 这笔订单对应的供应商商品是否卡密类商品（商品映射不在本次范围内，
      *                            由调用方根据 supplier_products 配置传入；驱动本身不知道商品类型）
@@ -58,14 +63,10 @@ class KasushouStatusMapper
             return $this->mapCancelledOrRefunded($hasBackMoney, $totalPrice);
         }
 
-        if ($status === -1) {
-            // 平台在卡速售该站点的预存款不足，订单未受理，属于"供应商侧问题"：
-            // 明确失败 + 换下一家供应商。requirements.md 6.2 要求这类供应商侧问题
-            // "还要额外告警，并计入熔断统计"；kasushou.md 第 45 行进一步要求
-            // "同时触发一次该供应商的余额即时查询，避免路由继续把新订单分给它"。
-            // 这两件事都属于路由/余额监控/告警（6.5/6.6/6.7），本次任务明确不建，
-            // 这里只留注释提醒——以后把这个驱动接入路由层时，看到 DefiniteFailure
-            // 且来源是状态 -1，必须同时触发一次余额查询 + 财务告警，不要漏掉。
+        if ($status === self::STATUS_UNPAID) {
+            // 平台在卡速售该站点的预存款不足，订单未受理：明确失败 + 换下一家。
+            // 告警财务、立即刷新余额由路由层按 DriverResult::$supplierBalanceInsufficient
+            // 处理（SupplierRouter）；计入熔断统计等熔断（6.6，二期）落地时再接。
             return UnifiedResult::DefiniteFailure;
         }
 

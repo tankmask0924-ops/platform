@@ -449,6 +449,7 @@ class KasushouDriver
             rawRequest: $rawRequest,
             rawResponse: $rawResponse,
             cardList: $cardList,
+            supplierBalanceInsufficient: $status === KasushouStatusMapper::STATUS_UNPAID,
         );
     }
 

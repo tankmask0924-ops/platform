@@ -83,6 +83,7 @@ class KasushouDriverTest extends TestCase
 
         $this->assertSame(UnifiedResult::DefiniteFailure, $result->result);
         $this->assertSame('10.00', $result->refundAmount);
+        $this->assertFalse($result->supplierBalanceInsufficient, '其它明确失败不算预存款不足');
     }
 
     public function testPlaceOrderHttp200Status5PartialRefundMapsToUnknown()
@@ -102,6 +103,7 @@ class KasushouDriverTest extends TestCase
         $result = $this->placeOrderWithOrderResponse(200, ['status' => -1, 'ordersn' => null]);
 
         $this->assertSame(UnifiedResult::DefiniteFailure, $result->result);
+        $this->assertTrue($result->supplierBalanceInsufficient, '预存款不足要单独标出来，路由据此告警并刷新余额');
     }
 
     public function testPlaceOrderHttp200UnrecognizedStatusMapsToUnknown()
@@ -256,6 +258,7 @@ class KasushouDriverTest extends TestCase
         $result = $this->queryOrderWithResponse(['status' => -1, 'ordersn' => null]);
 
         $this->assertSame(UnifiedResult::DefiniteFailure, $result->result);
+        $this->assertTrue($result->supplierBalanceInsufficient);
     }
 
     public function testQueryOrderUnrecognizedStatusMapsToUnknown()
