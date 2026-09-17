@@ -131,6 +131,18 @@ class AdminBootstrapService extends AbstractService
         });
     }
 
+    /**
+     * 把 KNOWN_PERMISSIONS 里的权限补齐到超级管理员角色上（缺的权限行一并建出来）。
+     * 新增权限编码后，已有的超级管理员账号不会自动拿到——createSuperAdmin() 只在
+     * 新建账号时顺带补一次——部署后执行 `admin:sync-permissions` 调这里。幂等。
+     *
+     * @return int 这次新授予的权限数
+     */
+    public function syncSuperAdminPermissions(): int
+    {
+        return Db::transaction(fn () => $this->ensureRoleHasKnownPermissions($this->ensureSuperAdminRole()));
+    }
+
     private function validate(string $username, string $password): void
     {
         if ($username === '') {
@@ -167,8 +179,12 @@ class AdminBootstrapService extends AbstractService
         ]);
     }
 
-    private function ensureRoleHasKnownPermissions(AdminRole $role): void
+    /**
+     * @return int 新授予的权限数
+     */
+    private function ensureRoleHasKnownPermissions(AdminRole $role): int
     {
+        $granted = 0;
         foreach (self::KNOWN_PERMISSIONS as $definition) {
             $permission = $this->adminPermissionDao->findByCode($definition['code']);
             if (! $permission) {
@@ -176,7 +192,7 @@ class AdminBootstrapService extends AbstractService
             }
 
             // 先查后插而不是直接 create() 再 catch 唯一约束冲突：这个方法只会被
-            // CreateAdminCommand 这个单进程、串行执行的 CLI 命令调用，不存在并发写入
+            // admin:create / admin:sync-permissions 这两个单进程、串行执行的 CLI 命令调用，不存在并发写入
             // 同一个 (role_id, permission_id) 的场景，先查后插足够幂等，也比 try/catch
             // 唯一约束异常更直白。
             $alreadyGranted = $this->adminRolePermissionDao->newQuery()
@@ -189,7 +205,10 @@ class AdminBootstrapService extends AbstractService
                     'role_id' => $role->id,
                     'permission_id' => $permission->id,
                 ]);
+                ++$granted;
             }
         }
+
+        return $granted;
     }
 }

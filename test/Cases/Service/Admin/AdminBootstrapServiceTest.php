@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace HyperfTest\Cases\Service\Admin;
 
+use App\Dao\AdminRolePermissionDao;
 use App\Model\AdminPermission;
 use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
@@ -21,8 +22,8 @@ use Hyperf\Testing\TestCase;
 use InvalidArgumentException;
 
 /**
- * App\Service\Admin\AdminBootstrapService::createSuperAdmin()，被
- * App\Command\CreateAdminCommand 调用的一次性引导逻辑。测试直接打 Service，
+ * App\Service\Admin\AdminBootstrapService::createSuperAdmin() / syncSuperAdminPermissions()，被
+ * App\Command\CreateAdminCommand / SyncAdminPermissionsCommand 调用的引导逻辑。测试直接打 Service，
  * 不通过控制台命令派发（这个项目没有先例通过真实调用 #[Command] 类来测试，
  * 直接测 Service 更贴近这个代码库一贯「测 Service 而不是测薄 Controller/Command」
  * 的风格，也省去处理 Symfony Console 输入/输出的样板代码——CreateAdminCommand
@@ -185,6 +186,31 @@ class AdminBootstrapServiceTest extends TestCase
         // 密码校验失败必须在任何 DB 写入之前发生：如果角色本来不存在，
         // 这次失败的调用不应该把它建出来。
         $this->assertSame($roleExistedBefore, AdminRole::where('name', self::ROLE_NAME)->exists());
+    }
+
+    /**
+     * 已有的超级管理员账号在新增权限编码后，靠 syncSuperAdminPermissions() 补齐，
+     * 重复执行不会重复授予。
+     */
+    public function testSyncGrantsMissingKnownPermissionsToExistingSuperAdminAndIsIdempotent()
+    {
+        $this->rememberOwnershipBeforeCall();
+        $service = $this->getContainer()->get(AdminBootstrapService::class);
+        $admin = $service->createSuperAdmin($this->uniqueUsername(), 'a-strong-password');
+        $this->adminUserIds[] = $admin->id;
+
+        // 模拟"上线了一个新权限，但角色上还没有"：把 merchant.view 的授权拿掉
+        $permission = AdminPermission::where('code', self::PERMISSION_CODE)->firstOrFail();
+        AdminRolePermission::where('role_id', $admin->role_id)->where('permission_id', $permission->id)->delete();
+        $dao = $this->getContainer()->get(AdminRolePermissionDao::class);
+        $this->assertFalse($dao->roleHasPermission($admin->role_id, self::PERMISSION_CODE));
+
+        $this->assertSame(1, $service->syncSuperAdminPermissions());
+        $this->assertTrue($dao->roleHasPermission($admin->role_id, self::PERMISSION_CODE));
+        $this->assertTrue($dao->roleHasPermission($admin->role_id, 'order.resolve'), '新加的订单权限也在已知权限里');
+
+        $this->assertSame(0, $service->syncSuperAdminPermissions());
+        $this->assertSame(1, AdminRolePermission::where('role_id', $admin->role_id)->where('permission_id', $permission->id)->count());
     }
 
     private function uniqueUsername(): string
