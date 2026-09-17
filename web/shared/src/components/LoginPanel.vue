@@ -41,6 +41,9 @@ async function onSubmit() {
         </el-form-item>
         <el-button type="primary" size="large" class="submit" native-type="submit" :loading="loading">登录</el-button>
       </el-form>
+      <div v-if="$slots.footer" class="footer">
+        <slot name="footer" />
+      </div>
     </el-card>
   </div>
 </template>
@@ -68,5 +71,11 @@ async function onSubmit() {
 
 .submit {
   width: 100%;
+}
+
+.footer {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 14px;
 }
 </style>

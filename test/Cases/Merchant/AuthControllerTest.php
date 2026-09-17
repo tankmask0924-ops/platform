@@ -247,6 +247,9 @@ class AuthControllerTest extends HttpTestCase
         $this->assertSame($merchant->phone, $body['phone']);
         $this->assertArrayHasKey('debt_since', $body);
         $this->assertNull($body['debt_since'], '默认不欠款，debt_since 应该是 null');
+        $this->assertSame('0.00', $body['available_balance']);
+        $this->assertSame('0.00', $body['frozen_balance']);
+        $this->assertFalse($body['debt_warning']);
         $this->assertArrayNotHasKey('password', $body);
         $this->assertArrayNotHasKey('app_secret', $body);
         $this->assertArrayNotHasKey('id_card_no', $body);

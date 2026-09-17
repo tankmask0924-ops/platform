@@ -25,5 +25,18 @@ async function onSubmit(form: LoginForm) {
 </script>
 
 <template>
-  <LoginPanel :title="title" :loading="loading" @submit="onSubmit" />
+  <LoginPanel :title="title" :loading="loading" @submit="onSubmit">
+    <template #footer>
+      还没有账号？<router-link :to="{ name: 'register' }">注册商户</router-link>
+      <div class="hint">使用注册时填写的手机号或邮箱登录</div>
+    </template>
+  </LoginPanel>
 </template>
+
+<style scoped>
+.hint {
+  margin-top: 8px;
+  color: #909399;
+  font-size: 12px;
+}
+</style>

@@ -165,6 +165,9 @@ class MerchantControllerTest extends HttpTestCase
         // 跟商户自己的商户后台（永远不回显）行为不同，见 App\Crypto\Encryptor 类注释。
         $this->assertSame('110101199001011234', $body['qualification']['id_card_no']);
         $this->assertSame('pending', $body['qualification']['status']);
+        $this->assertSame('0.00', $body['available_balance']);
+        $this->assertSame('0.00', $body['frozen_balance']);
+        $this->assertNull($body['debt_since']);
     }
 
     public function testDetailForNonexistentMerchantReturns404()

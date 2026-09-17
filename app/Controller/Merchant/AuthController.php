@@ -16,6 +16,7 @@ use App\Controller\AbstractController;
 use App\Middleware\MerchantAuthMiddleware;
 use App\Model\Merchant;
 use App\Service\Merchant\AuthService;
+use App\Service\Merchant\BalanceService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
@@ -40,6 +41,9 @@ class AuthController extends AbstractController
 {
     #[Inject]
     protected AuthService $authService;
+
+    #[Inject]
+    protected BalanceService $balanceService;
 
     #[PostMapping(path: 'register')]
     public function register(): array
@@ -75,10 +79,12 @@ class AuthController extends AbstractController
             'phone' => $merchant->phone,
             'email' => $merchant->email,
             'level_id' => $merchant->level_id,
+            'available_balance' => $merchant->available_balance,
+            'frozen_balance' => $merchant->frozen_balance,
             // requirements.md 4.5「负余额」：非 null 表示商户当前欠款、下单已被
-            // 暂停，商户后台前端将来靠这个字段做"醒目提示尽快充值"（本任务只需要
-            // 暴露字段，UI 本身不在这次任务范围）。
+            // 暂停，商户后台首页据此醒目提示尽快充值；debt_warning 表示欠款已超过预警线。
             'debt_since' => $merchant->debt_since,
+            'debt_warning' => $this->balanceService->isOverDebtWarningThreshold($merchant),
         ];
     }
 }
