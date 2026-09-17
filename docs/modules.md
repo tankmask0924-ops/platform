@@ -312,7 +312,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商管理：配置 CRUD（新建/列表/详情/修改/启用禁用，requirements.md 6.3） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Admin\SupplierAdminService` | ✅ |
 | 供应商管理：商品映射（新建/列表/改价（必留痕）/优先级/启停，requirements.md 6.4） | ✅ `App\Controller\Admin\ProductMappingController` | ✅ `App\Service\Admin\ProductMappingAdminService` | ✅ |
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | ⬜ | ⬜ | ⬜ |
-| 商户等级：CRUD / 各业务线比例设置 | ⬜ | ⬜ | ⬜ |
+| 商户等级：CRUD / 各业务线比例设置 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。**仍未做**：商品单独覆盖某等级比例（`product_level_rebates` 的后台接口），单独的后续任务 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | ⬜ | ⬜ | ⬜（生成+结算的业务逻辑已在第 1 节"返佣待到账生成 + 到期结算"完成，这行剩下的是后台管理 UI——`rebate_due_period_days` 目前只能直接改 `system_settings` 表、没有编辑接口，也没有"商户返佣明细/供应商返佣明细"的查询列表） |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | ⬜ | ⬜ | ⬜ |
@@ -464,9 +464,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 0 | 0 | 5 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
 | 商户管理后台 | 16 | 6 | 0 | 10 |
-| 系统管理后台 | 19 | 6 | 0 | 13 |
+| 系统管理后台 | 19 | 7 | 0 | 12 |
 | 异步任务与定时任务 | 10 | 1 | 0 | 9 |
-| **合计** | **106** | **28** | **5** | **73** |
+| **合计** | **106** | **29** | **5** | **72** |
 
 **建议开发顺序**（按 [10. 分期计划](requirements.md#10-分期计划)）：
 
