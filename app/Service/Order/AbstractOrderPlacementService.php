@@ -12,30 +12,21 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
-use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
-use App\Dao\SupplierDao;
-use App\Dao\SupplierProductDao;
 use App\Exception\OpenApiException;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Model\Product;
-use App\Model\Supplier;
-use App\Model\SupplierProduct;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
 use App\Service\Product\RebateCalculator;
-use App\Supplier\DriverResult;
-use App\Supplier\SupplierDriverFactory;
-use App\Supplier\UnifiedResult;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
 use RuntimeException;
-use Throwable;
 
 /**
  * 话费（`RechargeOrderPlacementService`）、卡券（`CardOrderPlacementService`）
@@ -45,9 +36,7 @@ use Throwable;
  * 尝试记录——是共享的，只有下单参数不同）。
  *
  * 【抽取边界，抽了什么、没抽什么】按任务要求，"genuinely business-line-agnostic"
- * 的部分整段搬进来：幂等重放查询、订单号生成与建单竞态处理、冻结、按优先级路由
- * 供应商 + 只在明确失败换下一家的循环、每次尝试记 `OrderAttempt`、结果收尾时
- * 预置 `cost_price` 估算值再交给 `OrderResultApplier`、响应数组的形状。
+ * 的部分整段搬进来：幂等重放查询、订单号生成与建单竞态处理、冻结、响应数组的形状。
  * **没有**抽的东西——因为它们本质上是业务线专属，不是"共享逻辑长在两个类里"：
  * 商品校验（`business_line`/`card_type` 取值不同）、`order_recharges` 行怎么建
  * （`recharge_account` 是否必填不同）、动态参数（`recharge_account`）本身的必填/
@@ -57,13 +46,13 @@ use Throwable;
  * `recharge_account` 永远必填（非 null），卡券的直充类必填、卡密类禁止携带
  * （kasushou.md"卡密商品不传"）。共享的路由/失败切换循环不关心"这个字段该不该
  * 必填"这条业务规则本身，只关心"这次下单有没有一个动态参数要透传给供应商"——
- * 用 `null` 表达"没有"，直接决定 `attemptSupplier()` 传给驱动的 `attach` 数组
+ * 用 `null` 表达"没有"，直接决定路由传给驱动的 `attach` 数组
  * 是否为空数组，不需要额外的布尔开关。
  *
- * 【`isCardProduct()` 抽象方法】卡速售驱动的 `placeOrder()`/`queryOrder()`/
- * `parseCallback()` 都要求调用方显式传 `isCardProduct`（`KasushouStatusMapper`
- * 内部靠这个标志决定"卡密类商品必须等到 `card_list` 真的到了才算成功"），这个值
- * 只由业务线决定、不随请求变化，收窄成一个每个子类各答一次的抽象方法。
+ * 【路由】按优先级选供应商、明确失败换下一家、切换时长、尝试记录都在
+ * `App\Service\Order\SupplierRouter`，异步回调失败后的继续切换也走它；本类只负责
+ * 下单前预检（没有可用供应商直接拒绝，不冻结）和同步下单时调用一次。卡速售驱动
+ * 需要的 `isCardProduct` 由路由按 `orders.business_line` 决定。
  *
  * 【`orderNoPrefix()`】只是为了保留 `RechargeOrderPlacementService` 原有的
  * `'R'` 前缀完全不变（回归要求），卡券另起一个 `'C'` 前缀，纯粹为了人工在数据库/
@@ -73,17 +62,6 @@ abstract class AbstractOrderPlacementService extends AbstractService
 {
     private const MAX_ORDER_NO_RETRIES = 5;
 
-    /**
-     * App\Supplier\UnifiedResult 到 order_attempts.result 字符串的映射，跟
-     * App\Model\OrderAttempt 类注释里记录的是同一份约定，改动请两处一起改。
-     */
-    private const RESULT_MAP = [
-        'Success' => 'success',
-        'DefiniteFailure' => 'failed',
-        'Processing' => 'processing',
-        'Unknown' => 'unknown',
-    ];
-
     #[Inject]
     protected OrderDao $orderDao;
 
@@ -91,16 +69,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
     protected OrderRechargeDao $orderRechargeDao;
 
     #[Inject]
-    protected OrderAttemptDao $orderAttemptDao;
-
-    #[Inject]
     protected ProductDao $productDao;
-
-    #[Inject]
-    protected SupplierDao $supplierDao;
-
-    #[Inject]
-    protected SupplierProductDao $supplierProductDao;
 
     #[Inject]
     protected BalanceService $balanceService;
@@ -112,10 +81,7 @@ abstract class AbstractOrderPlacementService extends AbstractService
     protected MerchantNotifyService $merchantNotifyService;
 
     #[Inject]
-    protected SupplierDriverFactory $supplierDriverFactory;
-
-    #[Inject]
-    protected OrderResultApplier $orderResultApplier;
+    protected SupplierRouter $supplierRouter;
 
     /**
      * `orders.business_line` 该写哪个值，见类注释。
@@ -126,11 +92,6 @@ abstract class AbstractOrderPlacementService extends AbstractService
      * `generateOrderNo()` 用的单字符前缀，见类注释。
      */
     abstract protected function orderNoPrefix(): string;
-
-    /**
-     * 每次驱动调用（`placeOrder()`）该传的 `isCardProduct`，见类注释。
-     */
-    abstract protected function isCardProduct(): bool;
 
     /**
      * 幂等重放快速路径：明显的重复请求（比如商户网络库自己重试）直接返回已有
@@ -243,54 +204,23 @@ abstract class AbstractOrderPlacementService extends AbstractService
     }
 
     /**
-     * 按优先级迭代 supplier_products 映射行，调用驱动下单，落 OrderAttempt，
-     * 按 requirements.md 6.2「只有明确失败才换下一个供应商」决定继续还是停止，
-     * 最后把结果落到 Order 行上。`$rechargeAccount` 为 null 表示这次下单没有
-     * 动态参数要透传给供应商（卡密类卡券），见类注释。
+     * 订单已建好、已冻结：交给 SupplierRouter 按固定优先级路由并落结果。
+     * `$rechargeAccount` 为 null 表示这次下单没有动态参数要透传给供应商（卡密类卡券）。
      */
     protected function routeAndFinalize(Order $order, Product $product, ?string $rechargeAccount): void
     {
-        $mappings = $this->supplierProductDao->listForProduct($product->id);
-
-        $attemptNo = 0;
-        $lastMapping = null;
-        $lastDriverResult = null;
-
-        foreach ($mappings as $mapping) {
-            if (! $this->isMappingEligible($mapping)) {
-                continue;
-            }
-
-            $supplier = $this->supplierDao->find($mapping->supplier_id);
-            if ($supplier === null || $supplier->status !== 'active') {
-                continue;
-            }
-
-            ++$attemptNo;
-            $driverResult = $this->attemptSupplier($order, $mapping, $supplier, $rechargeAccount, $attemptNo);
-            $lastMapping = $mapping;
-            $lastDriverResult = $driverResult;
-
-            if ($driverResult->result !== UnifiedResult::DefiniteFailure) {
-                // 非明确失败（成功/处理中/未知）：这个供应商拿下了这笔订单，停止路由。
-                break;
-            }
-        }
-
-        $this->finalizeOrder($order, $product, $lastMapping, $lastDriverResult);
+        $this->supplierRouter->routeNewOrder($order, $product, $rechargeAccount);
     }
 
     /**
-     * 占位实现：供应商回调接收路由（`/notify/{code}`）本身已经建好
-     * （`App\Controller\NotifySupplierController`），但这里仍然没有接入"给每个
-     * 供应商生成带随机令牌的回调地址"这个机制（不在本类任何一个子类对应任务的
-     * 范围内），这里只需要给 `KasushouDriver::placeOrder()` 的 `url` 参数一个
-     * 语法合法的值（卡速售下单请求体的 `url` 字段不能省），不影响同步下单结果
-     * 判定。
+     * requirements.md 6.5：没有可用供应商时下单接口直接返回失败，不建单、不冻结余额。
+     * 调用方必须放在商品校验之后、建订单行之前。
      */
-    protected function buildSupplierNotifyUrl(Supplier $supplier): string
+    protected function assertProductHasSupplier(Product $product): void
     {
-        return sprintf('https://platform.example.com/notify/%s', $supplier->code);
+        if (! $this->supplierRouter->hasEligibleSupplier($product)) {
+            throw new OpenApiException(ErrorCode::ProductUnavailable);
+        }
     }
 
     /**
@@ -318,131 +248,5 @@ abstract class AbstractOrderPlacementService extends AbstractService
     private function generateOrderNo(): string
     {
         return $this->orderNoPrefix() . date('YmdHis') . random_int(100000, 999999);
-    }
-
-    /**
-     * requirements.md 6.3 + 6.5：只路由到在售、（不限库存或库存>0）的映射行，
-     * 且所属供应商本身状态是 active——被禁用的供应商不接新单。
-     */
-    private function isMappingEligible(SupplierProduct $mapping): bool
-    {
-        if ($mapping->status !== 'active') {
-            return false;
-        }
-
-        if ($mapping->stock !== null && $mapping->stock <= 0) {
-            return false;
-        }
-
-        return true;
-    }
-
-    private function attemptSupplier(
-        Order $order,
-        SupplierProduct $mapping,
-        Supplier $supplier,
-        ?string $rechargeAccount,
-        int $attemptNo
-    ): DriverResult {
-        $externalOrderNo = $order->order_no . '-' . $attemptNo;
-
-        try {
-            $driver = $this->supplierDriverFactory->build($supplier);
-
-            $attach = $rechargeAccount !== null
-                ? [$this->resolveAttachField($mapping) => $rechargeAccount]
-                : [];
-
-            $driverResult = $driver->placeOrder(
-                externalOrderNo: $externalOrderNo,
-                supplierGoodsId: $mapping->supplier_product_code,
-                safePrice: $order->sale_price,
-                notifyUrl: $this->buildSupplierNotifyUrl($supplier),
-                attach: $attach,
-                quantity: 1,
-                isCardProduct: $this->isCardProduct(),
-            );
-        } catch (Throwable $e) {
-            // 驱动构造/解密失败（比如供应商配置损坏）：跟"拿不准一律 Unknown，
-            // 不猜明确失败"是同一个原则的延伸——一个平台侧的配置问题不该被误判成
-            // "供应商明确拒单"进而永远跳过这个供应商,也不该让整个下单请求 500。
-            $driverResult = new DriverResult(
-                result: UnifiedResult::Unknown,
-                failReason: static::class . ': failed to dispatch to supplier driver: ' . $e->getMessage(),
-                rawRequest: ['external_orderno' => $externalOrderNo],
-            );
-        }
-
-        $this->orderAttemptDao->create([
-            'order_id' => $order->id,
-            'supplier_id' => $supplier->id,
-            'attempt_no' => $attemptNo,
-            'result' => self::RESULT_MAP[$driverResult->result->name],
-            'fail_reason' => $driverResult->failReason,
-            'request_snapshot' => $driverResult->rawRequest,
-            'response_snapshot' => $driverResult->rawResponse,
-        ]);
-
-        return $driverResult;
-    }
-
-    /**
-     * supplier_products.param_mapping 形如 `{"recharge_account": "<供应商侧字段名>"}`
-     * ——两条业务线的动态参数在请求层都叫 `recharge_account`（任务里明确要求卡券
-     * 直充类沿用这个字段名，保持一致性），所以这里的映射键名不需要按业务线区分。
-     * 缺失/为空一律退回直接用 'recharge_account' 作为字段名——这是本方法的
-     * fallback 行为，不是猜供应商真实需要的字段名。
-     */
-    private function resolveAttachField(SupplierProduct $mapping): string
-    {
-        $mapped = $mapping->param_mapping['recharge_account'] ?? null;
-
-        return is_string($mapped) && $mapped !== '' ? $mapped : 'recharge_account';
-    }
-
-    /**
-     * "只有明确失败才换下一个供应商"这条失败换供应商的循环逻辑本身在
-     * `routeAndFinalize()` 里，这里只做"路由循环选出的最终结果该怎么落到订单上"
-     * 这一步单次判断，状态转换+余额+通知那部分共享逻辑已经抽到
-     * `App\Service\Order\OrderResultApplier`（另一个调用方是
-     * `App\Service\Order\SupplierCallbackService`），这里只负责"一次都没试成"
-     * 这个 `OrderResultApplier` 管不到的特殊分支（连 `DriverResult`/供应商都不
-     * 存在，没法调用 `apply()`），以及把这次尝试对应映射行的估算成本价预置到
-     * 订单上。`$product` 是下单时已经查过的商品行，直接透传给
-     * `OrderResultApplier::apply()`，成功时用来生成返佣待到账记录
-     * （requirements.md 5.4），不需要 `OrderResultApplier` 再反查一次。
-     */
-    private function finalizeOrder(Order $order, Product $product, ?SupplierProduct $mapping, ?DriverResult $driverResult): void
-    {
-        if ($mapping === null || $driverResult === null) {
-            // 一次都没试成——要么这个商品压根没有映射行，要么全部都被状态/库存/
-            // 供应商禁用过滤掉了。等效于"路由后全部明确失败"，且没有供应商/驱动
-            // 结果可言，不经过 OrderResultApplier（它的签名要求一个真实的
-            // DriverResult + supplierId，这里两者都没有）。
-            $this->finalizeAsNoSupplierAvailable($order);
-            return;
-        }
-
-        // 预置这次尝试对应映射行的估算成本价（只改内存属性，不 save()）：
-        // OrderResultApplier::apply() 内部统一 save() 时会把它跟状态字段一起写进
-        // 同一条 UPDATE——Success 分支如果驱动给了 actualCost 会覆盖掉这个估算值，
-        // DefiniteFailure/Processing/Unknown 分支保留它作为最终 cost_price，跟被
-        // 抽取前的行为完全一致。
-        $order->fill(['cost_price' => $mapping->cost_price]);
-
-        $this->orderResultApplier->apply($order, $driverResult, $mapping->supplier_id, $product);
-    }
-
-    private function finalizeAsNoSupplierAvailable(Order $order): void
-    {
-        $order->fill([
-            'status' => 'failed',
-            'cost_price' => '0.00',
-            'fail_reason' => ErrorCode::NoSupplierAvailable->message(),
-            'finished_at' => date('Y-m-d H:i:s'),
-        ])->save();
-
-        $this->balanceService->unfreeze($order->merchant_id, $order->id, $order->frozen_amount);
-        $this->merchantNotifyService->notify($order->id);
     }
 }

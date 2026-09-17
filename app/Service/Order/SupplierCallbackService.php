@@ -12,14 +12,18 @@ declare(strict_types=1);
 
 namespace App\Service\Order;
 
+use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
 use App\Dao\SupplierDao;
 use App\Exception\CallbackOrderNotFoundException;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
+use App\Model\Order;
 use App\Service\AbstractService;
 use App\Supplier\SupplierDriverFactory;
+use App\Supplier\UnifiedResult;
 use Hyperf\Di\Annotation\Inject;
+use Hyperf\Logger\LoggerFactory;
 
 /**
  * 供应商回调统一入口的业务逻辑（requirements.md 6.8，docs/modules.md 第 1 节
@@ -41,12 +45,24 @@ use Hyperf\Di\Annotation\Inject;
  * 自己的既有设计决定（"回调只作为触发"，见该方法类注释），本类只是调用方，不重复
  * 这个决定的理由，照抄不重新发明。
  *
- * 【`external_orderno` -> `order_no` 的截取规则】`RechargeOrderPlacementService::
- * attemptSupplier()` 生成 `external_orderno` 的方式是
+ * 【`external_orderno` -> `order_no` 的截取规则】`SupplierRouter` 生成
+ * `external_orderno` 的方式是
  * `"{$order->order_no}-{$attemptNo}"`，而 `order_no` 本身（见
  * `RechargeOrderPlacementService::generateOrderNo()`：`'R' . date('YmdHis') .
  * random_int(100000, 999999)`）不含 `-`，所以从第一个 `-` 前面截出来的子串就是
- * 原始 `order_no`，不需要更复杂的解析。
+ * 原始 `order_no`，不需要更复杂的解析；`-` 后面是这次尝试的 `attempt_no`。
+ *
+ * 【明确失败 -> 交给路由继续切换】受理后异步回调失败也要换下一家供应商
+ * （requirements.md 6.5），在切换时长内由 `SupplierRouter::continueAfterDefiniteFailure()`
+ * 决定换不换；成功/处理中/未知直接交给 `OrderResultApplier`。
+ *
+ * 【过期回调】订单已经切到后面的尝试之后，前一次尝试的回调（包括供应商按间隔重推的
+ * 同一个失败回调）按 `attempt_no`/供应商跟最新一次尝试对不上来识别，只回复 `ok`，
+ * 不再应用——否则同一笔订单会被重复切换，或者被旧结果覆盖。
+ *
+ * 【卡券订单按卡券解析】卡速售驱动需要知道是不是卡密商品（卡密没到不算成功）。
+ * 验签之前先用回调里原始的 `external_orderno` 找到订单，只用来决定 `isCardProduct`；
+ * 验签后驱动查询得到的权威单号必须指向同一笔订单，否则按找不到订单处理。
  *
  * 【幂等：只在订单仍是 `processing` 时才应用结果】`App\Service\Merchant\
  * BalanceService::deduct()`/`unfreeze()` 本身已经是幂等的（`merchant_balance_logs.
@@ -91,10 +107,19 @@ class SupplierCallbackService extends AbstractService
     protected OrderDao $orderDao;
 
     #[Inject]
+    protected OrderAttemptDao $orderAttemptDao;
+
+    #[Inject]
     protected SupplierDriverFactory $supplierDriverFactory;
 
     #[Inject]
     protected OrderResultApplier $orderResultApplier;
+
+    #[Inject]
+    protected SupplierRouter $supplierRouter;
+
+    #[Inject]
+    protected LoggerFactory $loggerFactory;
 
     /**
      * @param array<string, mixed> $payload
@@ -109,14 +134,10 @@ class SupplierCallbackService extends AbstractService
 
         $driver = $this->supplierDriverFactory->build($supplier);
 
-        // 本类的调用方（RechargeOrderPlacementService）目前只处理话费业务线，
-        // isCardProduct 恒为 false——跟 RechargeOrderPlacementService::
-        // attemptSupplier() 下单时传的值完全一致。这是本类的已知限制：一旦这个
-        // 代码库开始用同一个回调入口处理卡券订单，这里必须先按 order_no 查出订单
-        // 归属的商品类型，再决定传 true 还是 false，否则卡密商品的状态 3 会在
-        // card_list 还没到位时就被误判成 Success（见 KasushouDriver::
-        // parseCallback() 类注释同样的告诫）。
-        $result = $driver->parseCallback($payload, $headers, false);
+        // 未验签的单号只用来选择解析方式，不据此做任何状态变更
+        $claimed = $this->findOrderByExternalOrderNo($payload['external_orderno'] ?? null);
+
+        $result = $driver->parseCallback($payload, $headers, $claimed?->business_line === 'card');
         if ($result === null) {
             throw new InvalidSupplierCallbackSignatureException(
                 'SupplierCallbackService: callback signature verification failed for supplier "' . $supplierCode . '".'
@@ -130,6 +151,62 @@ class SupplierCallbackService extends AbstractService
             );
         }
 
+        [$orderNo, $attemptNo] = $this->splitExternalOrderNo($externalOrderNo);
+
+        $order = $this->orderDao->findByOrderNo($orderNo);
+        if ($order === null || ($claimed !== null && $claimed->id !== $order->id)) {
+            throw new CallbackOrderNotFoundException(
+                'SupplierCallbackService: no order found for order_no "' . $orderNo . '" (external_orderno "' . $externalOrderNo . '").'
+            );
+        }
+
+        if (in_array($order->status, self::TERMINAL_STATUSES, true)) {
+            // 订单已经是终态：供应商重试同一个回调，或者别的路径已经先一步推进了。
+            return self::KASUSHOU_SUCCESS_REPLY;
+        }
+
+        $latest = $this->orderAttemptDao->findLatestForOrder($order->id);
+        if ($latest !== null) {
+            if ((int) $latest->attempt_no !== $attemptNo || (int) $latest->supplier_id !== (int) $supplier->id) {
+                $this->loggerFactory->get('order')->info('stale supplier callback ignored', [
+                    'order_id' => $order->id,
+                    'callback_attempt_no' => $attemptNo,
+                    'callback_supplier_id' => $supplier->id,
+                    'latest_attempt_no' => $latest->attempt_no,
+                ]);
+
+                return self::KASUSHOU_SUCCESS_REPLY;
+            }
+
+            $latest->fill([
+                'result' => SupplierRouter::RESULT_MAP[$result->result->name],
+                'fail_reason' => $result->failReason ?? $latest->fail_reason,
+            ])->save();
+        }
+
+        if ($result->result === UnifiedResult::DefiniteFailure) {
+            $this->supplierRouter->continueAfterDefiniteFailure($order, $result, $supplier->id);
+        } else {
+            $this->orderResultApplier->apply($order, $result, $supplier->id);
+        }
+
+        return self::KASUSHOU_SUCCESS_REPLY;
+    }
+
+    private function findOrderByExternalOrderNo(mixed $externalOrderNo): ?Order
+    {
+        if (! is_string($externalOrderNo) || ! str_contains($externalOrderNo, '-')) {
+            return null;
+        }
+
+        return $this->orderDao->findByOrderNo($this->splitExternalOrderNo($externalOrderNo)[0]);
+    }
+
+    /**
+     * @return array{0: string, 1: null|int} order_no 和 attempt_no（后缀不是数字时为 null）
+     */
+    private function splitExternalOrderNo(string $externalOrderNo): array
+    {
         $dashPosition = strpos($externalOrderNo, '-');
         if ($dashPosition === false) {
             throw new CallbackOrderNotFoundException(
@@ -137,24 +214,11 @@ class SupplierCallbackService extends AbstractService
             );
         }
 
-        $orderNo = substr($externalOrderNo, 0, $dashPosition);
+        $suffix = substr($externalOrderNo, $dashPosition + 1);
 
-        $order = $this->orderDao->findByOrderNo($orderNo);
-        if ($order === null) {
-            throw new CallbackOrderNotFoundException(
-                'SupplierCallbackService: no order found for order_no "' . $orderNo . '" (external_orderno "' . $externalOrderNo . '").'
-            );
-        }
-
-        if (in_array($order->status, self::TERMINAL_STATUSES, true)) {
-            // 订单已经是终态：这是供应商重试同一个回调，或者本类未来的兄弟任务
-            // （定时查询）已经先一步把订单推进到终态了。两种情况都不应该重新
-            // 应用结果，直接回复 ok，让供应商停止重试。
-            return self::KASUSHOU_SUCCESS_REPLY;
-        }
-
-        $this->orderResultApplier->apply($order, $result, $supplier->id);
-
-        return self::KASUSHOU_SUCCESS_REPLY;
+        return [
+            substr($externalOrderNo, 0, $dashPosition),
+            ctype_digit($suffix) ? (int) $suffix : null,
+        ];
     }
 }

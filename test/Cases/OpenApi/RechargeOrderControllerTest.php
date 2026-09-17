@@ -32,9 +32,9 @@ use HyperfTest\HttpTestCase;
  * 这里不再重复 test/Cases/Service/Order/RechargeOrderPlacementServiceTest.php 已经
  * 覆盖的编排细节（路由/失败切换/幂等的驱动调用次数断言），那些用真实 KasushouDriver
  * 打真实 HTTP 是做不到的（会真的发网络请求）。这里只验证 Controller 这一层：签名
- * 中间件真的把 Merchant 传下去了、输入校验、响应信封的形状——真正会调用供应商驱动
- * 的下单场景改成"该商品没有任何供应商映射"这种不需要 mock 驱动就能触发的分支
- * （无可用供应商 -> 明确失败），一样能验证完整链路打通、不 500。
+ * 中间件真的把 Merchant 传下去了、输入校验、响应信封的形状——需要真正建单的场景
+ * 用一个 driver 未实现的供应商（见 createUnreachableSupplierFor()），不需要 mock
+ * 驱动就能走完整链路、不 500。
  *
  * @internal
  * @coversNothing
@@ -84,7 +84,7 @@ class RechargeOrderControllerTest extends HttpTestCase
         parent::tearDown();
     }
 
-    public function testNoEligibleSupplierEndsAsCleanFailedOrderNot500()
+    public function testNoEligibleSupplierIsRejectedWithoutCreatingOrderOrFreezing()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -103,15 +103,13 @@ class RechargeOrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(0, $body['code']);
-        $this->assertSame('failed', $body['data']['status']);
-        $this->assertSame($merchantOrderNo, $body['data']['merchant_order_no']);
-        $this->assertSame(43002, $body['data']['fail_code']);
-        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
+        $this->assertSame(42006, $body['code']);
+        $this->assertNull($body['data']);
+        $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
 
-        $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
-        $this->assertNotNull($order);
-        $this->orderIds[] = $order->id;
+        $merchant->refresh();
+        $this->assertSame('100.00', $merchant->available_balance);
+        $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
     public function testIdempotentResubmissionThroughRealHttpReturnsSameOrder()
@@ -119,6 +117,7 @@ class RechargeOrderControllerTest extends HttpTestCase
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
         $product = $this->createProduct('10.00');
+        $this->createUnreachableSupplierFor($product);
 
         $merchantOrderNo = 'MO-' . uniqid('', true);
         $payload = [
@@ -204,6 +203,35 @@ class RechargeOrderControllerTest extends HttpTestCase
         return $this->client->request('POST', '/open-api/orders/recharge', [
             'form_params' => $this->signedParams($appKey, $secret, $extra),
         ]);
+    }
+
+    /**
+     * 让下单能真正建单但不发网络请求：driver 取一个没实现的值，SupplierDriverFactory
+     * 构造驱动时抛异常，SupplierRouter 按"结果未知"处理，订单停在 processing。
+     */
+    private function createUnreachableSupplierFor(Product $product): void
+    {
+        $unique = uniqid('recharge_ctrl_test_supplier_', true);
+
+        $supplier = Supplier::create([
+            'name' => $unique,
+            'code' => substr(md5($unique), 0, 24),
+            'business_line' => $product->business_line,
+            'driver' => 'unimplemented',
+            'config' => 'unused',
+            'status' => 'active',
+        ]);
+        $this->supplierIds[] = $supplier->id;
+
+        $mapping = SupplierProduct::create([
+            'product_id' => $product->id,
+            'supplier_id' => $supplier->id,
+            'supplier_product_code' => 'GOODS-CTRL',
+            'cost_price' => '1.00',
+            'priority' => 1,
+            'status' => 'active',
+        ]);
+        $this->supplierProductIds[] = $mapping->id;
     }
 
     private function signedParams(string $appKey, string $secret, array $extra): array

@@ -35,31 +35,20 @@ use Hyperf\Logger\LoggerFactory;
 /**
  * 把一次驱动调用/查询得到的 `DriverResult` 应用到一笔已存在的 `Order` 上——
  * 从 `App\Service\Order\RechargeOrderPlacementService` 抽出来的共享逻辑
- * （docs/modules.md 第 1 节"供应商回调入口与验签框架"任务），现在有两个调用方：
- * 1. `RechargeOrderPlacementService::routeAndFinalize()`：同步下单路由循环选出
- *    "最终结果"（成功，或者尝试到最后一个供应商仍失败）之后，用这次结果收尾；
- * 2. `App\Service\Order\SupplierCallbackService::handle()`：供应商异步回调把一笔
- *    `processing` 订单推进到终态。
+ * （docs/modules.md 第 1 节"供应商回调入口与验签框架"任务）。调用方是
+ * `App\Service\Order\SupplierRouter`（同步下单和异步切换选出最终结果后收尾）和
+ * `App\Service\Order\SupplierCallbackService`（回调给出成功/处理中/未知时直接应用）。
  *
- * 【被抽取出来的只是"状态转换 + 余额 + 通知"这一段，故意不包含失败换供应商的
- * 循环】这是本类存在的核心边界，必须先讲清楚：`RechargeOrderPlacementService::
- * routeAndFinalize()` 遇到 `DefiniteFailure` 时会换下一个 `supplier_products`
- * 映射行重试（requirements.md 6.2"只有明确失败才换下一个供应商"），这个"换下一
- * 家"的循环逻辑本身**没有**被搬进这个类，原因很简单：一旦订单已经进入
- * `processing`（已经确定性地绑定到某一次供应商尝试、平台也已经把订单号返回给了
- * 商户），后续任何回调/查询报告的 `DefiniteFailure` 说的是"这一笔订单definite 失败
- * 了"，不是"换个供应商重试"——商户已经拿着这个平台订单号了，不可能在背后偷偷换成
- * 另一个供应商的另一次下单去顶替它。所以本类的 `apply()` 只做"这次结果落到这笔
- * 订单上该怎么变"这一步单次判断，循环怎么走（选下一个映射行、判断要不要继续）
- * 仍然完全留在 `RechargeOrderPlacementService::routeAndFinalize()`/
- * `finalizeOrder()` 里，不属于这个类的职责。
+ * 【只做"状态转换 + 余额 + 通知"这一段，不含失败换供应商的循环】明确失败之后要不要
+ * 换下一家（包括受理后异步回调失败，requirements.md 6.5）由 SupplierRouter 决定；
+ * 到了这里的 `DefiniteFailure` 已经是"不再切换"的最终结果，直接失败、解冻。
  *
  * 【`cost_price` 的"预置值"约定，调用方必须遵守】`apply()` 的入参故意没有"这次
  * 尝试对应的映射行成本价"这个字段（只有 `supplierId`，没有 `SupplierProduct`）——
  * `App\Service\Order\SupplierCallbackService` 场景下压根没有一个"当前尝试对应的
  * 映射行"概念可传（回调到达时，供应商侧成本价一切都以驱动这次返回的权威结果为准，
  * 不存在"预估成本价"这个中间态）。所以约定是：调用 `apply()` 之前，如果调用方
- * 手上有一个更合适的"预估成本价"（比如 `RechargeOrderPlacementService` 用这次
+ * 手上有一个更合适的"预估成本价"（比如 `SupplierRouter` 用这次
  * 尝试对应映射行的 `supplier_products.cost_price`），应该自己先
  * `$order->fill(['cost_price' => $estimate])`（只改内存属性，不 `save()`），
  * `apply()` 内部对 `Success`/`Processing`/`Unknown` 三种分支都是"驱动这次给了
@@ -92,10 +81,10 @@ use Hyperf\Logger\LoggerFactory;
  * 金额为 0（商品没配返佣，或商户当前等级在商品维度、业务线维度都没有比例）时，
  * 按 5.3/5.4 的规则**不生成任何记录**，不是"生成一条 amount=0 的记录"。
  *
- * 【`Product` 从哪来】两个调用方里只有 `RechargeOrderPlacementService::
- * finalizeOrder()` 手上现成有 `Product`（下单时就查过一次，见该类
- * `validateProduct()`），直接原样传进来，不重复查询；`SupplierCallbackService::
- * handle()` 处理异步回调时手上没有 `Product`，`$product` 传 `null`，
+ * 【`Product` 从哪来】`SupplierRouter` 手上现成有 `Product`（同步下单时下单服务
+ * 已经查过，异步切换时路由自己从 `order_recharges` 查出），直接原样传进来，不重复
+ * 查询；`SupplierCallbackService::handle()` 直接应用回调结果时手上没有 `Product`，
+ * `$product` 传 `null`，
  * `generatePendingRebate()` 这时才按 `order_id` 反查 `order_recharges.product_id`
  * 再查一次 `Product`（`order_recharges` 在下单成功进入路由之前就已经建好一行，
  * 见 `RechargeOrderPlacementService::place()`，回调到达时这行必然已经存在）。

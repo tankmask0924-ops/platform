@@ -79,7 +79,7 @@ class CardOrderControllerTest extends HttpTestCase
         parent::tearDown();
     }
 
-    public function testNoEligibleSupplierEndsAsCleanFailedOrderNot500()
+    public function testNoEligibleSupplierIsRejectedWithoutCreatingOrderOrFreezing()
     {
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
@@ -97,14 +97,13 @@ class CardOrderControllerTest extends HttpTestCase
         $body = json_decode((string) $response->getBody(), true);
 
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(0, $body['code']);
-        $this->assertSame('failed', $body['data']['status']);
-        $this->assertSame(43002, $body['data']['fail_code']);
-        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
+        $this->assertSame(42006, $body['code']);
+        $this->assertNull($body['data']);
+        $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
 
-        $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
-        $this->assertNotNull($order);
-        $this->orderIds[] = $order->id;
+        $merchant->refresh();
+        $this->assertSame('100.00', $merchant->available_balance);
+        $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
     public function testCardSecretProductWithoutRechargeAccountSucceeds()
@@ -112,9 +111,9 @@ class CardOrderControllerTest extends HttpTestCase
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
         $product = $this->createProduct('10.00', 'card_secret');
-        // 无供应商映射行，直接落地"无可用供应商"分支——只用来验证请求形状（不传
-        // recharge_account）能顺利通过 Controller 校验，不代表真的拿到了卡密
-        // （拿卡密的完整链路已经在 CardOrderPlacementServiceTest 用 mock 驱动覆盖）。
+        $this->createUnreachableSupplierFor($product);
+        // 只验证请求形状（不传 recharge_account）能通过 Controller 校验并建单，不代表
+        // 真的拿到了卡密（完整链路在 CardOrderPlacementServiceTest 用 mock 驱动覆盖）。
 
         $merchantOrderNo = 'MO-CARD-' . uniqid('', true);
         $response = $this->postCard($merchant->app_key, $secret, [
@@ -127,9 +126,7 @@ class CardOrderControllerTest extends HttpTestCase
 
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame(0, $body['code']);
-        $this->assertSame('failed', $body['data']['status']);
-        $this->assertSame(43002, $body['data']['fail_code']);
-        $this->assertSame('商品暂时无法供货', $body['data']['fail_reason']);
+        $this->assertSame('processing', $body['data']['status']);
 
         $order = Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first();
         $this->assertNotNull($order);
@@ -178,6 +175,7 @@ class CardOrderControllerTest extends HttpTestCase
         $secret = 'plain-secret-' . uniqid('', true);
         $merchant = $this->createMerchant($secret, '100.00');
         $product = $this->createProduct('10.00', 'direct');
+        $this->createUnreachableSupplierFor($product);
 
         $merchantOrderNo = 'MO-CARD-' . uniqid('', true);
         $payload = [
@@ -242,6 +240,35 @@ class CardOrderControllerTest extends HttpTestCase
         return $this->client->request('POST', '/open-api/orders/card', [
             'form_params' => $this->signedParams($appKey, $secret, $extra),
         ]);
+    }
+
+    /**
+     * 让下单能真正建单但不发网络请求：driver 取一个没实现的值，SupplierDriverFactory
+     * 构造驱动时抛异常，SupplierRouter 按"结果未知"处理，订单停在 processing。
+     */
+    private function createUnreachableSupplierFor(Product $product): void
+    {
+        $unique = uniqid('card_ctrl_test_supplier_', true);
+
+        $supplier = Supplier::create([
+            'name' => $unique,
+            'code' => substr(md5($unique), 0, 24),
+            'business_line' => $product->business_line,
+            'driver' => 'unimplemented',
+            'config' => 'unused',
+            'status' => 'active',
+        ]);
+        $this->supplierIds[] = $supplier->id;
+
+        $mapping = SupplierProduct::create([
+            'product_id' => $product->id,
+            'supplier_id' => $supplier->id,
+            'supplier_product_code' => 'GOODS-CTRL',
+            'cost_price' => '1.00',
+            'priority' => 1,
+            'status' => 'active',
+        ]);
+        $this->supplierProductIds[] = $mapping->id;
     }
 
     private function signedParams(string $appKey, string $secret, array $extra): array

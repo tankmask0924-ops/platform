@@ -56,6 +56,7 @@ enum ErrorCode: int
     case ProductBusinessLineMismatch = 42003;
     case MerchantSuspended = 42004;
     case OrderNotFound = 42005;
+    case ProductUnavailable = 42006;
 
     // 430xx 订单失败原因
     case InsufficientBalance = 43001;
@@ -98,6 +99,7 @@ enum ErrorCode: int
             self::ProductBusinessLineMismatch => '商品不属于该业务线',
             self::MerchantSuspended => '商户当前存在欠款，已暂停下单，请充值补足欠款后再试',
             self::OrderNotFound => '订单不存在',
+            self::ProductUnavailable => '商品暂不可售',
             self::InsufficientBalance => '可用余额不足',
             self::NoSupplierAvailable => '商品暂时无法供货',
             self::OrderFailed => '订单处理失败',

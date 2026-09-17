@@ -38,9 +38,8 @@ use App\OpenApi\ErrorCode;
  *
  * 【`isCardProduct: true`】卡速售驱动的 `placeOrder()`/`queryOrder()`/
  * `parseCallback()` 都要求这个业务线传 `true`（`KasushouStatusMapper` 内部靠它
- * 决定"卡密类商品必须等 `card_list` 真的到了才算成功"），本类只需要覆写
- * `AbstractOrderPlacementService::isCardProduct()` 一次，`routeAndFinalize()`
- * 内部每次驱动调用都会用到这个值，不需要在本类里每处调用都手动传。
+ * 决定"卡密类商品必须等 `card_list` 真的到了才算成功"），由
+ * `SupplierRouter`/`SupplierCallbackService` 按 `orders.business_line === 'card'` 传入。
  *
  * 【卡密落库】`direct` 类商品没有卡密（跟话费一样，只有 `recharge_account`）；
  * `card_secret` 类商品的卡号/卡密由 `App\Service\Order\OrderResultApplier::
@@ -61,7 +60,7 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
      *     refunded_amount: string, supplier_order_no: null|string, completed_at: null|string,
-     *     fail_reason: null|string}
+     *     fail_code: null|int, fail_reason: null|string}
      */
     public function place(
         Merchant $merchant,
@@ -81,6 +80,7 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
 
         $product = $this->validateProduct($productId);
         $this->validateRechargeAccountForCardType($product, $rechargeAccount);
+        $this->assertProductHasSupplier($product);
 
         $order = $this->createOrderRow($merchant, $merchantOrderNo, $product, $callbackUrl);
         if ($order === null) {
@@ -113,11 +113,6 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
     protected function orderNoPrefix(): string
     {
         return self::ORDER_NO_PREFIX;
-    }
-
-    protected function isCardProduct(): bool
-    {
-        return true;
     }
 
     private function validateProduct(int $productId): Product

@@ -61,7 +61,7 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
      * @return array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
      *     refunded_amount: string, supplier_order_no: null|string, completed_at: null|string,
-     *     fail_reason: null|string}
+     *     fail_code: null|int, fail_reason: null|string}
      */
     public function place(
         Merchant $merchant,
@@ -85,6 +85,7 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
         $this->assertMerchantNotSuspended($merchant);
 
         $product = $this->validateProduct($productId);
+        $this->assertProductHasSupplier($product);
 
         $order = $this->createOrderRow($merchant, $merchantOrderNo, $product, $callbackUrl);
         if ($order === null) {
@@ -119,11 +120,6 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
     protected function orderNoPrefix(): string
     {
         return self::ORDER_NO_PREFIX;
-    }
-
-    protected function isCardProduct(): bool
-    {
-        return false;
     }
 
     private function validateProduct(int $productId): Product

@@ -527,33 +527,21 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
-    public function testNoEligibleSupplierProductsResultsInCleanFailedOrder()
+    /**
+     * requirements.md 6.5：没有可用供应商时下单接口直接返回失败，不建单、不冻结余额。
+     */
+    public function testNoEligibleSupplierProductsIsRejectedWithoutFreezing()
     {
         $merchant = $this->createMerchant('100.00');
         $product = $this->createProduct('10.00');
         // 故意不建任何 supplier_products 映射行。
 
-        $this->expectNotify(1);
-
-        $service = $this->getContainer()->get(RechargeOrderPlacementService::class);
-        $merchantOrderNo = $this->uniqueMerchantOrderNo();
-        $service->place($merchant, $merchantOrderNo, $product->id, '13800000006', 'https://merchant.example.com/notify');
-
-        $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
-
-        $this->assertSame('failed', $order->status);
-        $this->assertSame(ErrorCode::NoSupplierAvailable->message(), $order->fail_reason);
-        $this->assertSame('0.00', $order->cost_price);
-
-        $merchant->refresh();
-        $this->assertSame('100.00', $merchant->available_balance);
-        $this->assertSame('0.00', $merchant->frozen_balance);
+        $this->assertRejectedAsProductUnavailable($merchant, $product, '13800000006');
     }
 
     /**
-     * 覆盖 requirements.md 6.3/6.5 的路由资格过滤三条件：映射行 status != active、
-     * stock = 0、供应商本身 status != active，三种都应该被跳过，不应该触发任何驱动
-     * 调用，最终等效于"没有可用供应商"。
+     * 覆盖 requirements.md 6.5 的筛选条件：映射行非 active、库存为 0、供应商停用、
+     * 供应商余额低于成本价，四种都被跳过，不触发任何驱动调用，等效于"没有可用供应商"。
      */
     public function testIneligibleSupplierProductsAreSkippedEntirely()
     {
@@ -569,17 +557,33 @@ class RechargeOrderPlacementServiceTest extends TestCase
         $disabledSupplier = $this->createSupplier('disabled');
         $this->createSupplierProduct($product->id, $disabledSupplier->id, 'GOODS-DISABLED', '8.00', 3);
 
-        $this->expectNotify(1);
+        $poorSupplier = $this->createSupplier();
+        $poorSupplier->fill(['balance' => '7.99'])->save();
+        $this->createSupplierProduct($product->id, $poorSupplier->id, 'GOODS-POOR', '8.00', 4);
 
-        $service = $this->getContainer()->get(RechargeOrderPlacementService::class);
+        $driverFactory = Mockery::mock(SupplierDriverFactory::class);
+        $driverFactory->shouldNotReceive('build');
+        $this->instance(SupplierDriverFactory::class, $driverFactory);
+
+        $this->assertRejectedAsProductUnavailable($merchant, $product, '13800000009');
+    }
+
+    public function testSupplierWithUnknownBalanceIsStillRouted()
+    {
+        $merchant = $this->createMerchant('100.00');
+        $product = $this->createProduct('10.00');
+        $supplier = $this->createSupplier();
+        $this->assertNull($supplier->balance);
+        $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('placeOrder')->once()->andReturn(new DriverResult(result: UnifiedResult::Processing));
+
+        $service = $this->makeService($driver);
         $merchantOrderNo = $this->uniqueMerchantOrderNo();
-        $service->place($merchant, $merchantOrderNo, $product->id, '13800000009', 'https://merchant.example.com/notify');
+        $service->place($merchant, $merchantOrderNo, $product->id, '13800000013', 'https://merchant.example.com/notify');
 
-        $order = $this->findOrderOrFail($merchant->id, $merchantOrderNo);
-
-        $this->assertSame('failed', $order->status);
-        $this->assertSame(ErrorCode::NoSupplierAvailable->message(), $order->fail_reason);
-        $this->assertSame(0, OrderAttempt::where('order_id', $order->id)->count());
+        $this->assertSame('processing', $this->findOrderOrFail($merchant->id, $merchantOrderNo)->status);
     }
 
     public function testNonRechargeProductThrowsOpenApiExceptionWithoutSideEffects()
@@ -634,6 +638,25 @@ class RechargeOrderPlacementServiceTest extends TestCase
         } catch (OpenApiException $e) {
             $this->assertSame(ErrorCode::ProductNotFound, $e->errorCode);
         }
+    }
+
+    private function assertRejectedAsProductUnavailable(Merchant $merchant, Product $product, string $rechargeAccount): void
+    {
+        $service = $this->getContainer()->get(RechargeOrderPlacementService::class);
+        $merchantOrderNo = $this->uniqueMerchantOrderNo();
+
+        try {
+            $service->place($merchant, $merchantOrderNo, $product->id, $rechargeAccount, 'https://merchant.example.com/notify');
+            $this->fail('expected OpenApiException when no supplier is available');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::ProductUnavailable, $e->errorCode);
+        }
+
+        $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
+
+        $merchant->refresh();
+        $this->assertSame('100.00', $merchant->available_balance);
+        $this->assertSame('0.00', $merchant->frozen_balance);
     }
 
     private function makeService(KasushouDriver $driver): RechargeOrderPlacementService

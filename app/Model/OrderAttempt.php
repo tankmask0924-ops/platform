@@ -19,7 +19,10 @@ use Carbon\Carbon;
  * migrations/2026_09_14_091900_create_order_attempts_table.php。一个 `Order`
  * 在路由过程中每实际调用一次供应商驱动的 `placeOrder()` 就落一行，`attempt_no`
  * 同一订单内从 1 递增（迁移里 `(order_id, attempt_no)` 唯一），由
- * `App\Service\Order\RechargeOrderPlacementService` 负责编号和写入。
+ * `App\Service\Order\SupplierRouter` 负责编号和写入。
+ *
+ * `fail_reason` 是供应商/驱动给的原始原因，可能很长（比如驱动构造失败的异常信息），
+ * 写入时截断到列宽 255，避免排障信息反过来让下单请求失败。
  *
  * `result` 是 `App\Supplier\UnifiedResult` 四态到字符串的映射，映射关系（也是
  * 本类文档的一部分，改动请同步这里）：
@@ -45,6 +48,8 @@ use Carbon\Carbon;
  */
 class OrderAttempt extends Model
 {
+    private const FAIL_REASON_MAX_LENGTH = 255;
+
     protected ?string $table = 'order_attempts';
 
     protected array $fillable = [
@@ -61,4 +66,9 @@ class OrderAttempt extends Model
         'request_snapshot' => 'array',
         'response_snapshot' => 'array',
     ];
+
+    public function setFailReasonAttribute(?string $value): void
+    {
+        $this->attributes['fail_reason'] = $value === null ? null : mb_substr($value, 0, self::FAIL_REASON_MAX_LENGTH);
+    }
 }
