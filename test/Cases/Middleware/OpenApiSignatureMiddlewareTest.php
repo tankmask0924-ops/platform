@@ -13,16 +13,21 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Middleware;
 
 use App\Crypto\Encryptor;
+use App\Dao\MerchantRateLimitDao;
 use App\Middleware\OpenApiSignatureMiddleware;
 use App\Model\Merchant;
+use App\Model\MerchantRateLimit;
 use App\Network\ClientIpResolver;
+use App\Signature\MerchantRateLimiter;
 use App\Signature\SignatureSigner;
 use GuzzleHttp\Psr7\ServerRequest;
+use Hyperf\Redis\Redis;
 use Hyperf\Testing\TestCase;
 use Mockery;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use ReflectionProperty;
+use RuntimeException;
 
 use function Hyperf\Support\make;
 
@@ -37,6 +42,7 @@ class OpenApiSignatureMiddlewareTest extends TestCase
     protected function tearDown(): void
     {
         foreach ($this->merchantIds as $id) {
+            MerchantRateLimit::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         $this->merchantIds = [];
@@ -311,6 +317,70 @@ class OpenApiSignatureMiddlewareTest extends TestCase
         $this->assertSame(40005, $this->decodeBody($response)['code']);
     }
 
+    public function testRequestsOverMerchantLimitAreRejectedWith429()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant('active', $secret);
+        make(MerchantRateLimitDao::class)->upsertLimit($merchant->id, 2);
+        $middleware = $this->middlewareWithFixedSecond();
+
+        $handler = Mockery::mock(RequestHandlerInterface::class);
+        $handler->shouldReceive('handle')->twice()->andReturn(Mockery::mock(ResponseInterface::class));
+
+        for ($i = 0; $i < 2; ++$i) {
+            $middleware->process($this->buildRequest($this->signedParams($merchant->app_key, $secret)), $handler);
+        }
+        $response = $middleware->process($this->buildRequest($this->signedParams($merchant->app_key, $secret)), $handler);
+
+        $this->assertSame(429, $response->getStatusCode());
+        $this->assertSame(40009, $this->decodeBody($response)['code']);
+    }
+
+    public function testFailedAuthenticationDoesNotConsumeQuota()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant('active', $secret);
+        make(MerchantRateLimitDao::class)->upsertLimit($merchant->id, 1);
+        $middleware = $this->middlewareWithFixedSecond();
+
+        $forged = $this->signedParams($merchant->app_key, $secret);
+        $forged['sign'] = 'clearly-wrong-signature';
+        $replayed = $this->signedParams($merchant->app_key, $secret);
+        $replayed['timestamp'] = (string) (time() - 400);
+        $replayed['sign'] = (new SignatureSigner())->sign(array_diff_key($replayed, ['sign' => true]), $secret);
+
+        $rejectingHandler = Mockery::mock(RequestHandlerInterface::class);
+        $this->assertSame(40005, $this->decodeBody($middleware->process($this->buildRequest($forged), $rejectingHandler))['code']);
+        $this->assertSame(40006, $this->decodeBody($middleware->process($this->buildRequest($replayed), $rejectingHandler))['code']);
+
+        $expectedResponse = Mockery::mock(ResponseInterface::class);
+        $handler = Mockery::mock(RequestHandlerInterface::class);
+        $handler->shouldReceive('handle')->once()->andReturn($expectedResponse);
+
+        $response = $middleware->process($this->buildRequest($this->signedParams($merchant->app_key, $secret)), $handler);
+
+        $this->assertSame($expectedResponse, $response);
+    }
+
+    public function testRateLimiterFailureLetsRequestThrough()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant('active', $secret);
+
+        $limiter = Mockery::mock(MerchantRateLimiter::class);
+        $limiter->shouldReceive('attempt')->andThrow(new RuntimeException('redis down'));
+        $middleware = make(OpenApiSignatureMiddleware::class);
+        (new ReflectionProperty($middleware, 'rateLimiter'))->setValue($middleware, $limiter);
+
+        $expectedResponse = Mockery::mock(ResponseInterface::class);
+        $handler = Mockery::mock(RequestHandlerInterface::class);
+        $handler->shouldReceive('handle')->once()->andReturn($expectedResponse);
+
+        $response = $middleware->process($this->buildRequest($this->signedParams($merchant->app_key, $secret)), $handler);
+
+        $this->assertSame($expectedResponse, $response);
+    }
+
     private function middleware(): OpenApiSignatureMiddleware
     {
         return $this->getContainer()->get(OpenApiSignatureMiddleware::class);
@@ -334,6 +404,25 @@ class OpenApiSignatureMiddlewareTest extends TestCase
             }
         };
         (new ReflectionProperty($middleware, 'clientIpResolver'))->setValue($middleware, $resolver);
+
+        return $middleware;
+    }
+
+    /**
+     * 限流计数固定到同一秒，几次请求恰好跨秒时用例也不会不稳定。
+     */
+    private function middlewareWithFixedSecond(): OpenApiSignatureMiddleware
+    {
+        $limiter = new class extends MerchantRateLimiter {
+            protected function currentSecond(): int
+            {
+                return 1_000_000;
+            }
+        };
+        (new ReflectionProperty(MerchantRateLimiter::class, 'redis'))->setValue($limiter, make(Redis::class));
+
+        $middleware = make(OpenApiSignatureMiddleware::class);
+        (new ReflectionProperty($middleware, 'rateLimiter'))->setValue($middleware, $limiter);
 
         return $middleware;
     }

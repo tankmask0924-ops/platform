@@ -18,12 +18,12 @@ use App\Dao\MerchantDao;
 use App\Dao\MerchantLevelDao;
 use App\Dao\MerchantQualificationDao;
 use App\Dao\MerchantRateLimitDao;
-use App\Dao\SystemSettingDao;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantQualification;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
+use App\Service\Merchant\RateLimitSettingService;
 use Carbon\Carbon;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
@@ -39,12 +39,11 @@ use Hyperf\HttpMessage\Exception\HttpException;
 class MerchantAdminService extends AbstractService
 {
     /**
-     * docs/database-design.md「system_settings」里的默认限流 key，及零配置时的
-     * 代码级兜底值（跟文档里的默认值 50 一致）。
+     * 默认限流的 key 和兜底值，真正的定义在 RateLimitSettingService。
      */
-    public const DEFAULT_RATE_LIMIT_SETTING_KEY = 'default_rate_limit_per_second';
+    public const DEFAULT_RATE_LIMIT_SETTING_KEY = RateLimitSettingService::DEFAULT_SETTING_KEY;
 
-    public const DEFAULT_RATE_LIMIT_PER_SECOND = 50;
+    public const DEFAULT_RATE_LIMIT_PER_SECOND = RateLimitSettingService::DEFAULT_LIMIT_PER_SECOND;
 
     /**
      * 单独限流值的上限，只是防手滑（多敲几个 0）的合理性校验，不是业务规则。
@@ -79,7 +78,7 @@ class MerchantAdminService extends AbstractService
     protected MerchantRateLimitDao $merchantRateLimitDao;
 
     #[Inject]
-    protected SystemSettingDao $systemSettingDao;
+    protected RateLimitSettingService $rateLimitSettingService;
 
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
@@ -377,25 +376,11 @@ class MerchantAdminService extends AbstractService
     }
 
     /**
-     * 商户实际生效的限流值：有单独配置就用单独配置，否则用全局默认。
-     * `is_custom` 让后台能区分「单独设成了 50」和「没设、走默认 50」。
-     *
      * @return array{limit_per_second: int, is_custom: bool}
      */
     private function formatRateLimit(int $merchantId): array
     {
-        $custom = $this->merchantRateLimitDao->findByMerchantId($merchantId);
-        if ($custom) {
-            return ['limit_per_second' => $custom->limit_per_second, 'is_custom' => true];
-        }
-
-        return [
-            'limit_per_second' => (int) $this->systemSettingDao->getValue(
-                self::DEFAULT_RATE_LIMIT_SETTING_KEY,
-                self::DEFAULT_RATE_LIMIT_PER_SECOND
-            ),
-            'is_custom' => false,
-        ];
+        return $this->rateLimitSettingService->effectiveLimit($merchantId);
     }
 
     private function findMerchantOrFail(int $merchantId): Merchant
