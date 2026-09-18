@@ -16,6 +16,7 @@ use App\Dao\AdminPermissionDao;
 use App\Dao\AdminRoleDao;
 use App\Dao\AdminRolePermissionDao;
 use App\Dao\AdminUserDao;
+use App\Model\AdminPermission;
 use App\Model\AdminRole;
 use App\Model\AdminUser;
 use App\Service\AbstractService;
@@ -35,13 +36,7 @@ use InvalidArgumentException;
  */
 class AdminBootstrapService extends AbstractService
 {
-    /**
-     * 密码最低长度，跟 App\Service\Merchant\AuthService::MIN_PASSWORD_LENGTH 保持一致
-     * （同一套「8 位以上，不做复杂度校验」的判断，两个后台的密码强度要求没有理由不一样）。
-     */
-    private const MIN_PASSWORD_LENGTH = 8;
-
-    private const SUPER_ADMIN_ROLE_NAME = 'super_admin';
+    public const SUPER_ADMIN_ROLE_NAME = 'super_admin';
 
     /**
      * 当前生产代码里真实会被 App\Middleware\AdminPermissionMiddleware 检查到的
@@ -74,7 +69,7 @@ class AdminBootstrapService extends AbstractService
      *
      * @var array<int, array{code: string, module: string, name: string, type: string}>
      */
-    private const KNOWN_PERMISSIONS = [
+    public const KNOWN_PERMISSIONS = [
         ['code' => 'merchant.view', 'module' => 'merchant', 'name' => '商户列表查看', 'type' => 'action'],
         ['code' => 'merchant.review', 'module' => 'merchant', 'name' => '商户入驻审核', 'type' => 'action'],
         ['code' => 'merchant.balance_adjust', 'module' => 'merchant', 'name' => '商户余额手动调账', 'type' => 'action'],
@@ -94,7 +89,49 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'order.resolve', 'module' => 'order', 'name' => '异常单人工处理', 'type' => 'action'],
         ['code' => 'aftersale.view', 'module' => 'aftersale', 'name' => '售后争议查看', 'type' => 'action'],
         ['code' => 'aftersale.handle', 'module' => 'aftersale', 'name' => '售后争议处理（驳回/确认未到账退款）', 'type' => 'action'],
+        ['code' => 'admin_user.view', 'module' => 'system', 'name' => '管理员账号查看', 'type' => 'action'],
+        ['code' => 'admin_user.manage', 'module' => 'system', 'name' => '管理员账号管理', 'type' => 'action'],
+        ['code' => 'role.view', 'module' => 'system', 'name' => '角色权限查看', 'type' => 'action'],
+        ['code' => 'role.manage', 'module' => 'system', 'name' => '角色权限管理', 'type' => 'action'],
+        ['code' => 'setting.view', 'module' => 'system', 'name' => '系统参数查看', 'type' => 'action'],
+        ['code' => 'setting.manage', 'module' => 'system', 'name' => '系统参数修改', 'type' => 'action'],
+        ['code' => 'operation_log.view', 'module' => 'system', 'name' => '操作日志查看', 'type' => 'action'],
     ];
+
+    /**
+     * 预置角色（requirements.md 2.1「预置超级管理员、运营、财务、客服」）的初始权限，
+     * 只在角色不存在时按这里建一次，之后在后台怎么改都不会被覆盖。
+     *
+     * @var array<string, array{remark: string, permissions: list<string>}>
+     */
+    public const PRESET_ROLES = [
+        '运营' => [
+            'remark' => '商户入驻与等级、商品、映射、订单跟进',
+            'permissions' => [
+                'merchant.view', 'merchant.review', 'merchant.manage', 'merchant_level.view', 'merchant_level.manage',
+                'product.view', 'product.manage', 'product_mapping.view', 'product_mapping.manage', 'supplier.view',
+                'order.view', 'order.manage', 'aftersale.view',
+            ],
+        ],
+        '财务' => [
+            'remark' => '充值审核、调账、资金核对',
+            'permissions' => [
+                'merchant.view', 'merchant.balance_adjust', 'recharge.view', 'recharge.manage', 'order.view', 'aftersale.view',
+            ],
+        ],
+        '客服' => [
+            'remark' => '订单查询、异常单与售后争议处理',
+            'permissions' => [
+                'merchant.view', 'recharge.view', 'order.view', 'order.manage', 'order.resolve', 'aftersale.view', 'aftersale.handle',
+            ],
+        ],
+    ];
+
+    /**
+     * 密码最低长度，跟 App\Service\Merchant\AuthService::MIN_PASSWORD_LENGTH 保持一致
+     * （同一套「8 位以上，不做复杂度校验」的判断，两个后台的密码强度要求没有理由不一样）。
+     */
+    private const MIN_PASSWORD_LENGTH = 8;
 
     #[Inject]
     protected AdminUserDao $adminUserDao;
@@ -122,6 +159,7 @@ class AdminBootstrapService extends AbstractService
         return Db::transaction(function () use ($username, $password, $realName) {
             $role = $this->ensureSuperAdminRole();
             $this->ensureRoleHasKnownPermissions($role);
+            $this->ensurePresetRoles();
 
             return $this->adminUserDao->create([
                 'username' => $username,
@@ -148,7 +186,26 @@ class AdminBootstrapService extends AbstractService
             return null;
         }
 
-        return Db::transaction(fn () => $this->ensureRoleHasKnownPermissions($role));
+        return Db::transaction(function () use ($role) {
+            $this->ensurePresetRoles();
+
+            return $this->ensureRoleHasKnownPermissions($role);
+        });
+    }
+
+    public function ensurePermission(string $code): AdminPermission
+    {
+        $permission = $this->adminPermissionDao->findByCode($code);
+        if ($permission) {
+            return $permission;
+        }
+        foreach (self::KNOWN_PERMISSIONS as $definition) {
+            if ($definition['code'] === $code) {
+                return $this->adminPermissionDao->create($definition);
+            }
+        }
+
+        throw new InvalidArgumentException("未知的权限编码：{$code}");
     }
 
     private function validate(string $username, string $password): void
@@ -192,6 +249,22 @@ class AdminBootstrapService extends AbstractService
         ]);
     }
 
+    private function ensurePresetRoles(): void
+    {
+        foreach (self::PRESET_ROLES as $name => $preset) {
+            if ($this->adminRoleDao->newQuery()->where('name', $name)->exists()) {
+                continue;
+            }
+            $role = $this->adminRoleDao->create(['name' => $name, 'is_system' => true, 'remark' => $preset['remark']]);
+            foreach ($preset['permissions'] as $code) {
+                $this->adminRolePermissionDao->create([
+                    'role_id' => $role->id,
+                    'permission_id' => $this->ensurePermission($code)->id,
+                ]);
+            }
+        }
+    }
+
     /**
      * @return int 新授予的权限数
      */
@@ -199,10 +272,7 @@ class AdminBootstrapService extends AbstractService
     {
         $granted = 0;
         foreach (self::KNOWN_PERMISSIONS as $definition) {
-            $permission = $this->adminPermissionDao->findByCode($definition['code']);
-            if (! $permission) {
-                $permission = $this->adminPermissionDao->create($definition);
-            }
+            $permission = $this->ensurePermission($definition['code']);
 
             // 先查后插而不是直接 create() 再 catch 唯一约束冲突：这个方法只会被
             // admin:create / admin:sync-permissions 这两个单进程、串行执行的 CLI 命令调用，不存在并发写入

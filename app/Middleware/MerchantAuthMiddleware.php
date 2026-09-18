@@ -60,14 +60,19 @@ class MerchantAuthMiddleware implements MiddlewareInterface
             throw new HttpException(401, '未登录或登录已过期');
         }
 
-        $merchantId = $this->tokenGuard->resolve($token);
-        if ($merchantId === null) {
+        $claims = $this->tokenGuard->resolve($token);
+        if ($claims === null) {
             throw new HttpException(401, '未登录或登录已过期');
         }
 
-        $merchant = $this->merchantDao->find($merchantId);
+        $merchant = $this->merchantDao->find($claims['id']);
         if (! $merchant) {
             throw new HttpException(401, '未登录或登录已过期');
+        }
+
+        // 改过密码（包括找回密码）之后，之前签发的 token 一律失效
+        if (! hash_equals($this->tokenGuard->passwordVersion($merchant->password), $claims['pv'])) {
+            throw new HttpException(401, '密码已修改，请重新登录');
         }
 
         // 后台禁用商户（App\Service\Admin\MerchantAdminService::changeStatus()）之前

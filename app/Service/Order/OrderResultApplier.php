@@ -123,15 +123,15 @@ use Hyperf\Logger\LoggerFactory;
  */
 class OrderResultApplier extends AbstractService
 {
-    private const REBATE_DUE_PERIOD_SETTING_KEY = 'rebate_due_period_days';
-
-    private const FINISHABLE_STATUSES = [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL];
+    public const REBATE_DUE_PERIOD_SETTING_KEY = 'rebate_due_period_days';
 
     /**
      * requirements.md 5.4："固定期限在返佣管理后台设置，全平台统一，默认 7 天"——
      * 这个默认值保证 `system_settings` 一行都没有时返佣到账逻辑仍然正确。
      */
-    private const DEFAULT_REBATE_DUE_PERIOD_DAYS = 7;
+    public const DEFAULT_REBATE_DUE_PERIOD_DAYS = 7;
+
+    private const FINISHABLE_STATUSES = [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL];
 
     #[Inject]
     protected BalanceService $balanceService;

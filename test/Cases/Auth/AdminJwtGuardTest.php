@@ -32,16 +32,17 @@ class AdminJwtGuardTest extends TestCase
         $guard = $this->getContainer()->get(AdminJwtGuard::class);
         $adminUserId = random_int(100000, 999999);
 
-        $token = $guard->issue($adminUserId);
+        $token = $guard->issue($adminUserId, 'password-hash');
 
         $this->assertNotSame('', $token);
-        $this->assertSame($adminUserId, $guard->resolve($token));
+        $this->assertSame(['id' => $adminUserId, 'pv' => $guard->passwordVersion('password-hash')], $guard->resolve($token));
+        $this->assertNotSame($guard->passwordVersion('password-hash'), $guard->passwordVersion('other-hash'));
     }
 
     public function testTamperedSignatureReturnsNull()
     {
         $guard = $this->getContainer()->get(AdminJwtGuard::class);
-        $token = $guard->issue(random_int(100000, 999999));
+        $token = $guard->issue(random_int(100000, 999999), 'password-hash');
 
         $segments = explode('.', $token);
         $this->assertCount(3, $segments);
@@ -92,6 +93,19 @@ class AdminJwtGuardTest extends TestCase
         $this->assertNull($guard->resolve('not-a-jwt-at-all'));
         $this->assertNull($guard->resolve('still.not.valid.jwt'));
         $this->assertNull($guard->resolve('garbage.garbage.garbage'));
+    }
+
+    public function testTokenWithoutPasswordVersionReturnsNull()
+    {
+        $guard = $this->getContainer()->get(AdminJwtGuard::class);
+        $now = time();
+        $token = JWT::encode([
+            'sub' => '123',
+            'iat' => $now,
+            'exp' => $now + 3600,
+        ], (string) env('ADMIN_JWT_SECRET'), 'HS256');
+
+        $this->assertNull($guard->resolve($token));
     }
 
     public function testMissingSubClaimReturnsNull()

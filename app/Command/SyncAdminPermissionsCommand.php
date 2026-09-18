@@ -34,7 +34,7 @@ class SyncAdminPermissionsCommand extends HyperfCommand
 
     public function configure(): void
     {
-        $this->setDescription('把代码中已知的全部权限同步给超级管理员角色（幂等）');
+        $this->setDescription('把代码中已知的全部权限同步给超级管理员角色，并补建缺少的预置角色（幂等）');
 
         parent::configure();
     }

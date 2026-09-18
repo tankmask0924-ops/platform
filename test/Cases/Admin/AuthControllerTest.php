@@ -169,7 +169,7 @@ class AuthControllerTest extends HttpTestCase
 
         try {
             $merchantJwtGuard = make(MerchantJwtGuard::class);
-            $merchantToken = $merchantJwtGuard->issue($merchant->id);
+            $merchantToken = $merchantJwtGuard->issue($merchant->id, $merchant->password);
 
             $response = $this->client->request('GET', '/admin/auth/me', [
                 'headers' => ['Authorization' => 'Bearer ' . $merchantToken],
@@ -186,7 +186,7 @@ class AuthControllerTest extends HttpTestCase
         $admin = $this->createActiveAdmin();
 
         $adminJwtGuard = make(AdminJwtGuard::class);
-        $adminToken = $adminJwtGuard->issue($admin->id);
+        $adminToken = $adminJwtGuard->issue($admin->id, $admin->password);
 
         $response = $this->client->request('GET', '/merchant/auth/me', [
             'headers' => ['Authorization' => 'Bearer ' . $adminToken],

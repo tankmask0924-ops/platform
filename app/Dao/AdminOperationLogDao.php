@@ -13,10 +13,13 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\AdminOperationLog;
+use Hyperf\Context\Context;
 use Hyperf\Database\Model\Collection;
 
 class AdminOperationLogDao extends AbstractDao
 {
+    public const RECORDED_CONTEXT_KEY = 'admin_operation_log.recorded';
+
     protected string $model = AdminOperationLog::class;
 
     /**
@@ -33,6 +36,9 @@ class AdminOperationLogDao extends AbstractDao
         ?array $after,
         ?string $ip
     ): AdminOperationLog {
+        // 告诉 AdminOperationLogAspect 这个请求已经记过带前后对比的日志，不用再自动记一条
+        Context::set(self::RECORDED_CONTEXT_KEY, true);
+
         return $this->newQuery()->create([
             'admin_user_id' => $adminUserId,
             'module' => $module,

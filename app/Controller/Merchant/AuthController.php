@@ -17,11 +17,13 @@ use App\Middleware\MerchantAuthMiddleware;
 use App\Model\Merchant;
 use App\Service\Merchant\AuthService;
 use App\Service\Merchant\BalanceService;
+use App\Service\Merchant\PasswordService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
 use Hyperf\HttpServer\Annotation\Middleware;
 use Hyperf\HttpServer\Annotation\PostMapping;
+use Hyperf\HttpServer\Annotation\PutMapping;
 
 /**
  * 商户管理后台（web/merchant）账户接口（requirements.md 4.1、8.2）。
@@ -44,6 +46,9 @@ class AuthController extends AbstractController
 
     #[Inject]
     protected BalanceService $balanceService;
+
+    #[Inject]
+    protected PasswordService $passwordService;
 
     #[PostMapping(path: 'register')]
     public function register(): array
@@ -86,5 +91,46 @@ class AuthController extends AbstractController
             'debt_since' => $merchant->debt_since,
             'debt_warning' => $this->balanceService->isOverDebtWarningThreshold($merchant),
         ];
+    }
+
+    /**
+     * 修改密码，返回新 token（旧 token 全部失效）。
+     */
+    #[Middleware(MerchantAuthMiddleware::class)]
+    #[PutMapping(path: 'password')]
+    public function changePassword(): array
+    {
+        /** @var Merchant $merchant */
+        $merchant = $this->request->getAttribute('merchant');
+
+        return $this->passwordService->change(
+            $merchant,
+            (string) $this->request->input('old_password', ''),
+            (string) $this->request->input('new_password', ''),
+        );
+    }
+
+    /**
+     * 找回密码第一步：给注册手机号/邮箱发验证码。账号不存在也返回成功。
+     */
+    #[PostMapping(path: 'password/reset-code')]
+    public function sendResetCode(): array
+    {
+        return $this->passwordService->sendResetCode((string) $this->request->input('username', ''));
+    }
+
+    /**
+     * 找回密码第二步：验证码 + 新密码。
+     */
+    #[PostMapping(path: 'password/reset')]
+    public function resetPassword(): array
+    {
+        $this->passwordService->reset(
+            (string) $this->request->input('username', ''),
+            (string) $this->request->input('code', ''),
+            (string) $this->request->input('new_password', ''),
+        );
+
+        return ['success' => true];
     }
 }

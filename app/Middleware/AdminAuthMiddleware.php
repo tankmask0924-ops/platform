@@ -60,14 +60,19 @@ class AdminAuthMiddleware implements MiddlewareInterface
             throw new HttpException(401, '未登录或登录已过期');
         }
 
-        $adminUserId = $this->tokenGuard->resolve($token);
-        if ($adminUserId === null) {
+        $claims = $this->tokenGuard->resolve($token);
+        if ($claims === null) {
             throw new HttpException(401, '未登录或登录已过期');
         }
 
-        $adminUser = $this->adminUserDao->find($adminUserId);
+        $adminUser = $this->adminUserDao->find($claims['id']);
         if (! $adminUser || $adminUser->status !== 'active') {
             throw new HttpException(401, '未登录或登录已过期');
+        }
+
+        // 改过密码（自己改或被其他管理员重置）之后，之前签发的 token 一律失效
+        if (! hash_equals($this->tokenGuard->passwordVersion($adminUser->password), $claims['pv'])) {
+            throw new HttpException(401, '密码已修改，请重新登录');
         }
 
         return $handler->handle($request->withAttribute('admin', $adminUser));

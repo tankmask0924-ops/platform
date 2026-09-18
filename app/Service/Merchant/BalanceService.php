@@ -90,23 +90,13 @@ use Hyperf\HttpMessage\Exception\HttpException;
  */
 class BalanceService extends AbstractService
 {
-    private const SCALE = 2;
-
-    /**
-     * adjust() 自己的金额格式校验：跟 App\Service\Merchant\RechargeRequestService::
-     * AMOUNT_PATTERN 同一套「整数部分 + 最多两位小数」的精度要求（对齐
-     * decimal(10,2) 列），额外允许一个可选的前导负号——调账允许加也允许扣，
-     * RechargeRequestService 的充值金额场景不需要负数，这是两者唯一的差异。
-     */
-    private const ADJUST_AMOUNT_PATTERN = '/^-?\d+(\.\d{1,2})?$/';
-
     /**
      * requirements.md 4.5「欠款预警线」的 system_settings key：欠款（可用余额为负时
      * 的绝对值）超过这个金额就该告警财务——真正的告警通道（邮件/短信/IM）这个代码库
      * 完全没有，不在本类职责内，这里只提供"超没超线"这个判断本身，供将来告警功能
      * 直接调用，不用等那个功能落地时才回来重新定义"超线"是什么意思。
      */
-    private const DEBT_WARNING_THRESHOLD_SETTING_KEY = 'debt_warning_threshold';
+    public const DEBT_WARNING_THRESHOLD_SETTING_KEY = 'debt_warning_threshold';
 
     /**
      * 后台一行没配置时的代码级默认值，跟 OrderResultApplier::
@@ -116,7 +106,17 @@ class BalanceService extends AbstractService
      * 已经积累了不止一笔，值得人工介入。纯粹是一个保守的起点，真实数值应该由
      * 运营在后台按实际坏账规模调整，不是本类能替业务方决定的事。
      */
-    private const DEFAULT_DEBT_WARNING_THRESHOLD = '1000.00';
+    public const DEFAULT_DEBT_WARNING_THRESHOLD = '1000.00';
+
+    private const SCALE = 2;
+
+    /**
+     * adjust() 自己的金额格式校验：跟 App\Service\Merchant\RechargeRequestService::
+     * AMOUNT_PATTERN 同一套「整数部分 + 最多两位小数」的精度要求（对齐
+     * decimal(10,2) 列），额外允许一个可选的前导负号——调账允许加也允许扣，
+     * RechargeRequestService 的充值金额场景不需要负数，这是两者唯一的差异。
+     */
+    private const ADJUST_AMOUNT_PATTERN = '/^-?\d+(\.\d{1,2})?$/';
 
     #[Inject]
     protected MerchantDao $merchantDao;

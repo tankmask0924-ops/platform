@@ -137,7 +137,7 @@ class AuthService extends AbstractService
             throw new HttpException(403, '账号已被禁用');
         }
 
-        $token = $this->tokenGuard->issue($merchant->id);
+        $token = $this->tokenGuard->issue($merchant->id, $merchant->password);
 
         $matchedUsername = $merchant->phone === $username ? $merchant->phone : $merchant->email;
 

@@ -37,4 +37,9 @@ class AdminUser extends Model
         'status',
         'last_login_at',
     ];
+
+    protected array $casts = [
+        'role_id' => 'integer',
+        'last_login_at' => 'datetime',
+    ];
 }

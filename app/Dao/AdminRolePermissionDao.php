@@ -44,4 +44,30 @@ class AdminRolePermissionDao extends AbstractDao
             ->where('admin_permissions.code', $code)
             ->exists();
     }
+
+    /**
+     * @return list<string> 角色拥有的权限编码
+     */
+    public function codesForRole(int $roleId): array
+    {
+        return $this->newQuery()
+            ->where('admin_role_permissions.role_id', $roleId)
+            ->join('admin_permissions', 'admin_role_permissions.permission_id', '=', 'admin_permissions.id')
+            ->orderBy('admin_permissions.code')
+            ->pluck('admin_permissions.code')
+            ->all();
+    }
+
+    /**
+     * 把角色的权限整体替换成给定的权限 id。
+     *
+     * @param list<int> $permissionIds
+     */
+    public function replaceForRole(int $roleId, array $permissionIds): void
+    {
+        $this->newQuery()->where('role_id', $roleId)->delete();
+        foreach ($permissionIds as $permissionId) {
+            $this->create(['role_id' => $roleId, 'permission_id' => $permissionId]);
+        }
+    }
 }

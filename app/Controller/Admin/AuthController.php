@@ -21,6 +21,7 @@ use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
 use Hyperf\HttpServer\Annotation\Middleware;
 use Hyperf\HttpServer\Annotation\PostMapping;
+use Hyperf\HttpServer\Annotation\PutMapping;
 
 /**
  * 系统管理后台（web/admin）账户接口（requirements.md 8.3），前端契约见
@@ -55,15 +56,26 @@ class AuthController extends AbstractController
     #[GetMapping(path: 'me')]
     public function me(): array
     {
-        /** @var AdminUser $admin */
-        $admin = $this->request->getAttribute('admin');
+        return $this->authService->me($this->currentAdmin());
+    }
 
-        return [
-            'id' => $admin->id,
-            'username' => $admin->username,
-            'real_name' => $admin->real_name,
-            'role_id' => $admin->role_id,
-            'status' => $admin->status,
-        ];
+    /**
+     * 修改自己的密码，返回新 token。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[PutMapping(path: 'password')]
+    public function changePassword(): array
+    {
+        return $this->authService->changePassword(
+            $this->currentAdmin(),
+            (string) $this->request->input('old_password', ''),
+            (string) $this->request->input('new_password', ''),
+        );
+    }
+
+    private function currentAdmin(): AdminUser
+    {
+        /* @var AdminUser */
+        return $this->request->getAttribute('admin');
     }
 }
