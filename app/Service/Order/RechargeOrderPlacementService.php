@@ -82,6 +82,7 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
         // 生成 order_no/创建 Order 行/调用 freeze() *之前*——这是一次真正的新下单
         // 尝试，商户欠款状态下应该被干净、快速地拒绝，不留下任何 Order 行或余额
         // 变动，不应该走到后面任何一步才发现拒单。
+        $this->assertBusinessSubscribed($merchant);
         $this->assertMerchantNotSuspended($merchant);
 
         $product = $this->validateProduct($productId);

@@ -15,6 +15,7 @@ namespace HyperfTest\Cases\Service\Supplier;
 use App\Job\RefreshSupplierBalanceJob;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
+use App\Model\MerchantBusinessSubscription;
 use App\Model\Order;
 use App\Model\OrderAttempt;
 use App\Model\OrderRecharge;
@@ -76,6 +77,7 @@ class SupplierBalanceServiceTest extends TestCase
             Product::destroy($id);
         }
         foreach ($this->merchantIds as $id) {
+            MerchantBusinessSubscription::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         foreach ($this->supplierIds as $id) {
@@ -283,6 +285,10 @@ class SupplierBalanceServiceTest extends TestCase
         ]);
 
         $this->merchantIds[] = $merchant->id;
+        // 下单和商品查询要求已开通业务线（requirements.md 4.2）
+        foreach (['recharge', 'card'] as $line) {
+            MerchantBusinessSubscription::create(['merchant_id' => $merchant->id, 'business_line' => $line, 'status' => 'approved', 'applied_at' => date('Y-m-d H:i:s')]);
+        }
 
         return $merchant;
     }

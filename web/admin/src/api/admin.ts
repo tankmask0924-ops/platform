@@ -54,6 +54,8 @@ export interface MerchantDetail extends Merchant {
   qualification: Qualification | null
   qualification_history: QualificationHistoryItem[]
   rate_limit: RateLimit
+  /** 四条业务线各自的开通状态，没申请过 status 为 null */
+  subscriptions: { business_line: string; available: boolean; status: string | null }[]
 }
 
 export interface BalanceLog {
@@ -385,4 +387,27 @@ export interface RebateList extends Paged<Rebate> {
 
 export const rebateApi = {
   list: (params: Query) => http.get<RebateList>('/admin/rebates', params),
+}
+
+/** 服务开通审核：App\Controller\Admin\SubscriptionController */
+export interface Subscription {
+  id: number
+  merchant_id: number
+  merchant_name: string | null
+  merchant_type: string | null
+  merchant_phone: string | null
+  merchant_email: string | null
+  merchant_status: string | null
+  business_line: string
+  status: string
+  reject_reason: string | null
+  applied_at: string | null
+  reviewed_by: number | null
+  reviewed_at: string | null
+}
+
+export const subscriptionApi = {
+  list: (params: Query) => http.get<Paged<Subscription>>('/admin/subscriptions', params),
+  approve: (id: number) => http.post<Ok>(`/admin/subscriptions/${id}/approve`),
+  reject: (id: number, reason: string) => http.post<Ok>(`/admin/subscriptions/${id}/reject`, { reason }),
 }

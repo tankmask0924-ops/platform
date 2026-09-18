@@ -90,6 +90,7 @@ export const rebateRateSourceLabels: LabelMap = {
 /** 权限分组 / 操作日志模块，对应权限编码前缀和 Service 里的 MODULE */
 export const moduleLabels: LabelMap = {
   merchant: { label: '商户' },
+  subscription: { label: '服务开通' },
   recharge: { label: '充值' },
   merchant_level: { label: '商户等级' },
   product: { label: '本地商品' },

@@ -24,6 +24,7 @@ use App\Model\MerchantQualification;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\Merchant\RateLimitSettingService;
+use App\Service\Merchant\SubscriptionService;
 use Carbon\Carbon;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
@@ -79,6 +80,9 @@ class MerchantAdminService extends AbstractService
 
     #[Inject]
     protected RateLimitSettingService $rateLimitSettingService;
+
+    #[Inject]
+    protected SubscriptionService $subscriptionService;
 
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
@@ -137,6 +141,8 @@ class MerchantAdminService extends AbstractService
                 'reviewed_at' => $q->reviewed_at?->toDateTimeString(),
             ])->values()->all(),
             'rate_limit' => $this->formatRateLimit($merchantId),
+            // 各业务线开通状态（requirements.md 8.3 商户详情「已开通业务线」）
+            'subscriptions' => $this->subscriptionService->list($merchant),
         ];
     }
 

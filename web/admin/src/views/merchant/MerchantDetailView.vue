@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   balanceLogTypeLabels,
+  businessLineLabels,
   isHttpUrl,
   isNegative,
   labelOf,
@@ -9,6 +10,7 @@ import {
   money,
   qualificationStatusLabels,
   StatusTag,
+  subscriptionStatusLabels,
   toOptions,
   usePagedList,
 } from '@platform/shared'
@@ -232,6 +234,19 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="冻结金额">{{ money(merchant.frozen_balance) }}</el-descriptions-item>
           <el-descriptions-item label="欠款开始">{{ merchant.debt_since ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="业务线" :span="2">
+            <template v-for="sub in merchant.subscriptions" :key="sub.business_line">
+              <span v-if="sub.status" class="gap">
+                {{ labelOf(businessLineLabels, sub.business_line) }}
+                <StatusTag :map="subscriptionStatusLabels" :value="sub.status" />
+              </span>
+            </template>
+            <span v-if="merchant.subscriptions.every((sub) => !sub.status)" class="gap">未申请开通</span>
+            <router-link
+              v-if="permission.can('subscription.view')"
+              :to="{ name: 'subscriptions', query: { merchant_id: merchant.id } }"
+            >开通记录</router-link>
+          </el-descriptions-item>
           <el-descriptions-item v-if="permission.can('rebate.view')" label="返佣">
             <router-link :to="{ name: 'rebates', query: { merchant_id: merchant.id } }">查看返佣明细</router-link>
           </el-descriptions-item>

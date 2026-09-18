@@ -16,6 +16,7 @@ use App\Exception\OpenApiException;
 use App\Job\NotifyMerchantJob;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
+use App\Model\MerchantBusinessSubscription;
 use App\Model\Order;
 use App\Model\OrderAttempt;
 use App\Model\OrderRecharge;
@@ -99,6 +100,7 @@ class RechargeOrderPlacementServiceTest extends TestCase
             // 这里按 merchant_id 兜底清掉，跟 BalanceServiceTest::tearDown() 同一个
             // 惯例。对没有这类流水的其它测试是无害的空操作。
             MerchantBalanceLog::where('merchant_id', $id)->delete();
+            MerchantBusinessSubscription::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         $this->merchantIds = [];
@@ -325,6 +327,33 @@ class RechargeOrderPlacementServiceTest extends TestCase
      * `debt_since` 而余额仍为正——拦截闸门现在直接读实时余额，不再信
      * `debt_since` 这个派生缓存本身。
      */
+    /**
+     * requirements.md 4.2：业务线没开通（这里是开通申请还在审核中）时拒单，不建单、不冻结、不调供应商；
+     * 开通之后同一个 merchant_order_no 可以正常下单。
+     */
+    public function testMerchantWithoutSubscriptionIsRejectedCleanly()
+    {
+        $merchant = $this->createMerchant('50.00');
+        MerchantBusinessSubscription::where('merchant_id', $merchant->id)->where('business_line', 'recharge')->update(['status' => 'pending']);
+        $product = $this->createProduct('10.00');
+        $supplier = $this->createSupplier();
+        $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-1', '8.00', 1);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldNotReceive('placeOrder');
+        $merchantOrderNo = $this->uniqueMerchantOrderNo();
+
+        try {
+            $this->makeService($driver)->place($merchant, $merchantOrderNo, $product->id, '13800000013', 'https://merchant.example.com/notify');
+            $this->fail('expected OpenApiException for a business line that is not subscribed');
+        } catch (OpenApiException $e) {
+            $this->assertSame(ErrorCode::BusinessNotSubscribed, $e->errorCode);
+        }
+
+        $this->assertNull(Order::where('merchant_id', $merchant->id)->where('merchant_order_no', $merchantOrderNo)->first());
+        $this->assertSame(0, MerchantBalanceLog::where('merchant_id', $merchant->id)->count());
+    }
+
     public function testMerchantInDebtIsRejectedCleanlyWithoutAnySideEffects()
     {
         $merchant = $this->createMerchant('-50.00', '2026-01-01 08:00:00');
@@ -714,6 +743,10 @@ class RechargeOrderPlacementServiceTest extends TestCase
         ]);
 
         $this->merchantIds[] = $merchant->id;
+        // 下单和商品查询要求已开通业务线（requirements.md 4.2）
+        foreach (['recharge', 'card'] as $line) {
+            MerchantBusinessSubscription::create(['merchant_id' => $merchant->id, 'business_line' => $line, 'status' => 'approved', 'applied_at' => date('Y-m-d H:i:s')]);
+        }
 
         return $merchant;
     }

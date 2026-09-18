@@ -22,6 +22,7 @@ use App\Model\Product;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
+use App\Service\Merchant\SubscriptionService;
 use App\Service\MerchantNotifyService;
 use App\Service\Product\RebateCalculator;
 use Hyperf\Database\Exception\QueryException;
@@ -75,6 +76,9 @@ abstract class AbstractOrderPlacementService extends AbstractService
     protected BalanceService $balanceService;
 
     #[Inject]
+    protected SubscriptionService $subscriptionService;
+
+    #[Inject]
     protected RebateCalculator $rebateCalculator;
 
     #[Inject]
@@ -104,6 +108,17 @@ abstract class AbstractOrderPlacementService extends AbstractService
         $existing = $this->orderDao->findByMerchantOrderNoForMerchant($merchant->id, $merchantOrderNo);
 
         return $existing !== null ? $this->toResponseArray($existing) : null;
+    }
+
+    /**
+     * requirements.md 4.2：业务线开通审核通过后才能下单。跟欠款拦截一样放在幂等重放*之后*——
+     * 之前已经下成功的单，重新提交同一个 merchant_order_no 仍然原样返回。
+     */
+    protected function assertBusinessSubscribed(Merchant $merchant): void
+    {
+        if (! $this->subscriptionService->isSubscribed((int) $merchant->id, $this->businessLine())) {
+            throw new OpenApiException(ErrorCode::BusinessNotSubscribed);
+        }
     }
 
     /**

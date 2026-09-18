@@ -81,6 +81,13 @@ export const merchantTypeLabels: LabelMap = {
   individual: { label: '个人' },
 }
 
+/** 业务线开通申请状态 */
+export const subscriptionStatusLabels: LabelMap = {
+  pending: { label: '审核中', type: 'warning' },
+  approved: { label: '已开通', type: 'success' },
+  rejected: { label: '已驳回', type: 'danger' },
+}
+
 export const qualificationStatusLabels: LabelMap = {
   pending: { label: '待审核', type: 'warning' },
   approved: { label: '已通过', type: 'success' },

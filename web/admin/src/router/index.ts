@@ -48,6 +48,12 @@ const router = createRouter({
           meta: { title: '商户等级' },
         },
         {
+          path: 'subscriptions',
+          name: 'subscriptions',
+          component: () => import('@/views/merchant/SubscriptionReviewView.vue'),
+          meta: { title: '开通审核' },
+        },
+        {
           path: 'rebates',
           name: 'rebates',
           component: () => import('@/views/merchant/RebateListView.vue'),

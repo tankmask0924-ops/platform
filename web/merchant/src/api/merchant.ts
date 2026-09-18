@@ -211,3 +211,21 @@ export interface DashboardStats {
 export const dashboardApi = {
   stats: () => http.get<DashboardStats>('/merchant/dashboard'),
 }
+
+/** 服务开通：App\Controller\Merchant\SubscriptionController */
+export interface BusinessSubscription {
+  business_line: string
+  /** false = 平台暂未开放，不能申请 */
+  available: boolean
+  /** null = 没申请过 */
+  status: string | null
+  reject_reason: string | null
+  applied_at: string | null
+  reviewed_at: string | null
+}
+
+export const subscriptionApi = {
+  list: () => http.get<{ data: BusinessSubscription[] }>('/merchant/subscriptions').then((r) => r.data),
+  apply: (businessLine: string) =>
+    http.post<{ data: BusinessSubscription[] }>('/merchant/subscriptions', { business_line: businessLine }).then((r) => r.data),
+}

@@ -76,6 +76,7 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
             return $existing;
         }
 
+        $this->assertBusinessSubscribed($merchant);
         $this->assertMerchantNotSuspended($merchant);
 
         $product = $this->validateProduct($productId);

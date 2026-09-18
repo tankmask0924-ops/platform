@@ -1,5 +1,6 @@
 import {
   Box,
+  Checked,
   Coin,
   Document,
   Goods,
@@ -28,6 +29,7 @@ export const menus: MenuItem[] = [
     icon: Shop,
     children: [
       { path: '/merchants', title: '商户列表', icon: User, permission: 'merchant.view' },
+      { path: '/subscriptions', title: '开通审核', icon: Checked, permission: 'subscription.view' },
       { path: '/recharge-requests', title: '充值审核', icon: Money, permission: 'recharge.view' },
       { path: '/merchant-levels', title: '商户等级', icon: Rank, permission: 'merchant_level.view' },
       { path: '/rebates', title: '返佣明细', icon: Coin, permission: 'rebate.view' },

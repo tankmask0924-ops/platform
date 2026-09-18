@@ -31,10 +31,7 @@ use Hyperf\HttpServer\Annotation\Middleware;
  * fail() 返回明确的业务错误，不当成 recharge 处理、也不静默返回空列表——避免调用方
  * 传错参数时以为"这条业务线现在没有商品"。
  *
- * 商户已开通业务线的校验（requirements.md 8.1"商户已开通的商品"）**没有实现**：
- * 这个开通/审核机制目前完全没有 Model/Dao/后台，细节见
- * App\Service\OpenApi\ProductListService 类注释。这里只依赖
- * App\Middleware\OpenApiSignatureMiddleware 已经保证的"商户存在且 status = active"。
+ * 商户没开通该业务线（requirements.md 4.2）时返回 42007，见 App\Service\OpenApi\ProductListService。
  */
 #[Controller(prefix: '/open-api')]
 #[Middleware(OpenApiSignatureMiddleware::class)]

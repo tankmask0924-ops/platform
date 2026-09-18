@@ -14,6 +14,7 @@ namespace HyperfTest\Cases\OpenApi;
 
 use App\Crypto\Encryptor;
 use App\Model\Merchant;
+use App\Model\MerchantBusinessSubscription;
 use App\Model\MerchantLevelBusinessRate;
 use App\Model\Product;
 use App\Model\ProductLevelRebate;
@@ -56,6 +57,7 @@ class ProductControllerTest extends HttpTestCase
         $this->productIds = [];
 
         foreach ($this->merchantIds as $id) {
+            MerchantBusinessSubscription::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
         $this->merchantIds = [];
@@ -124,6 +126,22 @@ class ProductControllerTest extends HttpTestCase
         $this->assertSame('0.90', $rows[$nameB]['rebate']);
     }
 
+    public function testMerchantWithoutSubscriptionGetsNotSubscribedError()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret, null);
+        MerchantBusinessSubscription::where('merchant_id', $merchant->id)->where('business_line', 'recharge')->update(['status' => 'rejected']);
+
+        $response = $this->client->request('GET', '/open-api/products', [
+            'query' => $this->signedParams($merchant->app_key, $secret, ['business_line' => 'recharge']),
+        ]);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(42007, $body['code']);
+        $this->assertNull($body['data']);
+    }
+
     public function testCardBusinessLineIsRejectedWithCleanFailureEnvelope()
     {
         $secret = 'plain-secret-' . uniqid('', true);
@@ -184,6 +202,10 @@ class ProductControllerTest extends HttpTestCase
         ]);
 
         $this->merchantIds[] = $merchant->id;
+        // 下单和商品查询要求已开通业务线（requirements.md 4.2）
+        foreach (['recharge', 'card'] as $line) {
+            MerchantBusinessSubscription::create(['merchant_id' => $merchant->id, 'business_line' => $line, 'status' => 'approved', 'applied_at' => date('Y-m-d H:i:s')]);
+        }
 
         return $merchant;
     }
