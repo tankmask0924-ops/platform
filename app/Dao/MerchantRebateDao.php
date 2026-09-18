@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\MerchantRebate;
+use Hyperf\Database\Model\Builder;
 use Hyperf\Database\Model\Collection;
 
 class MerchantRebateDao extends AbstractDao
@@ -91,5 +92,69 @@ class MerchantRebateDao extends AbstractDao
         }
 
         return (string) $sum;
+    }
+
+    /**
+     * 返佣明细分页（商户后台、系统后台共用），最新在前。
+     *
+     * @param array<string, mixed> $filters merchant_id / status / business_line / order_no / created_from / created_to
+     * @return Collection<int, MerchantRebate>
+     */
+    public function paginateFiltered(array $filters, int $page, int $perPage): Collection
+    {
+        return $this->filterQuery($filters)->orderByDesc('id')->forPage($page, $perPage)->get();
+    }
+
+    /**
+     * @param array<string, mixed> $filters 同 paginateFiltered()
+     */
+    public function countFiltered(array $filters): int
+    {
+        return $this->filterQuery($filters)->count();
+    }
+
+    /**
+     * 按状态汇总笔数和金额（金额是 DECIMAL 求和后的字符串）。
+     *
+     * @param array<string, mixed> $filters 同 paginateFiltered()
+     * @return array<string, array{count: int, amount: string}>
+     */
+    public function summarizeByStatus(array $filters): array
+    {
+        $rows = $this->filterQuery($filters)
+            ->selectRaw('status, count(*) as n, sum(amount) as total')
+            ->groupBy('status')
+            ->get();
+
+        $summary = [];
+        foreach ($rows as $row) {
+            $summary[$row->status] = ['count' => (int) $row->n, 'amount' => bcadd((string) $row->total, '0', 2)];
+        }
+
+        return $summary;
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     */
+    private function filterQuery(array $filters): Builder
+    {
+        $query = $this->newQuery();
+        foreach (['merchant_id', 'status', 'business_line'] as $column) {
+            if (isset($filters[$column])) {
+                $query->where($column, $filters[$column]);
+            }
+        }
+        if (isset($filters['order_no'])) {
+            $query->whereIn('order_id', fn ($sub) => $sub->select('id')->from('orders')->where('order_no', $filters['order_no']));
+        }
+        if (isset($filters['created_from'])) {
+            $query->where('created_at', '>=', $filters['created_from']);
+        }
+        if (isset($filters['created_to'])) {
+            $query->where('created_at', '<=', $filters['created_to']);
+        }
+
+        return $query;
     }
 }

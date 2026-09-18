@@ -75,6 +75,18 @@ export function roleLabel(name: string | null | undefined): string {
   return name === 'super_admin' ? '超级管理员' : (name ?? '-')
 }
 
+/** 返佣基数来源（merchant_rebates.rebate_base_source） */
+export const rebateBaseSourceLabels: LabelMap = {
+  product: { label: '商品返佣' },
+  supplier: { label: '供应商返佣' },
+}
+
+/** 返佣比例来源（merchant_rebates.rebate_rate_source） */
+export const rebateRateSourceLabels: LabelMap = {
+  product_level: { label: '商品单独设置' },
+  level: { label: '等级设置' },
+}
+
 /** 权限分组 / 操作日志模块，对应权限编码前缀和 Service 里的 MODULE */
 export const moduleLabels: LabelMap = {
   merchant: { label: '商户' },
@@ -85,6 +97,7 @@ export const moduleLabels: LabelMap = {
   supplier: { label: '供应商' },
   order: { label: '订单' },
   aftersale: { label: '售后' },
+  rebate: { label: '返佣' },
   system: { label: '系统设置' },
 }
 

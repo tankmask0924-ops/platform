@@ -89,6 +89,7 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'order.resolve', 'module' => 'order', 'name' => '异常单人工处理', 'type' => 'action'],
         ['code' => 'aftersale.view', 'module' => 'aftersale', 'name' => '售后争议查看', 'type' => 'action'],
         ['code' => 'aftersale.handle', 'module' => 'aftersale', 'name' => '售后争议处理（驳回/确认未到账退款）', 'type' => 'action'],
+        ['code' => 'rebate.view', 'module' => 'rebate', 'name' => '商户返佣明细查看', 'type' => 'action'],
         ['code' => 'admin_user.view', 'module' => 'system', 'name' => '管理员账号查看', 'type' => 'action'],
         ['code' => 'admin_user.manage', 'module' => 'system', 'name' => '管理员账号管理', 'type' => 'action'],
         ['code' => 'role.view', 'module' => 'system', 'name' => '角色权限查看', 'type' => 'action'],
@@ -116,7 +117,7 @@ class AdminBootstrapService extends AbstractService
         '财务' => [
             'remark' => '充值审核、调账、资金核对',
             'permissions' => [
-                'merchant.view', 'merchant.balance_adjust', 'recharge.view', 'recharge.manage', 'order.view', 'aftersale.view',
+                'merchant.view', 'merchant.balance_adjust', 'recharge.view', 'recharge.manage', 'order.view', 'aftersale.view', 'rebate.view',
             ],
         ],
         '客服' => [

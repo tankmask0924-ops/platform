@@ -86,15 +86,18 @@ class SystemSettingControllerTest extends HttpTestCase
         $this->assertNull(SystemSetting::find('abnormal_order_hours'));
     }
 
-    public function testRebatePeriodCannotBeShorterThanDisputeDeadline()
+    /**
+     * requirements.md 5.4「扣回」写明运营可以把返佣期限改得比争议时限短（到账后才核实未到账的扣回），
+     * 所以两项互不限制。
+     */
+    public function testRebatePeriodMayBeShorterThanDisputeDeadline()
     {
         SystemSetting::query()->delete();
         $token = $this->loginAs($this->createAdminWithPermissions(['setting.manage']));
 
-        $this->assertSame(422, $this->jsonRequest('PUT', '/admin/settings/rebate_due_period_days', $token, ['value' => 5])->getStatusCode());
-        $this->assertSame(422, $this->jsonRequest('PUT', '/admin/settings/dispute_deadline_days', $token, ['value' => 10])->getStatusCode());
-        $this->assertSame(200, $this->jsonRequest('PUT', '/admin/settings/rebate_due_period_days', $token, ['value' => 10])->getStatusCode());
+        $this->assertSame(200, $this->jsonRequest('PUT', '/admin/settings/rebate_due_period_days', $token, ['value' => 3])->getStatusCode());
         $this->assertSame(200, $this->jsonRequest('PUT', '/admin/settings/dispute_deadline_days', $token, ['value' => 10])->getStatusCode());
+        $this->assertSame('3', (string) SystemSetting::find('rebate_due_period_days')->value);
     }
 
     public function testWriteWithoutExplicitLogIsLoggedAutomaticallyWithSecretsMasked()

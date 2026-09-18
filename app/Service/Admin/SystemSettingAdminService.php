@@ -97,7 +97,7 @@ class SystemSettingAdminService extends AbstractService
             'min' => 1,
             'max' => 365,
             'default' => OrderResultApplier::DEFAULT_REBATE_DUE_PERIOD_DAYS,
-            'description' => '订单完成后多少天返佣到账；不能短于售后争议时限，避免返佣先到账再被扣回',
+            'description' => '订单完成后多少天返佣到账；只影响之后完成的订单。短于售后争议时限时，到账后才核实未到账的订单要从余额扣回返佣',
         ],
     ];
 
@@ -153,7 +153,6 @@ class SystemSettingAdminService extends AbstractService
         }
 
         $newValue = $value === null || $value === '' ? $definition['default'] : $this->normalize($definition, $value);
-        $this->guardCrossRules($key, $newValue);
 
         Db::transaction(function () use ($operator, $key, $value, $newValue, $ip) {
             $before = ['key' => $key, 'value' => $this->currentValue($key)];
@@ -211,22 +210,5 @@ class SystemSettingAdminService extends AbstractService
         }
 
         return $money;
-    }
-
-    /**
-     * 返佣期限不能短于争议时限（requirements.md 5.4）。
-     */
-    private function guardCrossRules(string $key, int|string $newValue): void
-    {
-        $rebateKey = OrderResultApplier::REBATE_DUE_PERIOD_SETTING_KEY;
-        $disputeKey = DisputeService::DEADLINE_SETTING_KEY;
-        if ($key !== $rebateKey && $key !== $disputeKey) {
-            return;
-        }
-        $rebate = $key === $rebateKey ? (int) $newValue : (int) $this->currentValue($rebateKey);
-        $dispute = $key === $disputeKey ? (int) $newValue : (int) $this->currentValue($disputeKey);
-        if ($rebate < $dispute) {
-            throw new HttpException(422, "返佣固定期限（{$rebate} 天）不能短于售后争议时限（{$dispute} 天）");
-        }
     }
 }

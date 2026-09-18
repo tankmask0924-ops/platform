@@ -336,3 +336,41 @@ export const disputeApi = {
   confirm: (id: number, remark: string, evidence: string[]) =>
     http.post<Dispute>(`/admin/disputes/${id}/confirm`, { remark, evidence }),
 }
+
+/** 商户返佣明细：App\Controller\Admin\RebateController */
+export interface Rebate {
+  id: number
+  order_id: number
+  order_no: string | null
+  merchant_order_no: string | null
+  merchant_id: number
+  merchant_phone: string | null
+  merchant_email: string | null
+  business_line: string
+  sale_price: string | null
+  level_id: number
+  level_name: string | null
+  rebate_base: string
+  rebate_base_source: string
+  rebate_rate: string
+  rebate_rate_source: string
+  amount: string
+  status: string
+  order_completed_at: string | null
+  due_at: string | null
+  settled_at: string | null
+  voided_at: string | null
+  clawed_back_at: string | null
+  created_at: string | null
+}
+
+export interface RebateList extends Paged<Rebate> {
+  /** 按当前筛选条件、按状态汇总的笔数和金额 */
+  summary: Record<string, { count: number; amount: string }>
+  /** 当前的返佣固定期限（天） */
+  due_period_days: number
+}
+
+export const rebateApi = {
+  list: (params: Query) => http.get<RebateList>('/admin/rebates', params),
+}

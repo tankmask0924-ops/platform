@@ -19,6 +19,7 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantLevel;
 use App\Model\MerchantLevelBusinessRate;
+use App\Model\MerchantRebate;
 use App\Model\Order;
 use App\Model\OrderAttempt;
 use App\Model\OrderRecharge;
@@ -72,6 +73,7 @@ class CardOrderPlacementServiceTest extends TestCase
             OrderAttempt::where('order_id', $id)->delete();
             OrderRecharge::where('order_id', $id)->delete();
             MerchantBalanceLog::where('order_id', $id)->delete();
+            MerchantRebate::where('order_id', $id)->delete();
             Order::destroy($id);
         }
         $this->orderIds = [];

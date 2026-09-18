@@ -301,7 +301,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商品价格：售价与自己等级的返佣展示 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 充值：提交申请 / 查看记录 | 一期 | ✅ `App\Controller\Merchant\RechargeRequestController` | ✅ `App\Service\Merchant\RechargeRequestService` | `views/finance/RechargeView.vue` ✅ 已联调（2026-09-18）（凭证只能填图片链接，上传接口未做） | ✅ |
 | 资金流水：查询与导出 | 一期 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | `views/finance/BalanceLogView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"（`GET /merchant/balance-logs`，支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明），"导出"不在本次任务范围内 |
-| 返佣：明细查询与导出 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 返佣：明细查询与导出 | 一期 | ✅ `App\Controller\Merchant\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/finance/RebateView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"：`GET /merchant/rebates`（status / business_line / order_no / created_from / created_to 筛选，最新在前），返回订单、业务线、订单金额、等级比例、返佣金额、状态、订单完成时间、预计到账和到账/作废/扣回时间，外加按当前筛选条件的分状态汇总 `summary`（笔数 + 金额，不分页）；返佣基数及来源、比例来源、等级属于平台内部数据，不返回。导出不在本次范围。测试 `test/Cases/Merchant/RebateControllerTest.php` |
 | 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | 一期 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | `views/order/OrderListView.vue` ✅ 已联调（2026-09-18）（列表可直接申请售后） | 🔨 除导出外已完成：`GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价。测试 `test/Cases/Merchant/OrderControllerTest.php` |
 | 售后：未到账争议提交与查看 | 一期 | ✅ `App\Controller\Merchant\DisputeController` | ✅ `App\Service\Merchant\DisputeService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | ✅ `POST /merchant/disputes`（`order_no`）、`GET /merchant/disputes`（`status` 筛选）、`GET /merchant/disputes/{id}`；只接受话费、卡券成功订单，订单成功后 `dispute_deadline_days`（默认 7）天内，一笔订单只能提交一次（被驳回后不能再提）；处理结果、说明和凭证商户可见。表里没有商户描述字段，提交时只选订单。见第 8 节"售后处理"说明，测试 `test/Cases/Merchant/DisputeControllerTest.php` |
 | 接口文档：在线查看 / 下载签名示例 | 一期 | ⬜ | ➖ | ⬜ | ⬜ |
@@ -326,13 +326,13 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | 一期（熔断二期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 商户等级：CRUD / 各业务线比例设置 | 一期 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | `views/merchant/MerchantLevelView.vue` ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。商品单独覆盖某等级比例（`product_level_rebates`）已在「本地商品库」行完成 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期 | ⬜ | ⬜ | ⬜ | ⬜（生成+结算的业务逻辑已在第 1 节"返佣待到账生成 + 到期结算"完成，这行剩下的是后台管理 UI——`rebate_due_period_days` 目前只能直接改 `system_settings` 表、没有编辑接口，也没有"商户返佣明细/供应商返佣明细"的查询列表） |
+| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18） | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` 🔨 页面已写好，待登录联调；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验，返佣期限不短于争议时限；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` 🔨 页面已写好，待登录联调；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
 
 > 「售后处理：话费卡券争议处理」（requirements.md 7.7）：`GET /admin/disputes`（status / merchant_id 筛选）、
 > `GET /admin/disputes/{id}`（含订单和返佣状态）、`POST /admin/disputes/{id}/reject`（确认已到账：`remark` + 必填
@@ -579,17 +579,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 9 | 1 | 6 |
-| 系统管理后台 | 19 | 10 | 2 | 7 |
+| 商户管理后台 | 16 | 10 | 1 | 5 |
+| 系统管理后台 | 19 | 10 | 3 | 6 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **53** | **3** | **50** |
+| **合计** | **106** | **54** | **4** | **48** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 10 | 10 | 0 |
-| 系统管理后台（web/admin） | 19 | 12 | 11 | 0（系统设置 1 行页面已写好待联调） |
+| 商户管理后台（web/merchant） | 16 | 11 | 11 | 0 |
+| 系统管理后台（web/admin） | 19 | 13 | 12 | 0（系统设置 1 行页面已写好待联调） |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -606,8 +606,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：~~找回密码、修改密码~~（已完成）、资质提交与审核状态、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、返佣明细、接口文档
-   - 系统后台：服务开通审核、~~系统设置~~（已完成，页面待联调）、返佣管理（商户/供应商返佣明细）、商品同步接入与余额监控
+   - 商户后台：~~找回密码、修改密码~~（已完成）、资质提交与审核状态、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、~~返佣明细~~（已完成，导出未做）、接口文档
+   - 系统后台：服务开通审核、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、商品同步接入与余额监控
    - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境

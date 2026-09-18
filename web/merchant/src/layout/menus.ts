@@ -1,4 +1,4 @@
-import { Document, HomeFilled, Key, List, Money, Service, Tickets, Wallet } from '@element-plus/icons-vue'
+import { Coin, Document, HomeFilled, Key, List, Money, Service, Tickets, Wallet } from '@element-plus/icons-vue'
 import type { MenuItem } from '@platform/shared'
 
 export const menus: MenuItem[] = [
@@ -19,6 +19,7 @@ export const menus: MenuItem[] = [
     children: [
       { path: '/finance/recharge', title: '充值申请', icon: Money },
       { path: '/finance/balance-logs', title: '资金流水', icon: Document },
+      { path: '/finance/rebates', title: '返佣明细', icon: Coin },
     ],
   },
   { path: '/dev-settings', title: '开发设置', icon: Key },

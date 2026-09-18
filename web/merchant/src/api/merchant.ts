@@ -120,3 +120,28 @@ export const disputeApi = {
   detail: (id: number) => http.get<Dispute>(`/merchant/disputes/${id}`),
   submit: (orderNo: string) => http.post<Dispute>('/merchant/disputes', { order_no: orderNo }),
 }
+
+/** 返佣明细：App\Controller\Merchant\RebateController */
+export interface Rebate {
+  id: number
+  order_no: string | null
+  merchant_order_no: string | null
+  business_line: string
+  sale_price: string | null
+  rebate_rate: string
+  amount: string
+  status: string
+  order_completed_at: string | null
+  due_at: string | null
+  settled_at: string | null
+  voided_at: string | null
+  clawed_back_at: string | null
+  created_at: string | null
+}
+
+/** 按当前筛选条件、按状态汇总的笔数和金额 */
+export type RebateSummary = Record<string, { count: number; amount: string }>
+
+export const rebateApi = {
+  list: (params: Query) => http.get<Paged<Rebate> & { summary: RebateSummary }>('/merchant/rebates', params),
+}

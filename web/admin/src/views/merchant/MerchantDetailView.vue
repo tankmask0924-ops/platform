@@ -16,8 +16,10 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { type BalanceLog, merchantApi, type MerchantDetail } from '@/api/admin'
 import { useLevels } from '@/composables/useLevels'
+import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
+const permission = usePermissionStore()
 const id = Number(route.params.id)
 const { levels, ensure, levelName } = useLevels()
 
@@ -229,6 +231,9 @@ onMounted(() => {
           </el-descriptions-item>
           <el-descriptions-item label="冻结金额">{{ money(merchant.frozen_balance) }}</el-descriptions-item>
           <el-descriptions-item label="欠款开始">{{ merchant.debt_since ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item v-if="permission.can('rebate.view')" label="返佣">
+            <router-link :to="{ name: 'rebates', query: { merchant_id: merchant.id } }">查看返佣明细</router-link>
+          </el-descriptions-item>
           <el-descriptions-item label="限流">
             {{ merchant.rate_limit.limit_per_second }} 次/秒
             <el-tag size="small" :type="merchant.rate_limit.is_custom ? 'warning' : 'info'">
