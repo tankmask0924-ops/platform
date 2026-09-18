@@ -13,31 +13,41 @@ declare(strict_types=1);
 namespace App\Dao;
 
 use App\Model\MerchantQualification;
+use Hyperf\Database\Model\Collection;
 
 class MerchantQualificationDao extends AbstractDao
 {
     protected string $model = MerchantQualification::class;
 
-    public function findByMerchantId(int $merchantId): ?MerchantQualification
+    /**
+     * 商户当前的资质资料：驳回后重新提交会留下多条历史记录，取最新提交的一条
+     * （按 id 倒序，同一秒内提交两次也不会取错）。
+     */
+    public function findLatestByMerchantId(int $merchantId): ?MerchantQualification
     {
-        return $this->newQuery()->where('merchant_id', $merchantId)->first();
+        return $this->newQuery()->where('merchant_id', $merchantId)->orderByDesc('id')->first();
     }
 
     /**
-     * 系统管理后台（web/admin）「商户入驻审核」详情/审核动作用（requirements.md 4.1、8.3）。
-     *
-     * 跟 findByMerchantId() 不同：那个方法不排序、不过滤 status，只取「随便一条」，
-     * 对审核这种必须精确定位「当前这条待审核提交」的场景太松——一个商户驳回后
-     * 重新提交资质资料会在表里留下多条历史记录（驳回的旧记录 + 新提交的待审核记录），
-     * findByMerchantId() 不保证拿到的是最新那条，也不保证是 pending 状态。
-     * 这里显式按 created_at 倒序 + status = 'pending' 过滤，只取真正等待审核的那条。
+     * 系统管理后台（web/admin）「商户入驻审核」审核动作用（requirements.md 4.1、8.3）：
+     * 只取真正等待审核的那条。
      */
     public function findLatestPendingByMerchantId(int $merchantId): ?MerchantQualification
     {
         return $this->newQuery()
             ->where('merchant_id', $merchantId)
             ->where('status', 'pending')
-            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->first();
+    }
+
+    /**
+     * 全部提交记录，最新在前（商户和审核人员看历次驳回原因用）。
+     *
+     * @return Collection<int, MerchantQualification>
+     */
+    public function listByMerchantId(int $merchantId): Collection
+    {
+        return $this->newQuery()->where('merchant_id', $merchantId)->orderByDesc('id')->get();
     }
 }

@@ -28,6 +28,17 @@ export interface Qualification {
   id_card_images: string[] | null
   status: string
   reject_reason: string | null
+  submitted_at: string | null
+  reviewed_at: string | null
+}
+
+/** 历次资质提交（驳回后重新提交会有多条），最新在前 */
+export interface QualificationHistoryItem {
+  id: number
+  type: string
+  status: string
+  reject_reason: string | null
+  submitted_at: string | null
   reviewed_at: string | null
 }
 
@@ -41,6 +52,7 @@ export interface MerchantDetail extends Merchant {
   frozen_balance: string
   debt_since: string | null
   qualification: Qualification | null
+  qualification_history: QualificationHistoryItem[]
   rate_limit: RateLimit
 }
 

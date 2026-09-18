@@ -13,11 +13,8 @@ declare(strict_types=1);
 namespace App\Service\Merchant;
 
 use App\Auth\MerchantJwtGuard;
-use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
-use App\Dao\MerchantQualificationDao;
 use App\Model\Merchant;
-use App\Network\HttpUrl;
 use App\Service\AbstractService;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\DbConnection\Db;
@@ -45,18 +42,13 @@ class AuthService extends AbstractService
 {
     private const MIN_PASSWORD_LENGTH = 8;
 
-    private const ALLOWED_TYPES = ['company', 'individual'];
-
     private const GENERIC_LOGIN_FAIL_MESSAGE = '账号或密码错误';
 
     #[Inject]
     protected MerchantDao $merchantDao;
 
     #[Inject]
-    protected MerchantQualificationDao $merchantQualificationDao;
-
-    #[Inject]
-    protected Encryptor $encryptor;
+    protected QualificationService $qualificationService;
 
     #[Inject]
     protected MerchantJwtGuard $tokenGuard;
@@ -89,26 +81,7 @@ class AuthService extends AbstractService
                 throw new HttpException(422, '手机号或邮箱已被注册', 0, $e);
             }
 
-            $qualificationData = [
-                'merchant_id' => $merchant->id,
-                'type' => $type,
-                'company_name' => $this->nullableString($data['company_name'] ?? null),
-                'business_license_no' => $this->nullableString($data['business_license_no'] ?? null),
-                'business_license_image' => $this->nullableString($data['business_license_image'] ?? null),
-                'legal_person_name' => $this->nullableString($data['legal_person_name'] ?? null),
-                'contact_name' => $this->nullableString($data['contact_name'] ?? null),
-                'contact_phone' => (string) ($data['contact_phone'] ?? ''),
-                'id_card_name' => $this->nullableString($data['id_card_name'] ?? null),
-                'id_card_images' => is_array($data['id_card_images'] ?? null) ? $data['id_card_images'] : null,
-                'status' => 'pending',
-            ];
-
-            $idCardNo = $this->nullableString($data['id_card_no'] ?? null);
-            if ($idCardNo !== null) {
-                $qualificationData['id_card_no'] = $this->encryptor->encrypt($idCardNo);
-            }
-
-            $this->merchantQualificationDao->create($qualificationData);
+            $this->qualificationService->createPending((int) $merchant->id, $type, $data);
 
             return $merchant;
         });
@@ -152,7 +125,7 @@ class AuthService extends AbstractService
      */
     private function validateRegister(string $type, string $phone, string $email, string $password, array $data): void
     {
-        if (! in_array($type, self::ALLOWED_TYPES, true)) {
+        if (! in_array($type, QualificationService::TYPES, true)) {
             throw new HttpException(422, 'type 必须是 company 或 individual');
         }
 
@@ -172,43 +145,6 @@ class AuthService extends AbstractService
             throw new HttpException(422, '邮箱已被注册');
         }
 
-        // 按 requirements.md 4.1「企业：公司名称、营业执照、法人信息、联系人」
-        // 「个人：姓名、身份证信息、联系方式」这句字面表述，逐项落地为必填字段：
-        // 企业= 公司名称 + 营业执照号 + 法人姓名 + 联系人姓名 + 联系人电话；
-        // 个人 = 姓名（id_card_name）+ 身份证号 + 联系方式（contact_phone）。
-        // business_license_image / id_card_images（证件照片）本任务判定为可选——
-        // 文件上传本身不在这次任务范围内（说明里"文件上传处理不存在，接受字符串"），
-        // 要求前端此刻就必须传路径字符串会绑死一个还不存在的上传流程。
-        $requiredFields = $type === 'company'
-            ? ['company_name', 'business_license_no', 'legal_person_name', 'contact_name', 'contact_phone']
-            : ['id_card_name', 'id_card_no', 'contact_phone'];
-
-        foreach ($requiredFields as $field) {
-            if (trim((string) ($data[$field] ?? '')) === '') {
-                throw new HttpException(422, "{$field} 不能为空");
-            }
-        }
-
-        $images = is_array($data['id_card_images'] ?? null) ? $data['id_card_images'] : [];
-        if (is_string($data['business_license_image'] ?? null)) {
-            $images[] = $data['business_license_image'];
-        }
-        foreach ($images as $image) {
-            $image = is_string($image) ? trim($image) : null;
-            if ($image !== '' && ($image === null || ! HttpUrl::isValid($image))) {
-                throw new HttpException(422, '证件照片必须是 http:// 或 https:// 开头的链接');
-            }
-        }
-    }
-
-    private function nullableString(mixed $value): ?string
-    {
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $value = trim($value);
-
-        return $value === '' ? null : $value;
+        $this->qualificationService->validate($type, $data);
     }
 }

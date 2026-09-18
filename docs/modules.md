@@ -293,7 +293,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 账户：登录 | 一期 | ✅ | ✅ | ✅ `web/merchant/src/views/LoginView.vue` | ✅ |
 | 账户：找回密码 | 一期 | ✅ `App\Controller\Merchant\AuthController` | ✅ `App\Service\Merchant\PasswordService` | ✅ `views/ForgotPasswordView.vue` | ✅ 只支持短信：`POST /merchant/auth/password/reset-code`（`phone`）发 6 位验证码（10 分钟有效、输错 5 次作废、同一手机号 60 秒冷却，手机号没注册也返回同样结果），`POST /merchant/auth/password/reset`（`phone`/`code`/`new_password`）；短信走阿里云（`App\Notify\Sms\AliyunSmsSender`，`.env` 配 `ALIYUN_SMS_*`，没配时验证码只写 `runtime/logs`）；只填邮箱的商户不能自助找回。测试 `test/Cases/Merchant/PasswordControllerTest.php`、`test/Cases/Notify/AliyunSmsSenderTest.php` |
 | 账户：修改密码 | 一期 | ✅ | ✅ `App\Service\Merchant\PasswordService` | ✅ 右上角"修改密码"（`web/shared` 的 `ChangePasswordDialog`） | ✅ `PUT /merchant/auth/password`，返回新 token；token 里带密码版本（`pv`），改密码/找回密码后旧登录全部失效（两个后台都是） |
-| 账户：资质提交与审核状态查看 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 账户：资质提交与审核状态查看 | 一期 | ✅ `App\Controller\Merchant\QualificationController` | ✅ `App\Service\Merchant\QualificationService` | `views/QualificationView.vue` ✅（首页驳回提示链到这里；已在浏览器看过已启用商户的页面，驳回后重新提交的表单跟注册页共用 `components/QualificationFields.vue`） | ✅ `GET /merchant/qualification`：账户状态、类型、当前等级名、最新一次提交的资料（身份证号只返回后 4 位 `id_card_no_masked`）、历次提交和审核结果；`POST /merchant/qualification`：只有 `rejected` 商户能重新提交（待审核、已通过都是 409），锁商户行后新插一条待审核记录、商户回到 `pending`，可以换企业/个人类型（`merchants.type` 一起改）。字段校验和落库跟注册共用 `QualificationService::validate()/createPending()`，并补了按列长度的上限校验。审核通过后资质不能在线修改（没有已启用商户重新审核的流程），变更找平台。系统后台商户详情改成取最新一次提交（原来 `findByMerchantId()` 不排序，有多条时可能取到旧的驳回记录），并返回 `qualification_history`。测试 `test/Cases/Merchant/QualificationControllerTest.php`（注册 → 驳回 → 换类型重新提交 → 审核通过整条链路） |
 | 首页：统计数据展示 | 一期 | ⬜ | ⬜ | 🔨 `views/DashboardView.vue` 已显示余额、审核状态、欠款提示（`/merchant/auth/me` 补了 available_balance / frozen_balance / debt_warning）；统计数据未做 | ⬜ |
 | 开发设置：生成 / 重置 AppKey 与 AppSecret | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 开发设置：IP 白名单配置 | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
@@ -579,16 +579,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 10 | 1 | 5 |
+| 商户管理后台 | 16 | 11 | 1 | 4 |
 | 系统管理后台 | 19 | 10 | 3 | 6 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **54** | **4** | **48** |
+| **合计** | **106** | **55** | **4** | **47** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 11 | 11 | 0 |
+| 商户管理后台（web/merchant） | 16 | 12 | 12 | 0 |
 | 系统管理后台（web/admin） | 19 | 13 | 12 | 0（系统设置 1 行页面已写好待联调） |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
@@ -606,7 +606,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：~~找回密码、修改密码~~（已完成）、资质提交与审核状态、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、~~返佣明细~~（已完成，导出未做）、接口文档
+   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、~~返佣明细~~（已完成，导出未做）、接口文档
    - 系统后台：服务开通审核、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、商品同步接入与余额监控
    - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个

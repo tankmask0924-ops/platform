@@ -2,7 +2,9 @@
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { register, type RegisterForm } from '@/api/auth'
+import { register } from '@/api/auth'
+import QualificationFields from '@/components/QualificationFields.vue'
+import { emptyQualificationForm, qualificationPayload, qualificationRules } from '@/qualification'
 
 const router = useRouter()
 const title = import.meta.env.VITE_APP_TITLE
@@ -11,23 +13,15 @@ const submitting = ref(false)
 const done = ref(false)
 
 const form = reactive({
-  type: 'company' as RegisterForm['type'],
+  ...emptyQualificationForm(),
   phone: '',
   email: '',
   password: '',
   password_confirm: '',
-  company_name: '',
-  business_license_no: '',
-  legal_person_name: '',
-  contact_name: '',
-  contact_phone: '',
-  id_card_name: '',
-  id_card_no: '',
 })
 
-const required = (message: string) => [{ required: true, message, trigger: 'blur' }]
-
 const rules: FormRules = {
+  ...qualificationRules,
   phone: [
     {
       validator: (_rule, _value, callback) => {
@@ -53,13 +47,6 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
-  company_name: required('请输入公司名称'),
-  business_license_no: required('请输入营业执照号'),
-  legal_person_name: required('请输入法人姓名'),
-  contact_name: required('请输入联系人姓名'),
-  contact_phone: required('请输入联系电话'),
-  id_card_name: required('请输入姓名'),
-  id_card_no: required('请输入身份证号'),
 }
 
 async function submit() {
@@ -67,26 +54,9 @@ async function submit() {
   if (!valid) {
     return
   }
-  const data: RegisterForm = {
-    type: form.type,
-    phone: form.phone.trim(),
-    email: form.email.trim(),
-    password: form.password,
-    contact_phone: form.contact_phone.trim(),
-  }
-  if (form.type === 'company') {
-    Object.assign(data, {
-      company_name: form.company_name,
-      business_license_no: form.business_license_no,
-      legal_person_name: form.legal_person_name,
-      contact_name: form.contact_name,
-    })
-  } else {
-    Object.assign(data, { id_card_name: form.id_card_name, id_card_no: form.id_card_no })
-  }
   submitting.value = true
   try {
-    await register(data)
+    await register({ ...qualificationPayload(form), phone: form.phone.trim(), email: form.email.trim(), password: form.password })
     done.value = true
     ElMessage.success('注册成功')
   } finally {
@@ -129,34 +99,7 @@ async function submit() {
         </el-form-item>
 
         <el-divider content-position="left">资质信息</el-divider>
-        <template v-if="form.type === 'company'">
-          <el-form-item label="公司名称" prop="company_name">
-            <el-input v-model="form.company_name" maxlength="128" />
-          </el-form-item>
-          <el-form-item label="营业执照号" prop="business_license_no">
-            <el-input v-model="form.business_license_no" maxlength="64" />
-          </el-form-item>
-          <el-form-item label="法人姓名" prop="legal_person_name">
-            <el-input v-model="form.legal_person_name" maxlength="64" />
-          </el-form-item>
-          <el-form-item label="联系人" prop="contact_name">
-            <el-input v-model="form.contact_name" maxlength="64" />
-          </el-form-item>
-        </template>
-        <template v-else>
-          <el-form-item label="姓名" prop="id_card_name">
-            <el-input v-model="form.id_card_name" maxlength="64" />
-          </el-form-item>
-          <el-form-item label="身份证号" prop="id_card_no">
-            <el-input v-model="form.id_card_no" maxlength="18" />
-          </el-form-item>
-        </template>
-        <el-form-item label="联系电话" prop="contact_phone">
-          <el-input v-model="form.contact_phone" maxlength="20" />
-        </el-form-item>
-        <el-form-item>
-          <div class="tip">营业执照、身份证照片上传暂未开放，审核时平台可能会另行联系你补充。</div>
-        </el-form-item>
+        <QualificationFields v-model="form" />
 
         <el-form-item>
           <el-button type="primary" native-type="submit" :loading="submitting">提交注册</el-button>
@@ -188,11 +131,5 @@ async function submit() {
   text-align: center;
   font-size: 22px;
   font-weight: 600;
-}
-
-.tip {
-  color: #909399;
-  font-size: 12px;
-  line-height: 1.6;
 }
 </style>

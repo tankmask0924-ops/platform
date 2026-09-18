@@ -1,4 +1,5 @@
 import type { LoginForm } from '@platform/shared'
+import type { QualificationPayload } from '@/qualification'
 import { http } from './http'
 
 export interface LoginResult {
@@ -11,20 +12,10 @@ export async function login(form: LoginForm): Promise<LoginResult> {
   return http.post<LoginResult>('/merchant/auth/login', form)
 }
 
-export interface RegisterForm {
-  type: 'company' | 'individual'
+export type RegisterForm = QualificationPayload & {
   phone: string
   email: string
   password: string
-  contact_phone: string
-  // 企业
-  company_name?: string
-  business_license_no?: string
-  legal_person_name?: string
-  contact_name?: string
-  // 个人
-  id_card_name?: string
-  id_card_no?: string
 }
 
 export async function register(form: RegisterForm): Promise<{ id: number; status: string }> {

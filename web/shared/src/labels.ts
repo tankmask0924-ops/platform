@@ -81,6 +81,12 @@ export const merchantTypeLabels: LabelMap = {
   individual: { label: '个人' },
 }
 
+export const qualificationStatusLabels: LabelMap = {
+  pending: { label: '待审核', type: 'warning' },
+  approved: { label: '已通过', type: 'success' },
+  rejected: { label: '已驳回', type: 'danger' },
+}
+
 export const rebateStatusLabels: LabelMap = {
   pending: { label: '待到账', type: 'warning' },
   settled: { label: '已到账', type: 'success' },

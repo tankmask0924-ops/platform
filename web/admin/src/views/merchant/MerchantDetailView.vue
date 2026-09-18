@@ -7,6 +7,7 @@ import {
   merchantStatusLabels,
   merchantTypeLabels,
   money,
+  qualificationStatusLabels,
   StatusTag,
   toOptions,
   usePagedList,
@@ -273,11 +274,31 @@ onMounted(() => {
             </template>
             <el-descriptions-item label="联系电话">{{ merchant.qualification.contact_phone }}</el-descriptions-item>
             <el-descriptions-item label="审核状态">
-              <StatusTag :map="{ pending: { label: '待审核', type: 'warning' }, approved: { label: '已通过', type: 'success' }, rejected: { label: '已驳回', type: 'danger' } }" :value="merchant.qualification.status" />
+              <StatusTag :map="qualificationStatusLabels" :value="merchant.qualification.status" />
             </el-descriptions-item>
-            <el-descriptions-item label="驳回原因">{{ merchant.qualification.reject_reason ?? '-' }}</el-descriptions-item>
+            <el-descriptions-item label="提交时间">{{ merchant.qualification.submitted_at ?? '-' }}</el-descriptions-item>
             <el-descriptions-item label="审核时间">{{ merchant.qualification.reviewed_at ?? '-' }}</el-descriptions-item>
+            <el-descriptions-item label="驳回原因" :span="2">{{ merchant.qualification.reject_reason ?? '-' }}</el-descriptions-item>
           </el-descriptions>
+
+          <template v-if="merchant.qualification_history.length > 1">
+            <div class="history-title">历次提交</div>
+            <el-table :data="merchant.qualification_history" border size="small">
+              <el-table-column prop="submitted_at" label="提交时间" width="170" />
+              <el-table-column label="类型" width="80">
+                <template #default="{ row }">{{ labelOf(merchantTypeLabels, row.type) }}</template>
+              </el-table-column>
+              <el-table-column label="结果" width="90">
+                <template #default="{ row }"><StatusTag :map="qualificationStatusLabels" :value="row.status" /></template>
+              </el-table-column>
+              <el-table-column label="驳回原因" min-width="200">
+                <template #default="{ row }">{{ row.reject_reason ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column label="审核时间" width="170">
+                <template #default="{ row }">{{ row.reviewed_at ?? '-' }}</template>
+              </el-table-column>
+            </el-table>
+          </template>
 
           <div v-if="isPending" class="review">
             <span>审核通过并分配等级：</span>
@@ -398,6 +419,11 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.history-title {
+  margin: 16px 0 8px;
+  font-weight: 600;
 }
 
 .review {

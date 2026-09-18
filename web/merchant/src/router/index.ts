@@ -66,6 +66,12 @@ const router = createRouter({
           meta: { title: '返佣明细' },
         },
         {
+          path: 'qualification',
+          name: 'qualification',
+          component: () => import('@/views/QualificationView.vue'),
+          meta: { title: '资质资料' },
+        },
+        {
           path: 'dev-settings',
           name: 'dev-settings',
           component: () => import('@/views/DevSettingsView.vue'),

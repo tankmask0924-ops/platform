@@ -112,7 +112,8 @@ class MerchantAdminService extends AbstractService
     {
         $merchant = $this->findMerchantOrFail($merchantId);
 
-        $qualification = $this->merchantQualificationDao->findByMerchantId($merchantId);
+        $qualifications = $this->merchantQualificationDao->listByMerchantId($merchantId);
+        $qualification = $qualifications->first();
 
         return [
             'id' => $merchant->id,
@@ -126,6 +127,15 @@ class MerchantAdminService extends AbstractService
             'debt_since' => $merchant->debt_since,
             'created_at' => $merchant->created_at?->toDateTimeString(),
             'qualification' => $qualification ? $this->formatQualification($qualification) : null,
+            // 历次提交（驳回后重新提交会有多条），审核时对照之前的驳回原因
+            'qualification_history' => $qualifications->map(fn (MerchantQualification $q) => [
+                'id' => $q->id,
+                'type' => $q->type,
+                'status' => $q->status,
+                'reject_reason' => $q->reject_reason,
+                'submitted_at' => $q->created_at?->toDateTimeString(),
+                'reviewed_at' => $q->reviewed_at?->toDateTimeString(),
+            ])->values()->all(),
             'rate_limit' => $this->formatRateLimit($merchantId),
         ];
     }
@@ -439,6 +449,7 @@ class MerchantAdminService extends AbstractService
             'id_card_images' => $qualification->id_card_images,
             'status' => $qualification->status,
             'reject_reason' => $qualification->reject_reason,
+            'submitted_at' => $qualification->created_at?->toDateTimeString(),
             'reviewed_at' => $qualification->reviewed_at?->toDateTimeString(),
         ];
     }

@@ -27,14 +27,9 @@ onMounted(async () => {
         title="资质审核中"
         description="平台审核通过后才能生成接口密钥和下单，请耐心等待。"
       />
-      <el-alert
-        v-else-if="me.status === 'rejected'"
-        type="error"
-        show-icon
-        :closable="false"
-        title="资质审核未通过"
-        description="请联系平台客服了解驳回原因。"
-      />
+      <el-alert v-else-if="me.status === 'rejected'" type="error" show-icon :closable="false" title="资质审核未通过">
+        <router-link :to="{ name: 'qualification' }">查看驳回原因并修改资料重新提交</router-link>
+      </el-alert>
       <el-alert
         v-if="me.debt_since"
         :type="me.debt_warning ? 'error' : 'warning'"

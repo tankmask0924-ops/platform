@@ -1,4 +1,5 @@
 import type { Paged } from '@platform/shared'
+import type { QualificationPayload } from '@/qualification'
 import { http } from './http'
 
 type Query = Record<string, unknown>
@@ -144,4 +145,49 @@ export type RebateSummary = Record<string, { count: number; amount: string }>
 
 export const rebateApi = {
   list: (params: Query) => http.get<Paged<Rebate> & { summary: RebateSummary }>('/merchant/rebates', params),
+}
+
+/** 资质资料：App\Controller\Merchant\QualificationController */
+export interface MerchantQualification {
+  id: number
+  type: string
+  company_name: string | null
+  business_license_no: string | null
+  business_license_image: string | null
+  legal_person_name: string | null
+  contact_name: string | null
+  contact_phone: string
+  id_card_name: string | null
+  /** 身份证号只返回后 4 位 */
+  id_card_no_masked: string | null
+  id_card_images: string[] | null
+  status: string
+  reject_reason: string | null
+  submitted_at: string | null
+  reviewed_at: string | null
+}
+
+export interface QualificationHistoryItem {
+  id: number
+  type: string
+  status: string
+  reject_reason: string | null
+  submitted_at: string | null
+  reviewed_at: string | null
+}
+
+export interface QualificationStatus {
+  /** 商户账户状态 */
+  status: string
+  type: string
+  level_name: string | null
+  /** 只有被驳回时能重新提交 */
+  can_resubmit: boolean
+  qualification: MerchantQualification | null
+  history: QualificationHistoryItem[]
+}
+
+export const qualificationApi = {
+  get: () => http.get<QualificationStatus>('/merchant/qualification'),
+  resubmit: (data: QualificationPayload) => http.post<QualificationStatus>('/merchant/qualification', data),
 }
