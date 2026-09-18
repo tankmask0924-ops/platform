@@ -229,3 +229,31 @@ export const subscriptionApi = {
   apply: (businessLine: string) =>
     http.post<{ data: BusinessSubscription[] }>('/merchant/subscriptions', { business_line: businessLine }).then((r) => r.data),
 }
+
+/** 商品价格：App\Controller\Merchant\ProductController */
+export interface PricedProduct {
+  id: number
+  name: string
+  operator: string | null
+  province: string | null
+  charge_speed: string | null
+  card_type: string | null
+  face_value: string
+  sale_price: string
+  /** 按本商户当前等级算出的每单返佣 */
+  rebate: string
+}
+
+export interface ProductPriceList {
+  business_line: string
+  /** false = 平台暂未开放该业务线 */
+  available: boolean
+  subscribed: boolean
+  /** 本等级在该业务线的默认返佣比例（1 = 100%），没设置为 null */
+  level_rate: string | null
+  data: PricedProduct[]
+}
+
+export const productApi = {
+  list: (businessLine: string) => http.get<ProductPriceList>('/merchant/products', { business_line: businessLine }),
+}

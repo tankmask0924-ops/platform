@@ -13,21 +13,8 @@ export const productBusinessLineLabels: LabelMap = {
   card: { label: '卡券' },
 }
 
-export const operatorLabels: LabelMap = {
-  mobile: { label: '移动' },
-  unicom: { label: '联通' },
-  telecom: { label: '电信' },
-}
-
-export const chargeSpeedLabels: LabelMap = {
-  fast: { label: '快充' },
-  slow: { label: '慢充' },
-}
-
-export const cardTypeLabels: LabelMap = {
-  direct: { label: '直充' },
-  card_secret: { label: '卡密' },
-}
+/** 商品字段的枚举，商户后台也要用，放在 shared */
+export { cardTypeLabels, chargeSpeedLabels, operatorLabels } from '@platform/shared'
 
 export const supplierStatusLabels: LabelMap = {
   active: { label: '启用', type: 'success' },

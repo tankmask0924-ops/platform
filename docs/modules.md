@@ -292,7 +292,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 开发设置：生成 / 重置 AppKey 与 AppSecret | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 开发设置：IP 白名单配置 | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 服务开通：查看可开通业务线 / 提交申请 / 查看状态 | 一期 | ✅ `App\Controller\Merchant\SubscriptionController` | ✅ `App\Service\Merchant\SubscriptionService` | `views/ServiceView.vue` ✅ 已在浏览器看过列表（申请动作靠接口测试覆盖） | ✅ `GET /merchant/subscriptions`（四条业务线及开通状态，电影票/快递 `available=false` 暂未开放）、`POST /merchant/subscriptions`（`business_line`）：只有 active 商户能申请；每个商户每条业务线一行（表上 `(merchant_id, business_line)` 唯一），驳回后重新申请是把这一行改回 pending；审核中/已开通重复申请 409。**开放 API 门槛**：`SubscriptionService::isSubscribed()`，没开通的业务线商品列表和下单都返回新错误码 42007「未开通该业务线」（下单时放在幂等重放之后、欠款拦截之前，已下成功的单重提仍原样返回）。测试 `test/Cases/Merchant/SubscriptionControllerTest.php`，开放 API 侧见 `ProductControllerTest`/`RechargeOrderPlacementServiceTest` 新增用例（其余下单测试的商户 fixture 都补了已开通的话费/卡券） |
-| 商品价格：售价与自己等级的返佣展示 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 商品价格：售价与自己等级的返佣展示 | 一期 | ✅ `App\Controller\Merchant\ProductController` | ✅ `App\Service\Merchant\ProductPriceService` | `views/ProductPriceView.vue` ✅（按业务线分页签；在浏览器看过未开通/暂未开放两种状态，有商品的表格靠接口测试覆盖） | ✅ `GET /merchant/products?business_line=`：`available`（平台是否开放）、`subscribed`（本商户是否开通）、`level_rate`（本等级在该业务线的默认比例，电影票/快递就靠它展示）、`data`（只有已开通的话费/卡券才返回在架商品：面值、售价、每单返佣，返佣跟开放 API 同一个 `RebateCalculator`，含商品单独覆盖）。不返回返佣基数和比例来源。商品枚举文案（运营商/到账速度/卡券类型）从 admin 挪到 `web/shared` 共用。测试 `test/Cases/Merchant/ProductControllerTest.php` |
 | 充值：提交申请 / 查看记录 | 一期 | ✅ `App\Controller\Merchant\RechargeRequestController` | ✅ `App\Service\Merchant\RechargeRequestService` | `views/finance/RechargeView.vue` ✅ 已联调（2026-09-18）（凭证只能填图片链接，上传接口未做） | ✅ |
 | 资金流水：查询与导出 | 一期 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | `views/finance/BalanceLogView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"（`GET /merchant/balance-logs`，支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明），"导出"不在本次任务范围内 |
 | 返佣：明细查询与导出 | 一期 | ✅ `App\Controller\Merchant\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/finance/RebateView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"：`GET /merchant/rebates`（status / business_line / order_no / created_from / created_to 筛选，最新在前），返回订单、业务线、订单金额、等级比例、返佣金额、状态、订单完成时间、预计到账和到账/作废/扣回时间，外加按当前筛选条件的分状态汇总 `summary`（笔数 + 金额，不分页）；返佣基数及来源、比例来源、等级属于平台内部数据，不返回。导出不在本次范围。测试 `test/Cases/Merchant/RebateControllerTest.php` |
@@ -573,16 +573,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 13 | 1 | 2 |
+| 商户管理后台 | 16 | 14 | 1 | 1 |
 | 系统管理后台 | 19 | 11 | 3 | 5 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **58** | **4** | **44** |
+| **合计** | **106** | **59** | **4** | **43** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 14 | 14 | 0 |
+| 商户管理后台（web/merchant） | 16 | 15 | 15 | 0 |
 | 系统管理后台（web/admin） | 19 | 14 | 13 | 0（系统设置 1 行页面已写好待联调） |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
@@ -600,7 +600,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通~~（已完成）、商品价格展示、~~返佣明细~~（已完成，导出未做）、接口文档
+   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成，导出未做）、接口文档
    - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、商品同步接入与余额监控
    - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个

@@ -66,6 +66,12 @@ const router = createRouter({
           meta: { title: '返佣明细' },
         },
         {
+          path: 'products',
+          name: 'products',
+          component: () => import('@/views/ProductPriceView.vue'),
+          meta: { title: '商品价格' },
+        },
+        {
           path: 'services',
           name: 'services',
           component: () => import('@/views/ServiceView.vue'),

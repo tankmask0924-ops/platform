@@ -100,3 +100,19 @@ export const rebateStatusLabels: LabelMap = {
   voided: { label: '已作废', type: 'info' },
   clawed_back: { label: '已扣回', type: 'danger' },
 }
+
+export const operatorLabels: LabelMap = {
+  mobile: { label: '移动' },
+  unicom: { label: '联通' },
+  telecom: { label: '电信' },
+}
+
+export const chargeSpeedLabels: LabelMap = {
+  fast: { label: '快充' },
+  slow: { label: '慢充' },
+}
+
+export const cardTypeLabels: LabelMap = {
+  direct: { label: '直充' },
+  card_secret: { label: '卡密' },
+}
