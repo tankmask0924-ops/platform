@@ -15,6 +15,7 @@ namespace App\Service\Merchant;
 use App\Dao\MerchantRechargeRequestDao;
 use App\Model\Merchant;
 use App\Model\MerchantRechargeRequest;
+use App\Network\HttpUrl;
 use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -51,6 +52,9 @@ class RechargeRequestService extends AbstractService
         $proofImage = is_string($proofImage) ? trim($proofImage) : '';
         if ($proofImage === '') {
             throw new HttpException(422, 'proof_image 不能为空');
+        }
+        if (! HttpUrl::isValid($proofImage)) {
+            throw new HttpException(422, 'proof_image 必须是 http:// 或 https:// 开头的链接');
         }
 
         $transferNo = is_string($transferNo) ? trim($transferNo) : '';

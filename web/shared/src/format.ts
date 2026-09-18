@@ -27,3 +27,8 @@ export function splitLines(text: string): string[] {
 export function isNegative(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.trim().startsWith('-')
 }
+
+/** 只有 http(s) 链接才渲染成可点击的链接，挡掉 javascript: 之类的地址 */
+export function isHttpUrl(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^https?:\/\/\S+$/i.test(value.trim())
+}

@@ -17,6 +17,7 @@ use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantQualificationDao;
 use App\Model\Merchant;
+use App\Network\HttpUrl;
 use App\Service\AbstractService;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\DbConnection\Db;
@@ -185,6 +186,17 @@ class AuthService extends AbstractService
         foreach ($requiredFields as $field) {
             if (trim((string) ($data[$field] ?? '')) === '') {
                 throw new HttpException(422, "{$field} 不能为空");
+            }
+        }
+
+        $images = is_array($data['id_card_images'] ?? null) ? $data['id_card_images'] : [];
+        if (is_string($data['business_license_image'] ?? null)) {
+            $images[] = $data['business_license_image'];
+        }
+        foreach ($images as $image) {
+            $image = is_string($image) ? trim($image) : null;
+            if ($image !== '' && ($image === null || ! HttpUrl::isValid($image))) {
+                throw new HttpException(422, '证件照片必须是 http:// 或 https:// 开头的链接');
             }
         }
     }

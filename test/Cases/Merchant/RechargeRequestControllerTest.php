@@ -141,6 +141,21 @@ class RechargeRequestControllerTest extends HttpTestCase
         $this->assertLessThan(500, $response->getStatusCode());
     }
 
+    public function testSubmitNonHttpProofImageIsRejected()
+    {
+        $merchant = $this->createMerchant();
+        $token = $this->loginAndGetToken($merchant);
+
+        foreach (['not-a-url', 'javascript:alert(1)', 'ftp://example.com/proof.png'] as $proofImage) {
+            $response = $this->client->request('POST', '/merchant/recharge-requests', [
+                'headers' => ['Authorization' => 'Bearer ' . $token],
+                'form_params' => ['amount' => '100.00', 'proof_image' => $proofImage],
+            ]);
+
+            $this->assertSame(422, $response->getStatusCode(), $proofImage);
+        }
+    }
+
     public function testListOnlyReturnsAuthenticatedMerchantsOwnRequests()
     {
         $merchantA = $this->createMerchant();

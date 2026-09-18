@@ -2,6 +2,7 @@
 import {
   businessLineLabels,
   disputeStatusLabels,
+  isHttpUrl,
   labelOf,
   merchantOrderStatusLabels,
   money,
@@ -132,7 +133,7 @@ onMounted(list.load)
         <el-descriptions-item label="凭证">
           <ul v-if="detail.evidence?.length" class="evidence">
             <li v-for="(item, i) in detail.evidence" :key="i">
-              <el-link v-if="/^https?:\/\//.test(item)" :href="item" target="_blank" type="primary">{{ item }}</el-link>
+              <el-link v-if="isHttpUrl(item)" :href="item" target="_blank" type="primary">{{ item }}</el-link>
               <span v-else>{{ item }}</span>
             </li>
           </ul>

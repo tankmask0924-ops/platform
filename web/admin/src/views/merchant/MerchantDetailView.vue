@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   balanceLogTypeLabels,
+  isHttpUrl,
   isNegative,
   labelOf,
   merchantStatusLabels,
@@ -248,8 +249,8 @@ onMounted(() => {
               <el-descriptions-item label="法人">{{ merchant.qualification.legal_person_name }}</el-descriptions-item>
               <el-descriptions-item label="联系人">{{ merchant.qualification.contact_name }}</el-descriptions-item>
               <el-descriptions-item label="营业执照图片" :span="2">
-                <el-link v-if="merchant.qualification.business_license_image" :href="merchant.qualification.business_license_image" target="_blank" type="primary">查看</el-link>
-                <span v-else>未上传</span>
+                <el-link v-if="isHttpUrl(merchant.qualification.business_license_image)" :href="merchant.qualification.business_license_image" target="_blank" type="primary">查看</el-link>
+                <span v-else>{{ merchant.qualification.business_license_image || '未上传' }}</span>
               </el-descriptions-item>
             </template>
             <template v-else>
@@ -257,9 +258,10 @@ onMounted(() => {
               <el-descriptions-item label="身份证号">{{ merchant.qualification.id_card_no }}</el-descriptions-item>
               <el-descriptions-item label="身份证图片" :span="2">
                 <template v-if="merchant.qualification.id_card_images?.length">
-                  <el-link v-for="(url, i) in merchant.qualification.id_card_images" :key="i" :href="url" target="_blank" type="primary" class="gap">
-                    图片 {{ i + 1 }}
-                  </el-link>
+                  <template v-for="(url, i) in merchant.qualification.id_card_images" :key="i">
+                    <el-link v-if="isHttpUrl(url)" :href="url" target="_blank" type="primary" class="gap">图片 {{ i + 1 }}</el-link>
+                    <span v-else class="gap">{{ url }}</span>
+                  </template>
                 </template>
                 <span v-else>未上传</span>
               </el-descriptions-item>

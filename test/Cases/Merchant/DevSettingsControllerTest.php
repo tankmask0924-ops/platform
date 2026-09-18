@@ -57,6 +57,28 @@ class DevSettingsControllerTest extends HttpTestCase
         $this->assertSame([], $body['ip_whitelist']);
     }
 
+    /**
+     * 第二次请求起商户从 model-cache 读出来。之前用 Redis hash 存缓存时 NULL 会变成 ''，
+     * 导致显示"AppSecret 已生成"、生成密钥时误报 409。
+     */
+    public function testNullKeyStaysNullWhenMerchantIsReadFromModelCache()
+    {
+        $merchant = $this->createMerchant(['status' => 'active']);
+        $token = $this->loginAndGetToken($merchant);
+        $headers = ['Authorization' => 'Bearer ' . $token];
+
+        $this->client->request('GET', '/merchant/dev-settings', ['headers' => $headers]);
+        $response = $this->client->request('GET', '/merchant/dev-settings', ['headers' => $headers]);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertNull($body['app_key']);
+        $this->assertFalse($body['app_secret_generated']);
+        $this->assertNull($body['app_secret_reset_at']);
+
+        $response = $this->client->request('POST', '/merchant/dev-settings/app-key', ['headers' => $headers]);
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
     public function testGenerateAppKeyOnPendingMerchantReturns403()
     {
         $merchant = $this->createMerchant(['status' => 'pending']);
@@ -186,6 +208,24 @@ class DevSettingsControllerTest extends HttpTestCase
         ]);
         $getBody = json_decode((string) $get->getBody(), true);
         $this->assertSame($ips, $getBody['ip_whitelist']);
+    }
+
+    public function testIpWhitelistDuplicatesAreRemoved()
+    {
+        $merchant = $this->createMerchant();
+        $token = $this->loginAndGetToken($merchant);
+
+        $response = $this->client->request('PUT', '/merchant/dev-settings/ip-whitelist', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json',
+            ],
+            'json' => ['1.2.3.4', '::1', '1.2.3.4'],
+        ]);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(['1.2.3.4', '::1'], $body['ip_whitelist']);
     }
 
     public function testIpWhitelistWithInvalidEntryIsRejectedAndDoesNotPartiallyUpdate()

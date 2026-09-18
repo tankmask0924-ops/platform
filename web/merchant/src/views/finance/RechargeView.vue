@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { money, rechargeRequestStatusLabels, StatusTag, usePagedList } from '@platform/shared'
+import { isHttpUrl, money, rechargeRequestStatusLabels, StatusTag, usePagedList } from '@platform/shared'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { onMounted, reactive, ref } from 'vue'
@@ -21,7 +21,14 @@ const rules: FormRules = {
       trigger: 'blur',
     },
   ],
-  proof_image: [{ required: true, message: '请填写转账凭证地址', trigger: 'blur' }],
+  proof_image: [
+    { required: true, message: '请填写转账凭证地址', trigger: 'blur' },
+    {
+      validator: (_rule, value: string, callback) =>
+        !value || isHttpUrl(value) ? callback() : callback(new Error('请填写 http:// 或 https:// 开头的图片链接')),
+      trigger: 'blur',
+    },
+  ],
 }
 
 function openDialog() {
@@ -71,7 +78,8 @@ onMounted(list.load)
       </el-table-column>
       <el-table-column label="凭证" min-width="120">
         <template #default="{ row }">
-          <el-link :href="row.proof_image" target="_blank" type="primary">查看</el-link>
+          <el-link v-if="isHttpUrl(row.proof_image)" :href="row.proof_image" target="_blank" type="primary">查看</el-link>
+          <span v-else>{{ row.proof_image }}</span>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="100">

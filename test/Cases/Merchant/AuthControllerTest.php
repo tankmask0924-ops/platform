@@ -116,6 +116,25 @@ class AuthControllerTest extends HttpTestCase
         $this->assertLessThan(500, $response->getStatusCode());
     }
 
+    public function testRegisterWithNonHttpImageLinkIsRejected()
+    {
+        $unique = uniqid('individual_', true);
+        $base = [
+            'type' => 'individual',
+            'phone' => '137' . substr(preg_replace('/\D/', '', $unique), 0, 8),
+            'password' => 'password123',
+            'id_card_name' => 'Wang Wu',
+            'id_card_no' => '110101199001011234',
+            'contact_phone' => '13900000001',
+        ];
+
+        foreach ([['business_license_image' => 'javascript:alert(1)'], ['id_card_images' => ['https://example.com/a.png', 'not-a-url']]] as $extra) {
+            $response = $this->client->request('POST', '/merchant/auth/register', ['form_params' => $base + $extra]);
+            $this->assertSame(422, $response->getStatusCode());
+        }
+        $this->assertFalse(Merchant::where('phone', $base['phone'])->exists());
+    }
+
     public function testRegisterDuplicatePhoneReturnsCleanValidationErrorNotServerError()
     {
         $phone = '139' . substr((string) random_int(10000000, 99999999), 0, 8);

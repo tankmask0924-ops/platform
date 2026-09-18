@@ -334,7 +334,7 @@ onMounted(() => {
   </el-dialog>
 
   <el-dialog v-model="mappingDialog" :title="editingMapping ? '编辑映射' : '添加映射'" width="520px" @closed="mappingFormRef?.clearValidate()">
-    <el-form ref="mappingFormRef" :model="mappingForm" :rules="mappingRules" label-width="120px">
+    <el-form ref="mappingFormRef" :model="mappingForm" :rules="mappingRules" label-width="130px">
       <el-form-item label="供应商" prop="supplier_id">
         <el-input v-if="editingMapping" :model-value="editingMapping.supplier_name ?? `#${editingMapping.supplier_id}`" disabled />
         <el-select v-else v-model="mappingForm.supplier_id" placeholder="同业务线、尚未映射的供应商" style="width: 100%">

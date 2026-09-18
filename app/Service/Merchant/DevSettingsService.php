@@ -151,6 +151,8 @@ class DevSettingsService extends AbstractService
             }
         }
 
+        $ips = array_values(array_unique($ips));
+
         // 校验全部通过后才整体写库，不整体校验通过就不落库——避免一条非法 IP
         // 导致合法 IP 被部分写入、留下一半新一半旧的中间状态。
         $this->merchantDao->update($merchant->id, ['ip_whitelist' => $ips]);

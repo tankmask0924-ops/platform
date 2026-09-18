@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { money, rechargeRequestStatusLabels, StatusTag, usePagedList } from '@platform/shared'
+import { isHttpUrl, money, rechargeRequestStatusLabels, StatusTag, usePagedList } from '@platform/shared'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted } from 'vue'
 import { type RechargeRequest, rechargeApi } from '@/api/admin'
@@ -65,7 +65,8 @@ onMounted(list.load)
       </el-table-column>
       <el-table-column label="凭证" width="90">
         <template #default="{ row }">
-          <el-link :href="row.proof_image" target="_blank" type="primary">查看</el-link>
+          <el-link v-if="isHttpUrl(row.proof_image)" :href="row.proof_image" target="_blank" type="primary">查看</el-link>
+          <span v-else>{{ row.proof_image }}</span>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90">
