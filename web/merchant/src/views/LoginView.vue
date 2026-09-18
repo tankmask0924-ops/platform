@@ -28,12 +28,19 @@ async function onSubmit(form: LoginForm) {
   <LoginPanel :title="title" :loading="loading" @submit="onSubmit">
     <template #footer>
       还没有账号？<router-link :to="{ name: 'register' }">注册商户</router-link>
+      <span class="sep">|</span>
+      <router-link :to="{ name: 'forgot-password' }">忘记密码</router-link>
       <div class="hint">使用注册时填写的手机号或邮箱登录</div>
     </template>
   </LoginPanel>
 </template>
 
 <style scoped>
+.sep {
+  margin: 0 8px;
+  color: #dcdfe6;
+}
+
 .hint {
   margin-top: 8px;
   color: #909399;

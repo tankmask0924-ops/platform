@@ -12,6 +12,7 @@ defineProps<{
 
 const emit = defineEmits<{
   logout: []
+  changePassword: []
 }>()
 
 const route = useRoute()
@@ -65,7 +66,8 @@ const collapsed = ref(false)
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item @click="emit('logout')">退出登录</el-dropdown-item>
+              <el-dropdown-item @click="emit('changePassword')">修改密码</el-dropdown-item>
+              <el-dropdown-item divided @click="emit('logout')">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>

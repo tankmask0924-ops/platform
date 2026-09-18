@@ -5,6 +5,8 @@ export interface MenuItem {
   path: string
   title: string
   icon?: Component
+  /** 需要的权限编码，没有这个权限时不显示；不填表示登录即可见 */
+  permission?: string
   children?: MenuItem[]
 }
 

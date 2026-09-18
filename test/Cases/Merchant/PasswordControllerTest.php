@@ -85,6 +85,12 @@ class PasswordControllerTest extends HttpTestCase
         $this->assertSame((string) $known->getBody(), (string) $unknown->getBody());
     }
 
+    public function testSendResetCodeRequiresPhoneNumber()
+    {
+        $this->assertSame(422, $this->sendCode('someone@example.com')->getStatusCode());
+        $this->assertSame(422, $this->sendCode('12345')->getStatusCode());
+    }
+
     public function testResetWithCorrectCodeChangesPasswordOnceAndInvalidatesTokens()
     {
         $merchant = $this->createMerchant();
@@ -161,13 +167,13 @@ class PasswordControllerTest extends HttpTestCase
 
     private function sendCode(string $username)
     {
-        return $this->client->request('POST', '/merchant/auth/password/reset-code', ['form_params' => ['username' => $username]]);
+        return $this->client->request('POST', '/merchant/auth/password/reset-code', ['form_params' => ['phone' => $username]]);
     }
 
     private function reset(string $username, string $code, string $newPassword)
     {
         return $this->client->request('POST', '/merchant/auth/password/reset', [
-            'form_params' => ['username' => $username, 'code' => $code, 'new_password' => $newPassword],
+            'form_params' => ['phone' => $username, 'code' => $code, 'new_password' => $newPassword],
         ]);
     }
 }

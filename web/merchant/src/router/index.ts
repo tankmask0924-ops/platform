@@ -19,6 +19,12 @@ const router = createRouter({
       meta: { title: '商户注册', public: true },
     },
     {
+      path: '/forgot-password',
+      name: 'forgot-password',
+      component: () => import('@/views/ForgotPasswordView.vue'),
+      meta: { title: '找回密码', public: true },
+    },
+    {
       path: '/',
       component: Layout,
       redirect: '/dashboard',

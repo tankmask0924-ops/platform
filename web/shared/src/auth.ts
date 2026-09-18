@@ -21,6 +21,12 @@ export function defineAuthStore(id: string) {
       localStorage.setItem(usernameKey, name)
     }
 
+    /** 改密码后换成新 token，用户名不变 */
+    function setToken(newToken: string) {
+      token.value = newToken
+      localStorage.setItem(tokenKey, newToken)
+    }
+
     function clear() {
       token.value = null
       username.value = ''
@@ -28,6 +34,6 @@ export function defineAuthStore(id: string) {
       localStorage.removeItem(usernameKey)
     }
 
-    return { token, username, isLoggedIn, setSession, clear }
+    return { token, username, isLoggedIn, setSession, setToken, clear }
   })
 }

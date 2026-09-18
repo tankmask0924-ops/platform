@@ -15,7 +15,7 @@ namespace App\Service\Merchant;
 use App\Auth\MerchantJwtGuard;
 use App\Dao\MerchantDao;
 use App\Model\Merchant;
-use App\Notify\VerificationCodeSender;
+use App\Notify\Sms\SmsSender;
 use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -27,9 +27,10 @@ use Hyperf\Redis\Redis;
  * 改密码后旧 token 的密码版本对不上，MerchantAuthMiddleware 会让它们全部失效；
  * 修改密码接口顺带签发一个新 token，当前页面不用重新登录。
  *
- * 找回密码：用注册时的手机号或邮箱收 6 位验证码（手机号走短信、邮箱走邮件），
- * 10 分钟有效、最多输错 5 次；同一账号 60 秒内只能获取一次。
- * 获取验证码接口不管账号存不存在都返回同样的结果，避免被用来探测哪些手机号注册过。
+ * 找回密码：只支持短信，用注册手机号收 6 位验证码，10 分钟有效、最多输错 5 次；
+ * 同一手机号 60 秒内只能获取一次。只填了邮箱的商户没法自助找回，需要联系平台。
+ * 获取验证码接口不管手机号有没有注册、短信有没有发成功，都返回同样的结果，
+ * 避免被用来探测哪些手机号注册过（发送失败由 SmsSender 记日志）。
  */
 class PasswordService extends AbstractService
 {
@@ -48,7 +49,7 @@ class PasswordService extends AbstractService
     protected MerchantJwtGuard $tokenGuard;
 
     #[Inject]
-    protected VerificationCodeSender $codeSender;
+    protected SmsSender $smsSender;
 
     #[Inject]
     protected Redis $redis;
@@ -74,20 +75,20 @@ class PasswordService extends AbstractService
     /**
      * @return array{expires_in: int, resend_after: int}
      */
-    public function sendResetCode(string $username): array
+    public function sendResetCode(string $phone): array
     {
-        $username = trim($username);
-        if ($username === '') {
-            throw new HttpException(422, '请输入注册时的手机号或邮箱');
+        $phone = trim($phone);
+        if (! preg_match('/^1\d{10}$/', $phone)) {
+            throw new HttpException(422, '请输入注册时的 11 位手机号');
         }
 
-        // 冷却按输入的账号算，不管账号是否存在，否则能通过"有没有冷却"探测账号
-        $cooldownKey = 'merchant:pwd_reset:cooldown:' . sha1(mb_strtolower($username));
+        // 冷却按输入的手机号算，不管是否注册，否则能通过"有没有冷却"探测账号
+        $cooldownKey = 'merchant:pwd_reset:cooldown:' . $phone;
         if (! $this->redis->set($cooldownKey, '1', ['nx', 'ex' => self::RESEND_COOLDOWN_SECONDS])) {
             throw new HttpException(429, '验证码发送太频繁，请稍后再试');
         }
 
-        $merchant = $this->findByUsername($username);
+        $merchant = $this->findByPhone($phone);
         if ($merchant !== null && $merchant->status !== 'disabled') {
             $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             $this->redis->set($this->codeKey($merchant->id), json_encode([
@@ -95,18 +96,17 @@ class PasswordService extends AbstractService
                 'attempts' => 0,
             ]), ['ex' => self::CODE_TTL_SECONDS]);
 
-            $channel = $merchant->phone === $username ? VerificationCodeSender::CHANNEL_SMS : VerificationCodeSender::CHANNEL_EMAIL;
-            $this->codeSender->send($channel, $username, $code);
+            $this->smsSender->sendVerificationCode($phone, $code);
         }
 
         return ['expires_in' => self::CODE_TTL_SECONDS, 'resend_after' => self::RESEND_COOLDOWN_SECONDS];
     }
 
-    public function reset(string $username, string $code, string $newPassword): void
+    public function reset(string $phone, string $code, string $newPassword): void
     {
         $this->validateNewPassword($newPassword);
 
-        $merchant = $this->findByUsername(trim($username));
+        $merchant = $this->findByPhone(trim($phone));
         $key = $merchant !== null ? $this->codeKey($merchant->id) : null;
         $stored = $key !== null ? json_decode((string) $this->redis->get($key), true) : null;
         if (! is_array($stored)) {
@@ -132,16 +132,13 @@ class PasswordService extends AbstractService
         $this->updatePassword($merchant, $newPassword);
     }
 
-    private function findByUsername(string $username): ?Merchant
+    private function findByPhone(string $phone): ?Merchant
     {
-        if ($username === '') {
+        if ($phone === '') {
             return null;
         }
 
-        return $this->merchantDao->newQuery()
-            ->where('phone', $username)
-            ->orWhere('email', $username)
-            ->first();
+        return $this->merchantDao->newQuery()->where('phone', $phone)->first();
     }
 
     private function validateNewPassword(string $password): void

@@ -111,12 +111,12 @@ class AuthController extends AbstractController
     }
 
     /**
-     * 找回密码第一步：给注册手机号/邮箱发验证码。账号不存在也返回成功。
+     * 找回密码第一步：给注册手机号发短信验证码。手机号没注册也返回成功。
      */
     #[PostMapping(path: 'password/reset-code')]
     public function sendResetCode(): array
     {
-        return $this->passwordService->sendResetCode((string) $this->request->input('username', ''));
+        return $this->passwordService->sendResetCode((string) $this->request->input('phone', ''));
     }
 
     /**
@@ -126,7 +126,7 @@ class AuthController extends AbstractController
     public function resetPassword(): array
     {
         $this->passwordService->reset(
-            (string) $this->request->input('username', ''),
+            (string) $this->request->input('phone', ''),
             (string) $this->request->input('code', ''),
             (string) $this->request->input('new_password', ''),
         );

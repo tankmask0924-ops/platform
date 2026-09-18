@@ -49,3 +49,13 @@ export interface Me {
 export async function fetchMe(): Promise<Me> {
   return http.get<Me>('/merchant/auth/me')
 }
+
+export const changePassword = (oldPassword: string, newPassword: string) =>
+  http.put<{ token: string }>('/merchant/auth/password', { old_password: oldPassword, new_password: newPassword })
+
+/** 找回密码第一步：给注册手机号发短信验证码；手机号没注册也返回成功 */
+export const sendResetCode = (phone: string) =>
+  http.post<{ expires_in: number; resend_after: number }>('/merchant/auth/password/reset-code', { phone })
+
+export const resetPassword = (data: { phone: string; code: string; new_password: string }) =>
+  http.post<{ success: boolean }>('/merchant/auth/password/reset', data)

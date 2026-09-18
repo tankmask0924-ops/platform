@@ -57,10 +57,14 @@ export function createHttp(options: HttpOptions): Http {
   })
 
   instance.interceptors.response.use(undefined, (error: AxiosError) => {
-    if (error.response?.status === 401) {
+    if (axios.isCancel(error)) {
+      return Promise.reject(error)
+    }
+    // 401 也要提示：登录时是"账号或密码错误"，登录态失效时是"密码已修改，请重新登录"之类
+    ElMessage.error(extractMessage(error))
+    // 只有带着 token 的请求返回 401 才是登录态失效；登录接口本身返回 401 不用跳转
+    if (error.response?.status === 401 && error.config?.headers?.Authorization) {
       options.onUnauthorized()
-    } else if (!axios.isCancel(error)) {
-      ElMessage.error(extractMessage(error))
     }
     return Promise.reject(error)
   })

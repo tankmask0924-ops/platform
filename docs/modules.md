@@ -291,8 +291,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 |---|---|---|---|---|---|
 | 账户：注册（企业/个人） | 一期 | ✅ | ✅ | ✅ `views/RegisterView.vue`（证件照片上传未开放） | ✅ |
 | 账户：登录 | 一期 | ✅ | ✅ | ✅ `web/merchant/src/views/LoginView.vue` | ✅ |
-| 账户：找回密码 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 账户：修改密码 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 账户：找回密码 | 一期 | ✅ `App\Controller\Merchant\AuthController` | ✅ `App\Service\Merchant\PasswordService` | ✅ `views/ForgotPasswordView.vue` | ✅ 只支持短信：`POST /merchant/auth/password/reset-code`（`phone`）发 6 位验证码（10 分钟有效、输错 5 次作废、同一手机号 60 秒冷却，手机号没注册也返回同样结果），`POST /merchant/auth/password/reset`（`phone`/`code`/`new_password`）；短信走阿里云（`App\Notify\Sms\AliyunSmsSender`，`.env` 配 `ALIYUN_SMS_*`，没配时验证码只写 `runtime/logs`）；只填邮箱的商户不能自助找回。测试 `test/Cases/Merchant/PasswordControllerTest.php`、`test/Cases/Notify/AliyunSmsSenderTest.php` |
+| 账户：修改密码 | 一期 | ✅ | ✅ `App\Service\Merchant\PasswordService` | ✅ 右上角"修改密码"（`web/shared` 的 `ChangePasswordDialog`） | ✅ `PUT /merchant/auth/password`，返回新 token；token 里带密码版本（`pv`），改密码/找回密码后旧登录全部失效（两个后台都是） |
 | 账户：资质提交与审核状态查看 | 一期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 首页：统计数据展示 | 一期 | ⬜ | ⬜ | 🔨 `views/DashboardView.vue` 已显示余额、审核状态、欠款提示（`/merchant/auth/me` 补了 available_balance / frozen_balance / debt_warning）；统计数据未做 | ⬜ |
 | 开发设置：生成 / 重置 AppKey 与 AppSecret | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
@@ -332,7 +332,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ⬜ | ⬜ | ⬜（脚手架示例"用户管理"页已删除） | ⬜ |
+| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` 🔨 页面已写好，待登录联调；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验，返佣期限不短于争议时限；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
 
 > 「售后处理：话费卡券争议处理」（requirements.md 7.7）：`GET /admin/disputes`（status / merchant_id 筛选）、
 > `GET /admin/disputes/{id}`（含订单和返佣状态）、`POST /admin/disputes/{id}/reject`（确认已到账：`remark` + 必填
@@ -579,17 +579,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 7 | 1 | 8 |
-| 系统管理后台 | 19 | 9 | 2 | 8 |
+| 商户管理后台 | 16 | 9 | 1 | 6 |
+| 系统管理后台 | 19 | 10 | 2 | 7 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **50** | **3** | **53** |
+| **合计** | **106** | **53** | **3** | **50** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 8 | 8 | 0 |
-| 系统管理后台（web/admin） | 19 | 11 | 11 | 0 |
+| 商户管理后台（web/merchant） | 16 | 10 | 10 | 0 |
+| 系统管理后台（web/admin） | 19 | 12 | 11 | 0（系统设置 1 行页面已写好待联调） |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -606,8 +606,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：找回密码、修改密码、资质提交与审核状态、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、返佣明细、接口文档
-   - 系统后台：服务开通审核、系统设置（管理员账号、角色权限、系统参数——`rebate_due_period_days`/`dispute_deadline_days`/`debt_warning_threshold` 目前只能改表、操作日志查看）、返佣管理（商户/供应商返佣明细）、商品同步接入与余额监控
+   - 商户后台：~~找回密码、修改密码~~（已完成）、资质提交与审核状态、首页统计（含欠款时的"尽快充值"醒目提示，判断已有 `BalanceService::isOverDebtWarningThreshold()`）、服务开通、商品价格展示、返佣明细、接口文档
+   - 系统后台：服务开通审核、~~系统设置~~（已完成，页面待联调）、返佣管理（商户/供应商返佣明细）、商品同步接入与余额监控
    - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境
