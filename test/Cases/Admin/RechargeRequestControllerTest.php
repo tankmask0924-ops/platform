@@ -375,7 +375,7 @@ class RechargeRequestControllerTest extends HttpTestCase
     {
         $admin = AdminUser::create([
             'username' => 'admin_' . uniqid('', true),
-            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT),
+            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]),
             'real_name' => 'Test Admin',
             'role_id' => $roleId,
             'status' => 'active',
@@ -390,7 +390,7 @@ class RechargeRequestControllerTest extends HttpTestCase
     {
         $merchant = Merchant::create(array_merge([
             'type' => 'company',
-            'password' => password_hash('whatever', PASSWORD_BCRYPT),
+            'password' => password_hash('whatever', PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => 'active',
             'phone' => '187' . random_int(10000000, 99999999),
             'available_balance' => '0.00',

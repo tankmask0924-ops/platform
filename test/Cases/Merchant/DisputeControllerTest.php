@@ -140,7 +140,7 @@ class DisputeControllerTest extends HttpTestCase
         $merchant = Merchant::create([
             'type' => 'company',
             'phone' => '189' . random_int(10000000, 99999999),
-            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT),
+            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => 'active',
         ]);
         $this->merchantIds[] = $merchant->id;

@@ -350,7 +350,7 @@ class AuthControllerTest extends HttpTestCase
     {
         $merchant = Merchant::create(array_merge([
             'type' => 'company',
-            'password' => password_hash('correct-password', PASSWORD_BCRYPT),
+            'password' => password_hash('correct-password', PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => 'active',
         ], $overrides));
 

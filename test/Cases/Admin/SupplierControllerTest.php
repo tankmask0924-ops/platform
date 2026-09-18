@@ -400,7 +400,7 @@ class SupplierControllerTest extends HttpTestCase
     {
         $admin = AdminUser::create([
             'username' => 'admin_' . uniqid('', true),
-            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT),
+            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]),
             'real_name' => 'Test Admin',
             'role_id' => $roleId,
             'status' => 'active',

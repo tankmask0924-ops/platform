@@ -162,7 +162,7 @@ class AuthControllerTest extends HttpTestCase
     {
         $merchant = Merchant::create([
             'type' => 'company',
-            'password' => password_hash('whatever', PASSWORD_BCRYPT),
+            'password' => password_hash('whatever', PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => 'active',
             'phone' => '188' . random_int(10000000, 99999999),
         ]);
@@ -205,7 +205,7 @@ class AuthControllerTest extends HttpTestCase
 
         $admin = AdminUser::create(array_merge([
             'username' => 'admin_' . uniqid('', true),
-            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT),
+            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]),
             'real_name' => 'Test Admin',
             'role_id' => $role->id,
             'status' => 'active',

@@ -96,7 +96,7 @@ class MerchantControllerTest extends HttpTestCase
     {
         $merchant = Merchant::create([
             'type' => 'company',
-            'password' => password_hash('whatever', PASSWORD_BCRYPT),
+            'password' => password_hash('whatever', PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => 'active',
             'phone' => '186' . random_int(10000000, 99999999),
         ]);
@@ -607,7 +607,7 @@ class MerchantControllerTest extends HttpTestCase
     {
         $admin = AdminUser::create([
             'username' => 'admin_' . uniqid('', true),
-            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT),
+            'password' => password_hash(self::PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]),
             'real_name' => 'Test Admin',
             'role_id' => $roleId,
             'status' => 'active',
@@ -625,7 +625,7 @@ class MerchantControllerTest extends HttpTestCase
     {
         $merchant = Merchant::create(array_merge([
             'type' => 'company',
-            'password' => password_hash('whatever', PASSWORD_BCRYPT),
+            'password' => password_hash('whatever', PASSWORD_BCRYPT, ['cost' => 4]),
             'status' => $status,
             'phone' => '186' . random_int(10000000, 99999999),
         ], $overrides));
