@@ -412,6 +412,7 @@ erDiagram
 | id | bigint unsigned | 是 | 主键 |
 | name | varchar(64) | 是 | 供应商名称 |
 | code | varchar(32) | 是 | 编码，唯一，**创建后不可改**，用于回调地址 `/notify/{code}` |
+| notify_token | varchar(64) | 是 | 回调地址里的随机令牌，创建时自动生成：`/notify/{code}/{notify_token}`（2026-09-18 加） |
 | business_line | varchar(16) | 是 | **单选**：`recharge` 话费 / `card` 卡券 / `movie` 电影票 / `express` 快递（2026-09-14 确认，一条供应商记录只属于一条业务线） |
 | driver | varchar(32) | 是 | 对接驱动：`kasushou`（卡速售 2.0）/ `yunyang`（云洋）/ `mango`（芒果） |
 | config | text | 是 | 接口地址、账号、密钥等配置，**加密存储**（JSON 加密后的密文） |

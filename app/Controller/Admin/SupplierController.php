@@ -17,6 +17,7 @@ use App\Controller\AbstractController;
 use App\Middleware\AdminAuthMiddleware;
 use App\Middleware\AdminPermissionMiddleware;
 use App\Service\Admin\SupplierAdminService;
+use App\Service\Supplier\SupplierCallLogService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
@@ -45,6 +46,9 @@ class SupplierController extends AbstractController
 {
     #[Inject]
     protected SupplierAdminService $supplierAdminService;
+
+    #[Inject]
+    protected SupplierCallLogService $callLogService;
 
     #[Middleware(AdminAuthMiddleware::class)]
     #[Middleware(AdminPermissionMiddleware::class)]
@@ -94,5 +98,34 @@ class SupplierController extends AbstractController
         $this->supplierAdminService->setStatus($id, $this->request->input('status'));
 
         return ['success' => true];
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.manage')]
+    #[PostMapping(path: '{id}/balance/refresh')]
+    public function refreshBalance(int $id): array
+    {
+        return $this->supplierAdminService->refreshBalance($id);
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.manage')]
+    #[PostMapping(path: '{id}/product-sync')]
+    public function syncProducts(int $id): array
+    {
+        $this->supplierAdminService->syncProducts($id);
+
+        return ['success' => true];
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.view')]
+    #[GetMapping(path: '{id}/call-logs')]
+    public function callLogs(int $id): array
+    {
+        return $this->callLogService->listForSupplier($id, $this->request->all());
     }
 }

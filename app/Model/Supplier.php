@@ -26,6 +26,7 @@ use Carbon\Carbon;
  * @property int $id
  * @property string $name
  * @property string $code
+ * @property string $notify_token 回调地址里的随机令牌，见 App\Service\Supplier\SupplierNotifyAddressService
  * @property string $business_line
  * @property string $driver
  * @property string $config
@@ -57,4 +58,15 @@ class Supplier extends Model
         'settlement_info',
         'remark',
     ];
+
+    protected array $casts = [
+        'balance_synced_at' => 'datetime',
+    ];
+
+    public function creating(): void
+    {
+        if (($this->notify_token ?? '') === '') {
+            $this->notify_token = bin2hex(random_bytes(16));
+        }
+    }
 }

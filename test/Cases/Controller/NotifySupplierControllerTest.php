@@ -149,7 +149,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         ));
         $this->expectNotify(1);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
         ]);
 
@@ -182,7 +182,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         ));
         $this->expectNotify(1);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
         ]);
 
@@ -217,7 +217,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         $driverFactory->shouldNotReceive('get');
         ApplicationContext::getContainer()->set(DriverFactory::class, $driverFactory);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
         ]);
 
@@ -269,7 +269,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         $driverFactory->shouldNotReceive('get');
         ApplicationContext::getContainer()->set(DriverFactory::class, $driverFactory);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
         ]);
 
@@ -305,7 +305,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         $driverFactory->shouldNotReceive('get');
         ApplicationContext::getContainer()->set(DriverFactory::class, $driverFactory);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'tampered', 'time' => (string) time()],
         ]);
 
@@ -324,11 +324,26 @@ class NotifySupplierControllerTest extends HttpTestCase
 
     public function testUnknownSupplierCodeReturns404WithoutCrashing()
     {
-        $response = $this->client->request('POST', '/notify/does-not-exist-' . uniqid('', true), [
+        $response = $this->client->request('POST', '/notify/does-not-exist-' . uniqid('', true) . '/any-token', [
             'form_params' => ['sign' => 'irrelevant', 'time' => (string) time()],
         ]);
 
         $this->assertSame(404, $response->getStatusCode());
+    }
+
+    public function testWrongTokenReturns404LikeUnknownSupplier()
+    {
+        $supplier = $this->createSupplier();
+        $this->assertSame(32, strlen($supplier->notify_token));
+
+        foreach (['/notify/' . $supplier->code . '/wrong-token', '/notify/' . $supplier->code . '/wrong-token/goods'] as $path) {
+            $response = $this->client->request('POST', $path, [
+                'form_params' => ['sign' => 'irrelevant', 'time' => (string) time()],
+            ]);
+            $this->assertSame(404, $response->getStatusCode(), $path);
+        }
+        // 老的无令牌地址不再有路由
+        $this->assertSame(404, $this->client->request('POST', '/notify/' . $supplier->code, ['form_params' => []])->getStatusCode());
     }
 
     public function testUnresolvableOrderNoIsRejectedCleanlyNotFiveHundred()
@@ -340,7 +355,7 @@ class NotifySupplierControllerTest extends HttpTestCase
             rawRequest: ['external_orderno' => 'RNOSUCHORDER999999-1', 'day' => 0],
         ));
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code, [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
             'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
         ]);
 
@@ -368,7 +383,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         ]);
         $this->bindDriver($supplier, $driver);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/goods', [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token . '/goods', [
             'form_params' => ['id' => 'GOODS-NOTIFY-1', 'time' => (string) time(), 'sign' => 'irrelevant-mocked'],
         ]);
 
@@ -387,7 +402,7 @@ class NotifySupplierControllerTest extends HttpTestCase
         $driver->shouldNotReceive('queryProductDetail');
         $this->bindDriver($supplier, $driver);
 
-        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/goods', [
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token . '/goods', [
             'form_params' => ['id' => 'GOODS-X', 'time' => (string) time(), 'sign' => 'forged'],
         ]);
 
@@ -397,7 +412,7 @@ class NotifySupplierControllerTest extends HttpTestCase
 
     public function testProductChangeNotificationForUnknownSupplierIs404()
     {
-        $response = $this->client->request('POST', '/notify/no-such-supplier-code/goods', [
+        $response = $this->client->request('POST', '/notify/no-such-supplier-code/any-token/goods', [
             'form_params' => ['id' => 'GOODS-X', 'time' => (string) time(), 'sign' => 'x'],
         ]);
 

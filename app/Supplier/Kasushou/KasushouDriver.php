@@ -14,6 +14,7 @@ namespace App\Supplier\Kasushou;
 
 use App\Supplier\DriverResult;
 use App\Supplier\UnifiedResult;
+use Closure;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\GuzzleException;
 use Hyperf\Context\ApplicationContext;
@@ -93,14 +94,30 @@ class KasushouDriver
 
     private const PATH_GOODS_LIST = '/api/v1/goods/list';
 
+    /**
+     * 调用日志里的动作名（supplier_call_logs.action）。
+     */
+    private const ACTIONS = [
+        self::PATH_ORDER_CREATE => 'place_order',
+        self::PATH_ORDER_QUERY => 'query',
+        self::PATH_USER_INFO => 'query_balance',
+        self::PATH_GOODS_DETAIL => 'goods_detail',
+        self::PATH_GOODS_LIST => 'goods_list',
+    ];
+
     private readonly KasushouSigner $signer;
 
     private readonly KasushouStatusMapper $statusMapper;
 
+    /**
+     * `$callRecorder`：每次 HTTP 调用结束后调一次 `fn(string $action, array $request, array $response, int $durationMs)`，
+     * 用来记调用日志（见 App\Supplier\SupplierDriverFactory），不传就不记。
+     */
     public function __construct(
         private readonly string $baseUrl,
         private readonly string $userId,
         private readonly string $apiKey,
+        private readonly ?Closure $callRecorder = null,
     ) {
         $this->signer = new KasushouSigner();
         $this->statusMapper = new KasushouStatusMapper();
@@ -366,6 +383,7 @@ class KasushouDriver
     {
         $timestamp = $this->signer->timestamp();
         $sign = $this->signer->signRequest($body, $this->apiKey, $timestamp);
+        $startedAt = microtime(true);
 
         try {
             $httpResponse = $this->httpClient()->request('POST', $this->baseUrl . $path, [
@@ -383,6 +401,8 @@ class KasushouDriver
                 'http_errors' => false,
             ]);
         } catch (GuzzleException $e) {
+            $this->recordCall($path, $body, ['exception' => $e->getMessage()], $startedAt);
+
             return [
                 'httpStatus' => null,
                 'data' => null,
@@ -399,11 +419,27 @@ class KasushouDriver
             $data = $decoded['data'];
         }
 
+        $this->recordCall($path, $body, ['http_status' => $httpStatus, 'body' => is_array($decoded) ? $decoded : $rawBody], $startedAt);
+
         return [
             'httpStatus' => $httpStatus,
             'data' => $data,
             'raw' => ['http_status' => $httpStatus, 'body' => $rawBody],
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     * @param array<string, mixed> $response
+     */
+    private function recordCall(string $path, array $body, array $response, float $startedAt): void
+    {
+        if ($this->callRecorder === null) {
+            return;
+        }
+
+        $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
+        ($this->callRecorder)(self::ACTIONS[$path] ?? $path, ['path' => $path, 'body' => $body], $response, $durationMs);
     }
 
     /**

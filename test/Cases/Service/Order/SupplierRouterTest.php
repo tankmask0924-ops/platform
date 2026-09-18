@@ -104,6 +104,7 @@ class SupplierRouterTest extends TestCase
             ->once()
             ->withArgs(static fn (string $externalOrderNo, string $goodsId, string $safePrice, string $notifyUrl, array $attach, int $quantity, bool $isCardProduct) => $externalOrderNo === $order->order_no . '-2'
                 && $goodsId === 'GOODS-B'
+                && str_ends_with($notifyUrl, '/notify/' . $supplierB->code . '/' . $supplierB->notify_token)
                 && $attach === ['recharge_account' => '13800000100']
                 && $isCardProduct === false)
             ->andReturn(new DriverResult(result: UnifiedResult::Processing, supplierOrderNo: 'SUP-B-1'));

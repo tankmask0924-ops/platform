@@ -30,6 +30,7 @@ use App\Service\AbstractService;
 use App\Service\MerchantNotifyService;
 use App\Service\Order\OrderResultApplier;
 use App\Service\Order\SupplierResultPollingService;
+use App\Supplier\CardSecretMasker;
 use App\Supplier\DriverResult;
 use App\Supplier\UnifiedResult;
 use Hyperf\Di\Annotation\Inject;
@@ -66,8 +67,6 @@ class OrderAdminService extends AbstractService
     private const QUERYABLE_STATUSES = [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL];
 
     private const RESOLUTIONS = ['success', 'failed'];
-
-    private const MASKED_KEYS = ['card_no', 'card_password', 'card_pwd'];
 
     private const MAX_PER_PAGE = 100;
 
@@ -153,8 +152,8 @@ class OrderAdminService extends AbstractService
                     'supplier_name' => $supplierName((int) $attempt->supplier_id),
                     'result' => $attempt->result,
                     'fail_reason' => $attempt->fail_reason,
-                    'request_snapshot' => $this->maskCardSecrets($attempt->request_snapshot),
-                    'response_snapshot' => $this->maskCardSecrets($attempt->response_snapshot),
+                    'request_snapshot' => CardSecretMasker::mask($attempt->request_snapshot),
+                    'response_snapshot' => CardSecretMasker::mask($attempt->response_snapshot),
                     'created_at' => $attempt->created_at?->toDateTimeString(),
                     'updated_at' => $attempt->updated_at?->toDateTimeString(),
                 ])->values()->all(),
@@ -445,25 +444,5 @@ class OrderAdminService extends AbstractService
             'due_at' => $rebate->due_at?->toDateTimeString(),
             'settled_at' => $rebate->settled_at?->toDateTimeString(),
         ];
-    }
-
-    /**
-     * 快照里的卡号卡密（比如下单返回 400 后回查订单详情的响应）打码后再展示。
-     */
-    private function maskCardSecrets(mixed $data): mixed
-    {
-        if (! is_array($data)) {
-            return $data;
-        }
-
-        foreach ($data as $key => $value) {
-            if (is_string($key) && in_array($key, self::MASKED_KEYS, true) && $value !== null && $value !== '') {
-                $data[$key] = '******';
-            } elseif (is_array($value)) {
-                $data[$key] = $this->maskCardSecrets($value);
-            }
-        }
-
-        return $data;
     }
 }

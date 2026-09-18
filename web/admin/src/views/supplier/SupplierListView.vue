@@ -137,7 +137,11 @@ onMounted(list.load)
 
     <el-table v-loading="loading" :data="rows" border>
       <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column prop="name" label="名称" min-width="140" />
+      <el-table-column label="名称" min-width="140">
+        <template #default="{ row }">
+          <router-link :to="{ name: 'supplier-detail', params: { id: row.id } }">{{ row.name }}</router-link>
+        </template>
+      </el-table-column>
       <el-table-column prop="code" label="编码" width="130" />
       <el-table-column label="业务线" width="80">
         <template #default="{ row }">{{ labelOf(businessLineLabels, row.business_line) }}</template>

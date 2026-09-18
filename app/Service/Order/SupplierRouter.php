@@ -29,6 +29,8 @@ use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
 use App\Service\Supplier\SupplierBalanceService;
+use App\Service\Supplier\SupplierNotifyAddressService;
+use App\Supplier\CardSecretMasker;
 use App\Supplier\DriverResult;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
@@ -107,6 +109,9 @@ class SupplierRouter extends AbstractService
 
     #[Inject]
     protected SupplierDriverFactory $supplierDriverFactory;
+
+    #[Inject]
+    protected SupplierNotifyAddressService $notifyAddressService;
 
     #[Inject]
     protected OrderResultApplier $orderResultApplier;
@@ -291,8 +296,9 @@ class SupplierRouter extends AbstractService
             $attempt->fill([
                 'result' => self::RESULT_MAP[$result->result->name],
                 'fail_reason' => $result->failReason,
-                'request_snapshot' => $result->rawRequest,
-                'response_snapshot' => $result->rawResponse,
+                // 快照落库前给卡号卡密打码，卡密只加密存在 order_recharges
+                'request_snapshot' => CardSecretMasker::mask($result->rawRequest),
+                'response_snapshot' => CardSecretMasker::mask($result->rawResponse),
             ])->save();
 
             $last = [$mapping, $result];
@@ -320,7 +326,7 @@ class SupplierRouter extends AbstractService
                 externalOrderNo: $externalOrderNo,
                 supplierGoodsId: $mapping->supplier_product_code,
                 safePrice: $order->sale_price,
-                notifyUrl: $this->buildSupplierNotifyUrl($supplier),
+                notifyUrl: $this->notifyAddressService->orderNotifyUrl($supplier),
                 attach: $rechargeAccount !== null ? [$this->resolveAttachField($mapping) => $rechargeAccount] : [],
                 quantity: 1,
                 isCardProduct: $order->business_line === 'card',
@@ -396,16 +402,6 @@ class SupplierRouter extends AbstractService
         $mapped = $mapping->param_mapping['recharge_account'] ?? null;
 
         return is_string($mapped) && $mapped !== '' ? $mapped : 'recharge_account';
-    }
-
-    /**
-     * 占位：还没有接入「给每个供应商生成带随机令牌的回调地址」，这里只需要给
-     * KasushouDriver::placeOrder() 的 url 参数一个语法合法的值，回调路由
-     * /notify/{code} 本身已经存在（App\Controller\NotifySupplierController）。
-     */
-    private function buildSupplierNotifyUrl(Supplier $supplier): string
-    {
-        return sprintf('https://platform.example.com/notify/%s', $supplier->code);
     }
 
     /**

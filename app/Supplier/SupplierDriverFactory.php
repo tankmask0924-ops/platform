@@ -14,6 +14,7 @@ namespace App\Supplier;
 
 use App\Crypto\Encryptor;
 use App\Model\Supplier;
+use App\Service\Supplier\SupplierCallLogService;
 use App\Supplier\Kasushou\KasushouDriver;
 use Hyperf\Di\Annotation\Inject;
 use RuntimeException;
@@ -42,6 +43,9 @@ class SupplierDriverFactory
     #[Inject]
     protected Encryptor $encryptor;
 
+    #[Inject]
+    protected SupplierCallLogService $callLogService;
+
     public function build(Supplier $supplier): KasushouDriver
     {
         return match ($supplier->driver) {
@@ -64,7 +68,14 @@ class SupplierDriverFactory
         return new KasushouDriver(
             (string) ($config['base_url'] ?? ''),
             (string) ($config['user_id'] ?? ''),
-            (string) ($config['api_key'] ?? '')
+            (string) ($config['api_key'] ?? ''),
+            fn (string $action, array $request, array $response, int $durationMs) => $this->callLogService->record(
+                (int) $supplier->id,
+                $action,
+                $request,
+                $response,
+                $durationMs
+            ),
         );
     }
 }

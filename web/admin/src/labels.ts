@@ -16,6 +16,15 @@ export const productBusinessLineLabels: LabelMap = {
 /** 商品字段的枚举，商户后台也要用，放在 shared */
 export { cardTypeLabels, chargeSpeedLabels, operatorLabels } from '@platform/shared'
 
+/** supplier_call_logs.action，见 KasushouDriver::ACTIONS */
+export const supplierCallActionLabels: LabelMap = {
+  place_order: { label: '下单' },
+  query: { label: '查询订单' },
+  query_balance: { label: '查余额' },
+  goods_detail: { label: '查商品' },
+  goods_list: { label: '商品列表' },
+}
+
 export const supplierStatusLabels: LabelMap = {
   active: { label: '启用', type: 'success' },
   disabled: { label: '停用', type: 'info' },

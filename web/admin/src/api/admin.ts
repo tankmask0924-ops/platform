@@ -230,6 +230,25 @@ export interface SupplierDetail extends Supplier {
   settlement_info: string | null
   remark: string | null
   updated_at: string | null
+  /** 订单回调地址，卡速售下单时自动带上 */
+  order_notify_url: string
+  /** 商品变更通知地址，需要在供应商后台配置 */
+  goods_notify_url: string
+  /** 没配 SUPPLIER_NOTIFY_BASE_URL 时为 false，回调地址是本机地址，供应商访问不到 */
+  notify_base_url_configured: boolean
+}
+
+export interface SupplierCallLog {
+  id: number
+  action: string
+  order_id: number | null
+  order_no: string | null
+  /** 卡号卡密已打码 */
+  request: Record<string, unknown>
+  response: Record<string, unknown> | null
+  http_status: number | null
+  duration_ms: number | null
+  created_at: string | null
 }
 
 export interface SupplierForm {
@@ -251,6 +270,9 @@ export const supplierApi = {
   create: (data: SupplierForm) => http.post<SupplierDetail>('/admin/suppliers', data),
   update: (id: number, data: SupplierForm) => http.put<SupplierDetail>(`/admin/suppliers/${id}`, data),
   setStatus: (id: number, status: string) => http.post<Ok>(`/admin/suppliers/${id}/status`, { status }),
+  refreshBalance: (id: number) => http.post<SupplierDetail>(`/admin/suppliers/${id}/balance/refresh`),
+  syncProducts: (id: number) => http.post<Ok>(`/admin/suppliers/${id}/product-sync`),
+  callLogs: (id: number, params: Query) => http.get<Paged<SupplierCallLog>>(`/admin/suppliers/${id}/call-logs`, params),
 }
 
 /** 订单：App\Controller\Admin\OrderController */

@@ -17,6 +17,7 @@ use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
 use App\Service\Order\SupplierCallbackService;
 use App\Service\Supplier\ProductSyncService;
+use App\Service\Supplier\SupplierNotifyAddressService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\PostMapping;
@@ -24,8 +25,9 @@ use Psr\Http\Message\ResponseInterface as PsrResponseInterface;
 
 /**
  * 供应商回调统一入口（requirements.md 6.8，docs/modules.md 第 1 节"供应商回调入口
- * 与验签框架"）：`POST /notify/{code}`（订单结果回调）和 `POST /notify/{code}/goods`
- * （商品变更通知），`{code}` 是 `suppliers.code`。这是这个
+ * 与验签框架"）：`POST /notify/{code}/{token}`（订单结果回调）和 `POST /notify/{code}/{token}/goods`
+ * （商品变更通知），`{code}` 是 `suppliers.code`，`{token}` 是 `suppliers.notify_token`
+ * （地址由 App\Service\Supplier\SupplierNotifyAddressService 生成）。这是这个
  * 代码库里第三套、独立于 `App\Controller\OpenApi\*`（商户 HMAC 签名）和
  * `App\Controller\Admin\*`（管理员 JWT）的路由命名空间——**故意不挂
  * `App\Middleware\OpenApiSignatureMiddleware` 或任何既有鉴权中间件**：
@@ -72,9 +74,21 @@ class NotifySupplierController extends AbstractController
     #[Inject]
     protected ProductSyncService $productSyncService;
 
-    #[PostMapping(path: '{code}')]
-    public function handle(string $code): PsrResponseInterface
+    #[Inject]
+    protected SupplierNotifyAddressService $notifyAddressService;
+
+    /**
+     * 地址里的令牌不对跟供应商不存在一样返回 404（见 SupplierNotifyAddressService::resolve()）。
+     */
+    #[PostMapping(path: '{code}/{token}')]
+    public function handle(string $code, string $token): PsrResponseInterface
     {
+        try {
+            $this->notifyAddressService->resolve($code, $token);
+        } catch (SupplierNotFoundException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(404);
+        }
+
         $payload = $this->request->all();
 
         // kasushou 的验签不依赖 HTTP header（见 KasushouDriver::parseCallback()
@@ -97,15 +111,16 @@ class NotifySupplierController extends AbstractController
     }
 
     /**
-     * 供应商商品变更通知（kasushou.md 第 4 节"商品同步"）：`POST /notify/{code}/goods`，
+     * 供应商商品变更通知（kasushou.md 第 4 节"商品同步"）：`POST /notify/{code}/{token}/goods`，
      * 需要在供应商后台把商品变更通知地址配成这个。状态码约定同 handle()：供应商不存在
      * 404、验签失败 403，其余（含商品没配映射）200 回 `ok`；查询商品详情失败走全局
      * 异常处理返回 500，供应商视为失败，漏掉的由每日全量校准补上。
      */
-    #[PostMapping(path: '{code}/goods')]
-    public function productChanged(string $code): PsrResponseInterface
+    #[PostMapping(path: '{code}/{token}/goods')]
+    public function productChanged(string $code, string $token): PsrResponseInterface
     {
         try {
+            $this->notifyAddressService->resolve($code, $token);
             $this->productSyncService->handleNotification($code, $this->request->all());
         } catch (SupplierNotFoundException $e) {
             return $this->response->raw($e->getMessage())->withStatus(404);

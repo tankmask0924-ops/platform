@@ -15,6 +15,7 @@ namespace HyperfTest\Cases\Supplier\Kasushou;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
 use App\Supplier\UnifiedResult;
+use Closure;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Psr7\Request;
@@ -322,6 +323,39 @@ class KasushouDriverTest extends TestCase
         $this->assertSame('1234.56', $driver->queryBalance());
     }
 
+    // ---- 调用日志回调 ----
+
+    public function testEveryHttpCallIsReportedToCallRecorder()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturn(new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => ['balance' => '1234.56']])));
+        $client->shouldReceive('request')
+            ->once()
+            ->andThrow(new ConnectException('connection refused', new Request('POST', self::BASE_URL)));
+
+        $calls = [];
+        $driver = $this->makeDriver($client, static function (string $action, array $request, array $response, int $durationMs) use (&$calls) {
+            $calls[] = compact('action', 'request', 'response', 'durationMs');
+        });
+
+        $driver->queryBalance();
+        $driver->queryOrder('EO-LOG-1');
+
+        $this->assertCount(2, $calls);
+        $this->assertSame('query_balance', $calls[0]['action']);
+        $this->assertSame('/api/v1/user/info', $calls[0]['request']['path']);
+        // 响应体解析成数组记下来，方便后台展示和打码
+        $this->assertSame(['code' => 200, 'msg' => '', 'data' => ['balance' => '1234.56']], $calls[0]['response']['body']);
+        $this->assertSame(200, $calls[0]['response']['http_status']);
+        $this->assertGreaterThanOrEqual(0, $calls[0]['durationMs']);
+
+        $this->assertSame('query', $calls[1]['action']);
+        $this->assertSame('EO-LOG-1', $calls[1]['request']['body']['external_orderno']);
+        $this->assertSame('connection refused', $calls[1]['response']['exception']);
+    }
+
     // ---- parseCallback ----
 
     public function testParseCallbackValidSignatureDelegatesToQueryOrderAndReturnsItsResult()
@@ -588,14 +622,14 @@ class KasushouDriverTest extends TestCase
         return $driver->queryOrder('EO-' . uniqid('', true), $isCardProduct);
     }
 
-    private function makeDriver(ClientInterface $client): KasushouDriver
+    private function makeDriver(ClientInterface $client, ?Closure $callRecorder = null): KasushouDriver
     {
-        return new class(self::BASE_URL, self::USER_ID, self::API_KEY, $client) extends KasushouDriver {
+        return new class(self::BASE_URL, self::USER_ID, self::API_KEY, $client, $callRecorder) extends KasushouDriver {
             private ClientInterface $stubClient;
 
-            public function __construct(string $baseUrl, string $userId, string $apiKey, ClientInterface $client)
+            public function __construct(string $baseUrl, string $userId, string $apiKey, ClientInterface $client, ?Closure $callRecorder)
             {
-                parent::__construct($baseUrl, $userId, $apiKey);
+                parent::__construct($baseUrl, $userId, $apiKey, $callRecorder);
                 $this->stubClient = $client;
             }
 

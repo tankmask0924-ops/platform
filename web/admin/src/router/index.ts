@@ -78,6 +78,12 @@ const router = createRouter({
           meta: { title: '供应商' },
         },
         {
+          path: 'suppliers/:id(\\d+)',
+          name: 'supplier-detail',
+          component: () => import('@/views/supplier/SupplierDetailView.vue'),
+          meta: { title: '供应商详情' },
+        },
+        {
           path: 'orders',
           name: 'orders',
           component: () => import('@/views/order/OrderListView.vue'),

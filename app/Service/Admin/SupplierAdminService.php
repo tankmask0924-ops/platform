@@ -14,8 +14,12 @@ namespace App\Service\Admin;
 
 use App\Crypto\Encryptor;
 use App\Dao\SupplierDao;
+use App\Job\SyncSupplierProductsJob;
 use App\Model\Supplier;
 use App\Service\AbstractService;
+use App\Service\Supplier\SupplierBalanceService;
+use App\Service\Supplier\SupplierNotifyAddressService;
+use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -79,6 +83,15 @@ class SupplierAdminService extends AbstractService
 
     #[Inject]
     protected Encryptor $encryptor;
+
+    #[Inject]
+    protected SupplierNotifyAddressService $notifyAddressService;
+
+    #[Inject]
+    protected SupplierBalanceService $balanceService;
+
+    #[Inject]
+    protected DriverFactory $queueDriverFactory;
 
     /**
      * 列表接口不返回 config（哪怕是脱敏后的）——列表场景只需要知道「这是哪个供应商、
@@ -232,6 +245,35 @@ class SupplierAdminService extends AbstractService
      * 商户 approve/reject 独立于「通用商户更新」是同样的道理（见
      * App\Service\Admin\MerchantAdminService 类注释）。
      */
+    /**
+     * 手动立即查一次余额（requirements.md 6.7 余额监控），跟定时刷新同一套逻辑。
+     *
+     * @return array<string, mixed>
+     */
+    public function refreshBalance(int $id): array
+    {
+        $supplier = $this->findOrFail($id);
+        if (! $this->balanceService->refresh($supplier)) {
+            throw new HttpException(422, '查询余额失败，请在调用日志里查看供应商的返回');
+        }
+
+        return $this->format($supplier->refresh());
+    }
+
+    /**
+     * 手动触发商品全量同步（成本价、状态、库存），放队列异步执行。停用的供应商不同步，
+     * 跟每日校准一致。
+     */
+    public function syncProducts(int $id): void
+    {
+        $supplier = $this->findOrFail($id);
+        if ($supplier->status !== 'active') {
+            throw new HttpException(422, '供应商已停用，不同步商品');
+        }
+
+        $this->queueDriverFactory->get('default')->push(new SyncSupplierProductsJob((int) $supplier->id));
+    }
+
     public function setStatus(int $id, mixed $status): void
     {
         $supplier = $this->findOrFail($id);
@@ -265,6 +307,10 @@ class SupplierAdminService extends AbstractService
             'balance' => $supplier->balance,
             'balance_synced_at' => $supplier->balance_synced_at?->toDateTimeString(),
             'balance_warning_threshold' => $supplier->balance_warning_threshold,
+            // 供应商回调地址：卡速售下单时自动带上订单回调地址，商品变更通知地址要在卡速售后台配置
+            'order_notify_url' => $this->notifyAddressService->orderNotifyUrl($supplier),
+            'goods_notify_url' => $this->notifyAddressService->goodsNotifyUrl($supplier),
+            'notify_base_url_configured' => $this->notifyAddressService->isConfigured(),
             'contact' => $supplier->contact,
             'settlement_info' => $supplier->settlement_info,
             'remark' => $supplier->remark,
