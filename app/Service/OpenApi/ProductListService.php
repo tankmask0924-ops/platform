@@ -40,7 +40,7 @@ class ProductListService extends AbstractService
     protected SubscriptionService $subscriptionService;
 
     /**
-     * @return array<int, array{name: string, operator: null|string, province: null|string,
+     * @return array<int, array{id: int, name: string, operator: null|string, province: null|string,
      *     charge_speed: null|string, face_value: string, sale_price: string, rebate: string}>
      */
     public function list(Merchant $merchant, string $businessLine): array
@@ -54,6 +54,7 @@ class ProductListService extends AbstractService
         $result = [];
         foreach ($products as $product) {
             $result[] = [
+                'id' => $product->id,
                 'name' => $product->name,
                 'operator' => $product->operator,
                 'province' => $product->province,

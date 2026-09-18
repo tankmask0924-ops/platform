@@ -89,6 +89,12 @@ const router = createRouter({
           component: () => import('@/views/DevSettingsView.vue'),
           meta: { title: '开发设置' },
         },
+        {
+          path: 'api-docs',
+          name: 'api-docs',
+          component: () => import('@/views/ApiDocView.vue'),
+          meta: { title: '接口文档' },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

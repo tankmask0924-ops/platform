@@ -127,6 +127,21 @@ enum ErrorCode: int
     }
 
     /**
+     * 全部错误码，给商户后台接口文档展示用；文档直接读这里，新增错误码不用再同步改文档。
+     *
+     * @return list<array{code: int, message: string, http_status: int, order_failure: bool}>
+     */
+    public static function catalog(): array
+    {
+        return array_map(static fn (self $case) => [
+            'code' => $case->value,
+            'message' => $case->message(),
+            'http_status' => $case->httpStatus(),
+            'order_failure' => in_array($case, self::ORDER_FAILURES, true),
+        ], self::cases());
+    }
+
+    /**
      * 按 `orders.fail_reason` 里存的平台文案反查失败错误码。旧数据或其它路径写入的
      * 不认识的文案一律归为 OrderFailed，保证对外永远只出现平台统一的码和文案。
      */

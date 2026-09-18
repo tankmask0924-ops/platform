@@ -185,7 +185,7 @@
 `App\Service\OpenApi\ProductListService`、`App\Controller\OpenApi\ProductController`
 （`GET /open-api/products`）。传 `business_line=card`（卡券是本节单独一行"卡券商品列表（二期）"，
 不在本次范围）或其它取值，一律用 `AbstractOpenApiController::fail()` 返回明确的 4xx 业务错误码，
-不静默返回空列表。~~已知范围限制：没有校验商户是否开通该业务线~~——「服务开通」已完成，没开通返回 42007。
+不静默返回空列表。~~已知范围限制：没有校验商户是否开通该业务线~~——「服务开通」已完成，没开通返回 42007。每项返回商品 `id`（下单要传的 `product_id`，原先漏了，写接口文档时补上）。
 
 ④ `话费下单`（`POST /open-api/orders/recharge`，requirements.md 8.1「下单」的话费一侧，
 卡券参数不同、单独设计，不在本次范围）是第一条打通「商品校验 -> 冻结 -> 供应商路由 ->
@@ -298,7 +298,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 返佣：明细查询与导出 | 一期 | ✅ `App\Controller\Merchant\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/finance/RebateView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"：`GET /merchant/rebates`（status / business_line / order_no / created_from / created_to 筛选，最新在前），返回订单、业务线、订单金额、等级比例、返佣金额、状态、订单完成时间、预计到账和到账/作废/扣回时间，外加按当前筛选条件的分状态汇总 `summary`（笔数 + 金额，不分页）；返佣基数及来源、比例来源、等级属于平台内部数据，不返回。导出不在本次范围。测试 `test/Cases/Merchant/RebateControllerTest.php` |
 | 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | 一期 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | `views/order/OrderListView.vue` ✅ 已联调（2026-09-18）（列表可直接申请售后） | 🔨 除导出外已完成：`GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价。测试 `test/Cases/Merchant/OrderControllerTest.php` |
 | 售后：未到账争议提交与查看 | 一期 | ✅ `App\Controller\Merchant\DisputeController` | ✅ `App\Service\Merchant\DisputeService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | ✅ `POST /merchant/disputes`（`order_no`）、`GET /merchant/disputes`（`status` 筛选）、`GET /merchant/disputes/{id}`；只接受话费、卡券成功订单，订单成功后 `dispute_deadline_days`（默认 7）天内，一笔订单只能提交一次（被驳回后不能再提）；处理结果、说明和凭证商户可见。表里没有商户描述字段，提交时只选订单。见第 8 节"售后处理"说明，测试 `test/Cases/Merchant/DisputeControllerTest.php` |
-| 接口文档：在线查看 / 下载签名示例 | 一期 | ⬜ | ➖ | ⬜ | ⬜ |
+| 接口文档：在线查看 / 下载签名示例 | 一期 | ✅ `App\Controller\Merchant\ApiDocController` | ➖ | `views/ApiDocView.vue` ✅ 已在浏览器看过各页签、错误码表和下载链接 | ✅ 文档正文在前端：接入流程、接口地址（默认当前域名 + `VITE_API_BASE_URL` + `/open-api`，开放 API 另有域名时配 `VITE_OPEN_API_BASE_URL`）、公共参数与签名规则（带固定参数的示例签名）、已上线的 5 个接口（余额、话费商品列表、话费下单、卡券下单、订单查询）的参数和返回、结果回调（字段、验签、`success` 应答、重试间隔）。错误码表由 `GET /merchant/api-docs/error-codes` 直接读 `ErrorCode::catalog()`，新增错误码不用改文档。签名示例放在 `web/merchant/public/sign-examples/`（PHP、Java、Python、Node.js，含签名、回调验签和查余额调用），四种语言对固定参数的输出、以及对服务端 `SignatureSigner` 签出的回调（值里带 `&`、`=`）的验签都已实际跑过、结果一致；Go 等其它语言没有运行环境验证，暂不提供。电影票、快递接口上线时要同步补文档。测试 `test/Cases/Merchant/ApiDocControllerTest.php` |
 
 ---
 
@@ -573,16 +573,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 14 | 1 | 1 |
+| 商户管理后台 | 16 | 15 | 1 | 0 |
 | 系统管理后台 | 19 | 11 | 3 | 5 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **59** | **4** | **43** |
+| **合计** | **106** | **60** | **4** | **42** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 15 | 15 | 0 |
+| 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
 | 系统管理后台（web/admin） | 19 | 14 | 13 | 0（系统设置 1 行页面已写好待联调） |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
@@ -600,7 +600,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成，导出未做）、接口文档
+   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成，导出未做）、~~接口文档~~（已完成）
    - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、商品同步接入与余额监控
    - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个

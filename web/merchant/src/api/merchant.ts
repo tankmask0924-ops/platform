@@ -257,3 +257,14 @@ export interface ProductPriceList {
 export const productApi = {
   list: (businessLine: string) => http.get<ProductPriceList>('/merchant/products', { business_line: businessLine }),
 }
+
+export interface ApiErrorCode {
+  code: number
+  message: string
+  http_status: number
+  order_failure: boolean
+}
+
+export const apiDocApi = {
+  errorCodes: () => http.get<{ data: ApiErrorCode[] }>('/merchant/api-docs/error-codes').then((r) => r.data),
+}

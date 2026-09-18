@@ -117,6 +117,8 @@ class ProductControllerTest extends HttpTestCase
         );
         $this->assertSame([$nameA, $nameB], array_keys($rows));
 
+        // 下单要传 product_id，商品列表必须给出
+        $this->assertSame($productB->id, $rows[$nameB]['id']);
         $this->assertSame('mobile', $rows[$nameA]['operator']);
         $this->assertSame('100.00', $rows[$nameA]['face_value']);
         $this->assertSame('99.20', $rows[$nameA]['sale_price']);
