@@ -140,6 +140,7 @@ class OrderControllerTest extends HttpTestCase
 
         $this->assertSame('success', $body['status']);
         $this->assertSame('CARD-PWD-9', $body['card_pwd']);
+        $this->assertSame('13800000600', $body['recharge_account']);
         $this->assertCount(1, $body['notify_logs']);
         $this->assertSame(500, $body['notify_logs'][0]['http_status']);
         $this->assertFalse($body['notify_logs'][0]['success']);

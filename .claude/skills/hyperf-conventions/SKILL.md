@@ -99,6 +99,7 @@ class User extends Model implements CacheableInterface
 **关键点，容易踩坑**：
 - `Cacheable` trait **不会**自动接管 `find()`，必须显式调用 `User::findFromCache($id)` 才走缓存（这个 Dao 层的坑已经在 [app/Dao/AbstractDao.php](app/Dao/AbstractDao.php) 和 `UserDao::find()` 里踩过一次，新的 Dao 如果要用缓存记得重写 `find()` 调 `findFromCache`，不要指望父类的 `find()` 自动生效）
 - `save()` / `delete()` 会自动触发 `DeleteCacheListener` 清缓存，这部分不用管
+- handler 用的是 `RedisStringHandler`（整行序列化），**不要改回默认的 `RedisHandler`**：hash 存储会把 NULL 字段读回成 `''`，`=== null` 判断全部失效（踩过：商户没生成密钥却显示已生成）。代价是不支持缓存层的 `increment()`
 - 缓存配置在 `config/autoload/databases.php` 里每个连接下的 `cache` 键（[已配置](config/autoload/databases.php)），`cache_key` 用 `sprintf` 占位符格式（默认 `mc:%s:m:%s:%s:%s`），**不是** `{module}:cache:{table}:{id}` 这种花括号写法，写错了会导致缓存悄悄失效但不报错
 
 ## 异步队列（hyperf/async-queue）

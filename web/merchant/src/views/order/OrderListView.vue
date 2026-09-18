@@ -64,9 +64,12 @@ async function renotify() {
   }
   renotifying.value = true
   try {
-    await orderApi.renotify(detail.value.order_no)
-    ElMessage.success('已重新推送回调')
-    await openDetail(detail.value.order_no)
+    const orderNo = detail.value.order_no
+    await orderApi.renotify(orderNo)
+    ElMessage.success('已重新推送回调，结果稍后显示在回调记录里')
+    // 回调走异步队列，接口返回时还没发出去，等一会儿再刷新记录
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    await openDetail(orderNo)
   } finally {
     renotifying.value = false
   }
@@ -172,6 +175,7 @@ onMounted(list.load)
         <el-descriptions :column="2" border>
           <el-descriptions-item label="平台单号" :span="2">{{ detail.order_no }}</el-descriptions-item>
           <el-descriptions-item label="商户单号" :span="2">{{ detail.merchant_order_no }}</el-descriptions-item>
+          <el-descriptions-item v-if="detail.recharge_account" label="充值账号" :span="2">{{ detail.recharge_account }}</el-descriptions-item>
           <el-descriptions-item label="业务">{{ labelOf(businessLineLabels, detail.business_line) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <StatusTag :map="merchantOrderStatusLabels" :value="detail.status" />

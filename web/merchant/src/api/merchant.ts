@@ -88,6 +88,7 @@ export interface NotifyLog {
 }
 
 export interface OrderDetail extends Order {
+  recharge_account: string | null
   card_no?: string
   card_pwd?: string
   notify_logs: NotifyLog[]

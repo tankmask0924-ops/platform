@@ -1,5 +1,18 @@
 import axios, { type AxiosError } from 'axios'
 import { ElMessage } from 'element-plus'
+import type { App } from 'vue'
+
+/**
+ * 接口错误已经由响应拦截器弹过提示，页面里的 try/finally 不再重复 catch；
+ * 这里吞掉这类错误，避免控制台里一堆 Uncaught (in promise)，其他错误照常打印。
+ */
+export function ignoreHandledHttpErrors(app: App): void {
+  app.config.errorHandler = (err) => {
+    if (!axios.isAxiosError(err)) {
+      console.error(err)
+    }
+  }
+}
 
 export interface HttpOptions {
   baseURL: string
