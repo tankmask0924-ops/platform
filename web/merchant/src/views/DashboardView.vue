@@ -2,14 +2,17 @@
 import { isNegative, labelOf, merchantStatusLabels, merchantTypeLabels, money, StatusTag } from '@platform/shared'
 import { onMounted, ref } from 'vue'
 import { fetchMe, type Me } from '@/api/auth'
+import { dashboardApi, type DashboardStats } from '@/api/merchant'
+import TrendChart from '@/components/TrendChart.vue'
 
 const me = ref<Me | null>(null)
+const stats = ref<DashboardStats | null>(null)
 const loading = ref(false)
 
 onMounted(async () => {
   loading.value = true
   try {
-    me.value = await fetchMe()
+    ;[me.value, stats.value] = await Promise.all([fetchMe(), dashboardApi.stats()])
   } finally {
     loading.value = false
   }
@@ -40,7 +43,7 @@ onMounted(async () => {
       />
 
       <el-row :gutter="16">
-        <el-col :xs="24" :sm="12">
+        <el-col :xs="24" :sm="8">
           <el-card shadow="never">
             <div class="stat-label">可用余额</div>
             <div class="stat-value" :class="{ negative: isNegative(me.available_balance) }">
@@ -49,14 +52,51 @@ onMounted(async () => {
             <router-link to="/finance/recharge">去充值</router-link>
           </el-card>
         </el-col>
-        <el-col :xs="24" :sm="12">
+        <el-col :xs="24" :sm="8">
           <el-card shadow="never">
             <div class="stat-label">冻结金额</div>
             <div class="stat-value">{{ money(me.frozen_balance) }}</div>
             <span class="stat-hint">处理中订单占用的金额，订单有结果后扣款或解冻</span>
           </el-card>
         </el-col>
+        <el-col :xs="24" :sm="8">
+          <el-card shadow="never">
+            <div class="stat-label">待到账返佣</div>
+            <div class="stat-value">{{ money(stats?.pending_rebate ?? '0.00') }}</div>
+            <router-link to="/finance/rebates">返佣明细</router-link>
+          </el-card>
+        </el-col>
       </el-row>
+
+      <el-row v-if="stats" :gutter="16">
+        <el-col :xs="24" :sm="8">
+          <el-card shadow="never">
+            <div class="stat-label">今日订单</div>
+            <div class="stat-value">{{ stats.today.order_count }} <span class="stat-unit">单</span></div>
+            <router-link to="/orders">订单列表</router-link>
+          </el-card>
+        </el-col>
+        <el-col :xs="24" :sm="8">
+          <el-card shadow="never">
+            <div class="stat-label">今日消费</div>
+            <div class="stat-value">{{ money(stats.today.amount) }}</div>
+            <span class="stat-hint">实际扣款减去已退款</span>
+          </el-card>
+        </el-col>
+        <el-col :xs="24" :sm="8">
+          <el-card shadow="never">
+            <div class="stat-label">今日成功率</div>
+            <div class="stat-value">{{ stats.today.success_rate === null ? '-' : `${stats.today.success_rate}%` }}</div>
+            <span class="stat-hint">
+              已出结果 {{ stats.today.finished_count }} 单，成功 {{ stats.today.success_count }} 单（处理中的不计入）
+            </span>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-card v-if="stats" shadow="never" header="近 7 天消费">
+        <TrendChart :points="stats.trend" />
+      </el-card>
 
       <el-card shadow="never" header="账户信息">
         <el-descriptions :column="2" border>
@@ -90,6 +130,11 @@ onMounted(async () => {
   margin: 8px 0;
   font-size: 28px;
   font-weight: 600;
+}
+
+.stat-unit {
+  font-size: 14px;
+  font-weight: normal;
 }
 
 .stat-value.negative {

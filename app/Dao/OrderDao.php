@@ -158,6 +158,31 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 某商户从 $from 起下的订单，按下单日期和状态汇总（商户后台首页统计）。
+     * 金额是 DECIMAL 求和后的字符串；没有扣款的订单 deducted_amount 为 NULL，按 0 算。
+     *
+     * @return list<array{day: string, status: string, count: int, deducted: string, refunded: string}>
+     */
+    public function dailySummaryForMerchant(int $merchantId, string $from): array
+    {
+        return $this->newQuery()
+            ->where('merchant_id', $merchantId)
+            ->where('created_at', '>=', $from)
+            ->selectRaw('DATE(created_at) as day, status, count(*) as n, COALESCE(SUM(deducted_amount), 0) as deducted, SUM(refunded_amount) as refunded')
+            ->groupBy('day', 'status')
+            ->get()
+            ->map(fn ($row) => [
+                'day' => (string) $row->day,
+                'status' => (string) $row->status,
+                'count' => (int) $row->n,
+                'deducted' => (string) $row->deducted,
+                'refunded' => (string) $row->refunded,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function filterQuery(array $filters): Builder

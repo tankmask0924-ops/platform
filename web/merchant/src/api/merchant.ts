@@ -191,3 +191,23 @@ export const qualificationApi = {
   get: () => http.get<QualificationStatus>('/merchant/qualification'),
   resubmit: (data: QualificationPayload) => http.post<QualificationStatus>('/merchant/qualification', data),
 }
+
+/** 首页统计：App\Controller\Merchant\DashboardController，口径见 App\Service\Merchant\DashboardService */
+export interface DashboardStats {
+  pending_rebate: string
+  today: {
+    order_count: number
+    /** 消费金额 = 实扣 - 已退款 */
+    amount: string
+    success_count: number
+    finished_count: number
+    /** 百分比；今天还没有出结果的订单时为 null */
+    success_rate: number | null
+  }
+  /** 近 7 天，最早的在前，最后一项是今天 */
+  trend: { date: string; order_count: number; amount: string }[]
+}
+
+export const dashboardApi = {
+  stats: () => http.get<DashboardStats>('/merchant/dashboard'),
+}
