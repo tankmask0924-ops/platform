@@ -144,20 +144,107 @@ class ProductControllerTest extends HttpTestCase
         $this->assertNull($body['data']);
     }
 
-    public function testCardBusinessLineIsRejectedWithCleanFailureEnvelope()
+    /**
+     * 卡券商品列表（二期）。`card_type` 是这条业务线的关键字段：direct 下单必须传
+     * recharge_account，card_secret 必须不传（见 CardOrderPlacementService），
+     * 商品列表不给就没法下单。
+     */
+    public function testListsCardProductsWithCardTypeAndCardLineRebateRate()
     {
+        $levelId = random_int(200000, 299999);
+        // 话费 60%、卡券 40%：卡券的返佣必须按卡券那一行算，不能串到话费的比例上
+        $this->createLevelBusinessRate($levelId, '0.6000', 'recharge');
+        $this->createLevelBusinessRate($levelId, '0.4000', 'card');
+
         $secret = 'plain-secret-' . uniqid('', true);
-        $merchant = $this->createMerchant($secret, null);
+        $merchant = $this->createMerchant($secret, $levelId);
+
+        $suffix = ' #' . uniqid('', true);
+        $direct = '视频会员月卡（直充）' . $suffix;
+        $secretCard = '游戏点卡 100 元（卡密）' . $suffix;
+        $offShelf = '已下架卡券' . $suffix;
+
+        $this->createProduct('card', '2.00', 'on_shelf', ['name' => $direct, 'card_type' => 'direct']);
+        $this->createProduct('card', '5.00', 'on_shelf', ['name' => $secretCard, 'card_type' => 'card_secret']);
+        $this->createProduct('card', '5.00', 'off_shelf', ['name' => $offShelf, 'card_type' => 'card_secret']);
+        // 话费商品不能混进卡券列表
+        $this->createProduct('recharge', '0.50', 'on_shelf', ['name' => '移动 100 元快充' . $suffix, 'operator' => 'mobile']);
 
         $response = $this->client->request('GET', '/open-api/products', [
             'query' => $this->signedParams($merchant->app_key, $secret, ['business_line' => 'card']),
         ]);
 
         $body = json_decode((string) $response->getBody(), true);
-
         $this->assertSame(200, $response->getStatusCode());
-        $this->assertSame(41002, $body['code']);
+        $this->assertSame(0, $body['code']);
+
+        $rows = array_column(
+            array_filter($body['data'], fn (array $row) => str_ends_with($row['name'], $suffix)),
+            null,
+            'name'
+        );
+        $this->assertSame([$direct, $secretCard], array_keys($rows), '只有在架卡券商品，话费商品不混入');
+
+        $this->assertSame('direct', $rows[$direct]['card_type']);
+        $this->assertSame('card_secret', $rows[$secretCard]['card_type']);
+        // 卡券商品没有话费专用字段
+        $this->assertNull($rows[$direct]['operator']);
+        $this->assertNull($rows[$direct]['charge_speed']);
+        // 2.00 × 0.40（卡券比例，不是话费的 0.60）
+        $this->assertSame('0.80', $rows[$direct]['rebate']);
+        $this->assertSame('2.00', $rows[$secretCard]['rebate']);
+    }
+
+    public function testRechargeListStillCarriesCardTypeAsNull()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret, null);
+        $name = '联通 30 元快充 #' . uniqid('', true);
+        $this->createProduct('recharge', '0.10', 'on_shelf', ['name' => $name, 'operator' => 'unicom']);
+
+        $response = $this->client->request('GET', '/open-api/products', [
+            'query' => $this->signedParams($merchant->app_key, $secret, ['business_line' => 'recharge']),
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $row = array_values(array_filter($body['data'], fn (array $r) => $r['name'] === $name))[0];
+
+        $this->assertArrayHasKey('card_type', $row, '字段对两条业务线都在，话费给 null');
+        $this->assertNull($row['card_type']);
+        $this->assertSame('unicom', $row['operator']);
+    }
+
+    public function testMerchantWithoutCardSubscriptionGetsNotSubscribedError()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret, null);
+        MerchantBusinessSubscription::where('merchant_id', $merchant->id)->where('business_line', 'card')->update(['status' => 'pending']);
+
+        $response = $this->client->request('GET', '/open-api/products', [
+            'query' => $this->signedParams($merchant->app_key, $secret, ['business_line' => 'card']),
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(42007, $body['code']);
         $this->assertNull($body['data']);
+    }
+
+    /**
+     * 电影票、快递没有本地商品库，仍然要被这个接口挡住。
+     */
+    public function testBusinessLinesWithoutLocalCatalogAreRejected()
+    {
+        $secret = 'plain-secret-' . uniqid('', true);
+        $merchant = $this->createMerchant($secret, null);
+
+        foreach (['movie', 'express', 'nope'] as $line) {
+            $response = $this->client->request('GET', '/open-api/products', [
+                'query' => $this->signedParams($merchant->app_key, $secret, ['business_line' => $line]),
+            ]);
+            $body = json_decode((string) $response->getBody(), true);
+            $this->assertSame(41002, $body['code'], $line);
+            $this->assertNull($body['data'], $line);
+        }
     }
 
     public function testMissingBusinessLineIsRejectedWithCleanFailureEnvelope()
@@ -218,6 +305,7 @@ class ProductControllerTest extends HttpTestCase
             'business_line' => $businessLine,
             'name' => $extra['name'],
             'operator' => $extra['operator'] ?? null,
+            'card_type' => $extra['card_type'] ?? null,
             'face_value' => '100.00',
             'sale_price' => '99.20',
             'rebate_amount' => $rebateAmount,
@@ -229,11 +317,11 @@ class ProductControllerTest extends HttpTestCase
         return $product;
     }
 
-    private function createLevelBusinessRate(int $levelId, string $rate): MerchantLevelBusinessRate
+    private function createLevelBusinessRate(int $levelId, string $rate, string $businessLine = 'recharge'): MerchantLevelBusinessRate
     {
         $row = MerchantLevelBusinessRate::create([
             'level_id' => $levelId,
-            'business_line' => 'recharge',
+            'business_line' => $businessLine,
             'rebate_rate' => $rate,
         ]);
 

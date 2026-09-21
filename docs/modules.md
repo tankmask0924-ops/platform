@@ -140,9 +140,9 @@
 | 查询余额（可用/冻结/待到账返佣） | ✅ | ✅ | ✅ | ✅ |
 | 订单查询（平台单号或商户单号，二选一） | ✅ | ✅ | ✅ | ✅ |<sup>①</sup>
 | 结果回调（平台 → 商户，含重试） | ➖ | ✅ | ✅ | ✅ |<sup>②</sup>
-| 话费商品列表 | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
+| 商品列表（话费、卡券共用一个接口） | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
 | 话费下单 | ✅ | ✅ | ✅ | ✅ |<sup>④</sup>
-| 卡券商品列表（二期） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 卡券商品列表（二期） | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
 | 卡券下单（二期） | ✅ | ✅ | ✅ | ✅ |<sup>⑤</sup>
 | 电影票城市 / 影院 / 影片 / 场次 / 座位查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 电影票锁座（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
@@ -177,15 +177,32 @@
 `notify(int $orderId)`，以 delay=0 派发首次尝试）。订单成功/失败时由 `App\Service\Order\OrderResultApplier`
 调用 `MerchantNotifyService::notify()`（后来的下单/路由任务接上的）；取消、已退款所在的流程还没建。
 
-③ `话费商品列表`只支持 `business_line=recharge`：`App\Model\Product`/`ProductLevelRebate`/
+③ `商品列表`（`GET /open-api/products`）：`App\Model\Product`/`ProductLevelRebate`/
 `MerchantLevelBusinessRate`、对应的 `App\Dao\ProductDao`（`listOnShelfByBusinessLine`）/
 `ProductLevelRebateDao`/`MerchantLevelBusinessRateDao`、`App\Service\Product\RebateCalculator`
 （requirements.md 5.3 返佣公式：返佣基数 × 等级比例、向下取整到分，全程用 `bcmath` 字符串运算，
 不用 float，`bcmul` 对 scale 是截断不是四舍五入，非负数场景下截断等价于向下取整）、
-`App\Service\OpenApi\ProductListService`、`App\Controller\OpenApi\ProductController`
-（`GET /open-api/products`）。传 `business_line=card`（卡券是本节单独一行"卡券商品列表（二期）"，
-不在本次范围）或其它取值，一律用 `AbstractOpenApiController::fail()` 返回明确的 4xx 业务错误码，
-不静默返回空列表。~~已知范围限制：没有校验商户是否开通该业务线~~——「服务开通」已完成，没开通返回 42007。每项返回商品 `id`（下单要传的 `product_id`，原先漏了，写接口文档时补上）。
+`App\Service\OpenApi\ProductListService`、`App\Controller\OpenApi\ProductController`。
+没开通该业务线返回 42007（不返回空列表，否则商户会误以为平台没有商品）；商户没开通时不暴露商品。
+每项返回商品 `id`（下单要传的 `product_id`）。
+
+**话费、卡券共用这一个接口**（2026-09-21 补上卡券，二期第一项）：requirements.md 8.1 的接口表里
+"商品列表"本来就是「话费、卡券」一行，不是两行，所以没有另开 `/card-products` 之类的路由，而是让
+`business_line` 接受 `recharge`/`card` 两个值；电影票、快递没有本地商品库（成本和返佣每次从供应商
+实时取，6.1），传进来照样用 `fail()` 返回 41002，不静默返回空列表。
+- **两条业务线返回同一组字段，用不上的给 null**，跟商户后台「商品价格」页
+  `App\Service\Merchant\ProductPriceService::list()` 的字段完全一致——商户在后台页面上看到的
+  和从开放 API 拿到的是同一份数据，不用对着两份字段表做映射。给话费也加上 `card_type: null`
+  是纯新增字段，老调用方忽略未知字段即可，不破坏已上线的话费列表契约。
+- **`card_type` 对卡券是必要字段不是锦上添花**：`direct`（直充）下单必须传 `recharge_account`，
+  `card_secret`（卡密）必须不传，传了直接拒绝（见 `CardOrderPlacementService` 类注释）。
+  商品列表不给这个字段，商户就没有任何办法知道该不该传充值账号。
+- 返佣按商品自己的 `business_line` 取等级比例（卡券的比例不会串到话费那一行），测试里用
+  话费 60% / 卡券 40% 两个不同比例守着这一点。
+- 商户后台「接口文档」页同步改成「商品列表（话费 / 卡券）」，补了 `card_type` 字段说明、
+  卡券返回示例和"先看 card_type 再决定传不传充值账号"的提示。
+- 测试 `test/Cases/OpenApi/ProductControllerTest.php`（卡券正向列表、话费仍带 `card_type: null`、
+  未开通卡券返回 42007、movie/express/非法值返回 41002）。
 
 ④ `话费下单`（`POST /open-api/orders/recharge`，requirements.md 8.1「下单」的话费一侧，
 卡券参数不同、单独设计，不在本次范围）是第一条打通「商品校验 -> 冻结 -> 供应商路由 ->
@@ -644,11 +661,11 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
-| 开放 API 接口 | 15 | 6 | 0 | 9 |
+| 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 12 | 3 | 4 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **62** | **3** | **41** |
+| **合计** | **106** | **63** | **3** | **40** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -678,5 +695,5 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
-4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ 熔断 → 告警 → 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境
