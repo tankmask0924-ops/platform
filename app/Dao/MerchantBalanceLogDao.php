@@ -70,4 +70,36 @@ class MerchantBalanceLogDao extends AbstractDao
 
         return $query->count();
     }
+
+    /**
+     * 财务报表（requirements.md 8.3「财务报表：资金流水」）的资金流水汇总：某段时间内
+     * 各类流水的笔数和金额合计，不分页、不返回明细行（明细在商户详情页看）。
+     *
+     * `adjustment` 的金额是带符号的（加钱为正、扣钱为负，见
+     * App\Service\Merchant\BalanceService::adjust()），所以它这一行的合计是**净额**；
+     * 其余类型都存正数，方向由类型本身表达。
+     *
+     * @return list<array{type: string, count: int, amount: string}> 按金额合计倒序
+     */
+    public function summarizeByType(string $from, string $to, ?int $merchantId = null): array
+    {
+        $query = $this->newQuery()
+            ->whereBetween('created_at', [$from, $to])
+            ->selectRaw('type, count(*) as n, COALESCE(SUM(amount), 0) as amount_total')
+            ->groupBy('type')
+            ->orderByDesc('amount_total');
+
+        if ($merchantId !== null) {
+            $query->where('merchant_id', $merchantId);
+        }
+
+        return $query->get()
+            ->map(static fn ($row) => [
+                'type' => (string) $row->type,
+                'count' => (int) $row->n,
+                'amount' => (string) $row->amount_total,
+            ])
+            ->values()
+            ->all();
+    }
 }

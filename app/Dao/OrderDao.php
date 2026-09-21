@@ -15,6 +15,7 @@ namespace App\Dao;
 use App\Model\Order;
 use Hyperf\Database\Model\Builder;
 use Hyperf\Database\Model\Collection;
+use InvalidArgumentException;
 
 class OrderDao extends AbstractDao
 {
@@ -209,6 +210,54 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 财务报表（requirements.md 8.3「财务报表」）的订单侧：某段时间内**完成**的订单，
+     * 按维度聚合售价、成本，以及后来被退掉的部分。返佣侧在
+     * App\Dao\MerchantRebateDao::rebateStatsByOrderCompletion()，两边用的是同一套
+     * 分组表达式和同一条时间轴（`orders.completed_at`），否则合并出来的行对不上。
+     *
+     * **时间轴用 `completed_at` 而不是 `created_at`**：毛利在订单完成那一刻才确定，
+     * 返佣也从这个时间起算（requirements.md 5.4），两笔收支挂在同一个时间点上，
+     * 报表里的"这一天赚了多少"才是一句能对账的话。
+     *
+     * **只有成功的订单算毛利，已退款的单独成列**：退款之后这笔毛利已经不成立，
+     * 混进毛利里会虚高；但它确实发生过，藏起来会让人以为这天风平浪静，
+     * 所以给 `refunded_count` / `refunded_amount` 两列单独摆出来。
+     * 失败、已取消的订单没有收支，不在取数范围内。
+     *
+     * @param string $groupBy day / merchant / level / business_line / supplier
+     * @return list<array{key: null|string, orders: int, sale_total: string, cost_total: string,
+     *     refunded_count: int, refunded_amount: string}>
+     */
+    public function profitStats(string $from, string $to, string $groupBy, ?int $merchantId = null): array
+    {
+        $query = $this->newQuery()
+            ->whereIn('orders.status', ['success', 'refunded'])
+            ->whereBetween('orders.completed_at', [$from, $to])
+            ->selectRaw("SUM(CASE WHEN orders.status = 'success' THEN 1 ELSE 0 END) as n")
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' THEN orders.sale_price ELSE 0 END), 0) as sale_total")
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' THEN orders.cost_price ELSE 0 END), 0) as cost_total")
+            ->selectRaw("SUM(CASE WHEN orders.status = 'refunded' THEN 1 ELSE 0 END) as refunded_n")
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'refunded' THEN orders.refunded_amount ELSE 0 END), 0) as refunded_total");
+
+        if ($merchantId !== null) {
+            $query->where('orders.merchant_id', $merchantId);
+        }
+        $this->applyReportGrouping($query, $groupBy);
+
+        return $query->get()
+            ->map(static fn ($row) => [
+                'key' => $row->g === null ? null : (string) $row->g,
+                'orders' => (int) $row->n,
+                'sale_total' => (string) $row->sale_total,
+                'cost_total' => (string) $row->cost_total,
+                'refunded_count' => (int) $row->refunded_n,
+                'refunded_amount' => (string) $row->refunded_total,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function filterQuery(array $filters): Builder
@@ -231,5 +280,28 @@ class OrderDao extends AbstractDao
         }
 
         return $query;
+    }
+
+    /**
+     * 财务报表的分组表达式，订单侧和返佣侧共用一套定义（返佣侧 join 上 orders 之后
+     * 调的是 MerchantRebateDao 里同名的私有方法，两边必须保持一致，改了要一起改）。
+     *
+     * `level` 用的是商户**当前**等级（`merchants.level_id`）而不是下单时的等级快照：
+     * `orders` 表没有等级快照，只有 `merchant_rebates` 有。要么两边都用当前等级、
+     * 行能对上但历史订单会跟着调级走，要么订单按当前等级、返佣按快照等级、同一行的
+     * 两半根本不是同一批订单。选了前者——报表是给"现在这批商户各等级贡献多少"用的，
+     * 单笔订单当时按哪个等级返的佣在返佣明细页查得到。
+     */
+    private function applyReportGrouping(Builder $query, string $groupBy): void
+    {
+        match ($groupBy) {
+            'day' => $query->selectRaw('DATE(orders.completed_at) as g')->groupBy('g')->orderBy('g'),
+            'merchant' => $query->selectRaw('orders.merchant_id as g')->groupBy('g'),
+            'business_line' => $query->selectRaw('orders.business_line as g')->groupBy('g'),
+            'supplier' => $query->selectRaw('orders.supplier_id as g')->groupBy('g'),
+            'level' => $query->leftJoin('merchants', 'merchants.id', '=', 'orders.merchant_id')
+                ->selectRaw('merchants.level_id as g')->groupBy('g'),
+            default => throw new InvalidArgumentException('unsupported report group_by: ' . $groupBy),
+        };
     }
 }

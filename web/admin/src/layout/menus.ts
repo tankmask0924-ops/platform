@@ -5,6 +5,7 @@ import {
   Coin,
   Document,
   Finished,
+  Histogram,
   Goods,
   HomeFilled,
   Key,
@@ -55,6 +56,8 @@ export const menus: MenuItem[] = [
       { path: '/disputes', title: '售后争议', icon: Service, permission: 'aftersale.view' },
     ],
   },
+  // 财务报表跟对账、告警一样放顶层：它横跨订单、返佣、资金三块，挂在任何一个下面都不对
+  { path: '/finance-report', title: '财务报表', icon: Histogram, permission: 'report.view' },
   // 对账跟告警一样放顶层：它既不属于订单模块也不属于供应商模块，
   // 对的是两边的差异，而且是财务每天固定要看的一页
   { path: '/reconciliations', title: '对账', icon: Finished, permission: 'reconciliation.view' },

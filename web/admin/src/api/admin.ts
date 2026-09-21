@@ -567,3 +567,58 @@ export const reconciliationApi = {
   resolve: (id: number, params: Query) => http.post<ReconciliationList>(`/admin/reconciliations/${id}/resolve`, params),
   ignore: (id: number, params: Query) => http.post<ReconciliationList>(`/admin/reconciliations/${id}/ignore`, params),
 }
+
+/** 财务报表：App\Controller\Admin\ReportController（requirements.md 8.3） */
+export interface ProfitRow {
+  /** 分组键：日期 / 商户 id / 等级 id / 业务线编码 / 供应商 id；汇总行为 null */
+  key: string | null
+  /** 商户（手机号或邮箱）、等级名、供应商名；按天和按业务线分组时为 null，由前端转中文 */
+  label: string | null
+  orders: number
+  sale_total: string
+  cost_total: string
+  /** 售价合计 − 成本合计 */
+  gross_profit: string
+  merchant_rebate: string
+  /** 话费、卡券没有供应商返佣，恒为 0.00（电影票、快递三期） */
+  supplier_rebate: string
+  /** 供应商返佣 − 商户返佣，只有支出时是负数 */
+  rebate_balance: string
+  /** 订单毛利 + 返佣收支 */
+  total_profit: string
+  /** 已退款订单不计毛利，单独列出来 */
+  refunded_count: number
+  refunded_amount: string
+}
+
+export type ProfitGroupBy = 'day' | 'merchant' | 'level' | 'business_line' | 'supplier'
+
+export interface ProfitReport {
+  group_by: ProfitGroupBy
+  from: string
+  to: string
+  merchant_id: number | null
+  summary: ProfitRow
+  data: ProfitRow[]
+}
+
+export interface BalanceFlowRow {
+  /** merchant_balance_logs.type */
+  type: string
+  count: number
+  /** 调账这一行是带符号的净额，其余类型方向由类型本身表达 */
+  amount: string
+}
+
+export interface BalanceFlowReport {
+  from: string
+  to: string
+  merchant_id: number | null
+  data: BalanceFlowRow[]
+  total_count: number
+}
+
+export const reportApi = {
+  profit: (params: Query) => http.get<ProfitReport>('/admin/reports/profit', params),
+  balanceFlows: (params: Query) => http.get<BalanceFlowReport>('/admin/reports/balance-flows', params),
+}

@@ -102,6 +102,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'finance-report',
+          name: 'finance-report',
+          component: () => import('@/views/FinanceReportView.vue'),
+          meta: { title: '财务报表' },
+        },
+        {
           path: 'reconciliations',
           name: 'reconciliations',
           component: () => import('@/views/ReconciliationListView.vue'),

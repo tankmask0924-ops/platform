@@ -103,6 +103,7 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'alert.handle', 'module' => 'alert', 'name' => '告警标记处理/忽略', 'type' => 'action'],
         ['code' => 'reconciliation.view', 'module' => 'reconciliation', 'name' => '对账差异查看', 'type' => 'action'],
         ['code' => 'reconciliation.handle', 'module' => 'reconciliation', 'name' => '对账差异标记处理/重跑批次', 'type' => 'action'],
+        ['code' => 'report.view', 'module' => 'report', 'name' => '财务报表查看', 'type' => 'action'],
     ];
 
     /**
@@ -134,6 +135,8 @@ class AdminBootstrapService extends AbstractService
                 // 对账是财务的活（requirements.md 8.3 跟财务报表放在一起），
                 // 查差异、标记处理、重跑批次都给财务
                 'reconciliation.view', 'reconciliation.handle',
+                // 财务报表把全平台的成本价和毛利摊开，只给财务，不给运营和客服
+                'report.view',
             ],
         ],
         '客服' => [

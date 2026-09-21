@@ -391,10 +391,40 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18） | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
-| 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | 🔨 订单对账 + 差异标记处理已完成；返佣对账三期随电影票/快递业务线一起做，见下方「对账」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+
+> 「财务报表」（requirements.md 8.3、1.2，2026-09-21）：两个只读聚合接口，不建表
+> （database-design.md 6「财务报表走查询/视图，不新增表」）。
+> - **订单毛利和返佣收支分开算、最后才相加**（1.2）：每行给 `gross_profit`（售价合计 − 成本合计）、
+>   `rebate_balance`（供应商返佣 − 商户返佣）、`total_profit`（两者之和）三个数。混成一个净利会让
+>   "哪一头出了问题"看不出来。用 1.2 的例子验过：售价 99.20、成本 98.50、返佣 0.50 → 毛利 0.70、
+>   返佣收支 -0.50、合计 0.20。
+> - **时间轴是订单完成时间**（`orders.completed_at`）：毛利在订单完成那刻才确定，返佣也从这个时间
+>   起算（5.4），两笔收支挂在同一个时间点上，"这一天赚了多少"才是一句能对账的话。
+> - **已退款订单不计毛利，但单独成列**（`refunded_count` / `refunded_amount`）：退款后毛利不成立，
+>   混进去会虚高；藏起来又会让人以为这天风平浪静。失败、已取消的订单没有收支，不取数。
+> - **返佣只算 `pending` + `settled`**：这两个状态是平台欠着或已经付了的钱；`voided`、`clawed_back`
+>   等于没付出去。只看返佣状态、不看订单当前状态，跟返佣明细页同一个口径。
+> - **按等级分组用商户当前等级**：`orders` 没有等级快照（只有 `merchant_rebates` 有）。两边都用当前
+>   等级，行能对上但历史订单会跟着调级走；各用各的，同一行的两半就不是同一批订单。选了前者，
+>   单笔订单当时按哪个等级返的佣在返佣明细页查得到。这个取舍写在 `OrderDao::applyReportGrouping()`。
+> - **供应商返佣恒为 `0.00`**：话费、卡券没有供应商返佣，电影票/快递是三期（同
+>   `SupplierStatsService`），字段按最终形状先返回，三期在 Dao 里补 SUM 即可。
+> - 接口：`GET /admin/reports/profit`（`group_by` = day / merchant / level / business_line / supplier，
+>   `from`/`to` 默认最近 30 天、最多跨 92 天，可选 `merchant_id`；按天分组补齐空日期；分组键带可读名称，
+>   商户用手机号/邮箱——商户表没有名称列，跟返佣明细页一致）、`GET /admin/reports/balance-flows`
+>   （按 `merchant_balance_logs.type` 汇总笔数和金额，`adjustment` 那行是带符号的净额）。
+>   两个接口分开而不是并成一个响应：资金流水按发生时间、毛利按订单完成时间，凑一行会让人以为能相减。
+>   权限 `report.view`（已进 `KNOWN_PERMISSIONS`，**部署后执行 `admin:sync-permissions`**；
+>   预置只给财务——报表把全平台成本价和毛利摊开，不是运营日常要看的东西）。
+> - 前端：顶层菜单「财务报表」，顶部四个汇总数 + 维度切换 + 日期区间 + 商户 ID 筛选，
+>   下面两张表（利润、资金流水），导出 CSV 用 `web/shared` 已有的 `downloadCsv`（列跟页面一致）。
+> - 测试 `test/Cases/Admin/ReportControllerTest.php`（1.2 的例子逐字段核对、已退款单独成列、
+>   作废与已扣回不算支出、四种分组维度及可读名称、资金流水按类型汇总且调账为净额、
+>   非法参数 422、没有 `report.view` 403）。
 
 > 「对账」（requirements.md 8.3，database-design.md 4.15，2026-09-21）：新建 `reconciliation_diffs` 表 +
 > `App\Model\ReconciliationDiff` / `App\Dao\ReconciliationDiffDao`，差异由
@@ -764,16 +794,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 13 | 4 | 2 |
+| 系统管理后台 | 19 | 14 | 4 | 1 |
 | 异步任务与定时任务 | 11 | 8 | 0 | 3 |
-| **合计** | **107** | **67** | **4** | **36** |
+| **合计** | **107** | **68** | **4** | **35** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
 | 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
-| 系统管理后台（web/admin） | 19 | 18 | 18 | 0 |
+| 系统管理后台（web/admin） | 19 | 19 | 19 | 0 |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -796,5 +826,5 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
-4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ 财务报表，每个功能接口 + 页面一起做完再做下一个
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境

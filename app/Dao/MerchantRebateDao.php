@@ -15,6 +15,7 @@ namespace App\Dao;
 use App\Model\MerchantRebate;
 use Hyperf\Database\Model\Builder;
 use Hyperf\Database\Model\Collection;
+use InvalidArgumentException;
 
 class MerchantRebateDao extends AbstractDao
 {
@@ -135,6 +136,48 @@ class MerchantRebateDao extends AbstractDao
     }
 
     /**
+     * 财务报表（requirements.md 8.3）的返佣侧：按**订单完成时间**落在区间里的商户返佣，
+     * 按维度聚合金额。订单侧在 App\Dao\OrderDao::profitStats()，两边共用同一套分组
+     * 表达式（都写在 `orders` 上，见下面的 join）和同一条时间轴，否则合并出来的行对不上。
+     *
+     * **只算 `pending` 和 `settled`**：这两个状态代表"这笔佣金平台欠着或已经付了"，
+     * 是实打实的支出。`voided`（订单没成/被判未到账作废）和 `clawed_back`（已从余额扣回）
+     * 等于没付出去，计进支出会把利润压低。
+     *
+     * **不看订单当前状态，只看返佣状态**：订单退款后返佣本来就该被作废或扣回，
+     * 真出现"订单已退款、返佣还挂着 pending"的情况，那笔钱确实还欠着，报表照记，
+     * 这样报表和返佣明细页永远是同一个口径。
+     *
+     * 时间条件下在 `orders.completed_at` 而不是 `merchant_rebates.order_completed_at`：
+     * 后者是下单时写进来的快照，订单完成时间被人工改判修正过的话两张表会不一致，
+     * 以订单表为准。
+     *
+     * @param string $groupBy day / merchant / level / business_line / supplier
+     * @return list<array{key: null|string, amount: string}>
+     */
+    public function rebateStatsByOrderCompletion(string $from, string $to, string $groupBy, ?int $merchantId = null): array
+    {
+        $query = $this->newQuery()
+            ->join('orders', 'orders.id', '=', 'merchant_rebates.order_id')
+            ->whereIn('merchant_rebates.status', ['pending', 'settled'])
+            ->whereBetween('orders.completed_at', [$from, $to])
+            ->selectRaw('COALESCE(SUM(merchant_rebates.amount), 0) as amount_total');
+
+        if ($merchantId !== null) {
+            $query->where('merchant_rebates.merchant_id', $merchantId);
+        }
+        $this->applyReportGrouping($query, $groupBy);
+
+        return $query->get()
+            ->map(static fn ($row) => [
+                'key' => $row->g === null ? null : (string) $row->g,
+                'amount' => (string) $row->amount_total,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function filterQuery(array $filters): Builder
@@ -156,5 +199,22 @@ class MerchantRebateDao extends AbstractDao
         }
 
         return $query;
+    }
+
+    /**
+     * 跟 App\Dao\OrderDao::applyReportGrouping() 必须保持一致（分组键要能一一对上），
+     * 改了要一起改。`level` 用商户当前等级的理由写在那边。
+     */
+    private function applyReportGrouping(Builder $query, string $groupBy): void
+    {
+        match ($groupBy) {
+            'day' => $query->selectRaw('DATE(orders.completed_at) as g')->groupBy('g')->orderBy('g'),
+            'merchant' => $query->selectRaw('orders.merchant_id as g')->groupBy('g'),
+            'business_line' => $query->selectRaw('orders.business_line as g')->groupBy('g'),
+            'supplier' => $query->selectRaw('orders.supplier_id as g')->groupBy('g'),
+            'level' => $query->leftJoin('merchants', 'merchants.id', '=', 'orders.merchant_id')
+                ->selectRaw('merchants.level_id as g')->groupBy('g'),
+            default => throw new InvalidArgumentException('unsupported report group_by: ' . $groupBy),
+        };
     }
 }

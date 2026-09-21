@@ -191,3 +191,12 @@ export const reconciliationSideStatusLabels: LabelMap = {
   cancelled: { label: '已取消', type: 'info' },
   unknown: { label: '结果不确定', type: 'warning' },
 }
+
+/** 财务报表的分组维度：App\Service\Admin\FinanceReportService::GROUP_BYS */
+export const reportGroupByLabels: LabelMap = {
+  day: { label: '按天' },
+  merchant: { label: '按商户' },
+  level: { label: '按等级' },
+  business_line: { label: '按业务线' },
+  supplier: { label: '按供应商' },
+}
