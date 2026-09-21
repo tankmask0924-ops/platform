@@ -16,6 +16,7 @@ use App\Crypto\Encryptor;
 use App\Model\Supplier;
 use App\Service\Supplier\SupplierCallLogService;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Yunyang\YunyangDriver;
 use Hyperf\Di\Annotation\Inject;
 use RuntimeException;
 
@@ -26,13 +27,12 @@ use RuntimeException;
  * 多驱动工厂抽象。云洋驱动落地后重新量过一次，两家同形状的只有 queryBalance() 一个方法，
  * 理由见那边的类注释。
  *
- * **本工厂目前只建卡速售驱动**：云洋驱动（App\Supplier\Yunyang\YunyangDriver）已经写完
- * 并有单测，但快递的订单流程（docs/modules.md 第 6/7/8 节快递相关行）还没建，没有调用方，
- * 所以先不接进来——接进来意味着 build() 的返回类型要放宽成联合类型或接口，而六个调用方
- * 全部只会用卡速售的方法，那是为一个还不存在的流程提前改形状。快递下单流程开工时，
- * 这里跟着加 `yunyang` 分支，`suppliers.config` 的形状是
- * `{"base_url": "https://...", "app_id": "...", "secret_key": "..."}`（base_url 必须是
- * https，驱动构造时会拒绝 http，见 yunyang.md 第 3 节）。
+ * **两个驱动分成两个方法建，不是一个 build() 返回联合类型**：`build()` 是话费/卡券
+ * （卡速售）那条线，六个调用方全都只会用卡速售的方法；`buildYunyang()` 是快递那条线。
+ * 合成一个方法就得把返回类型放宽成联合类型或接口，那六个调用方立刻要 instanceof 收窄，
+ * 换来的类型正确性还不如现在直白（两家驱动同形状的只有 queryBalance()，量过的结果见
+ * App\Supplier\Kasushou\KasushouDriver 类注释）。等快递订单流程有了自己的路由层、
+ * 两条线真的需要同一个入口时再合并。
  *
  * `suppliers.config` 对 `kasushou` 驱动的 JSON 形状（解密后）：
  * `{"base_url": "...", "user_id": "...", "api_key": "..."}`，这是
@@ -66,12 +66,53 @@ class SupplierDriverFactory
      * `suppliers.config` 密文解密后对 kasushou 驱动的 JSON 形状约定：
      * `{"base_url": "...", "user_id": "...", "api_key": "..."}`（见类注释）。
      */
-    private function buildKasushouDriver(Supplier $supplier): KasushouDriver
+    /**
+     * 快递（云洋）驱动。`suppliers.config` 密文解密后的 JSON 形状约定：
+     * `{"base_url": "https://...", "app_id": "...", "secret_key": "..."}`。
+     *
+     * `base_url` 必须是 https，否则 YunyangDriver 构造时直接抛
+     * InvalidArgumentException——云洋的签名不覆盖请求内容，明文 http 等于谁都能改
+     * 收件地址和重量（yunyang.md 第 3 节）。这个校验故意留在驱动里而不是搬到这里：
+     * 它是驱动自己的安全前提，任何构造路径都该拦住。
+     */
+    public function buildYunyang(Supplier $supplier): YunyangDriver
+    {
+        if ($supplier->driver !== 'yunyang') {
+            throw new RuntimeException('SupplierDriverFactory: supplier #' . $supplier->id . ' is not a yunyang supplier (driver "' . $supplier->driver . '").');
+        }
+
+        $config = $this->decodeConfig($supplier);
+
+        return new YunyangDriver(
+            (string) ($config['base_url'] ?? ''),
+            (string) ($config['app_id'] ?? ''),
+            (string) ($config['secret_key'] ?? ''),
+            fn (string $action, array $request, array $response, int $durationMs) => $this->callLogService->record(
+                (int) $supplier->id,
+                $action,
+                $request,
+                $response,
+                $durationMs
+            ),
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeConfig(Supplier $supplier): array
     {
         $config = json_decode($this->encryptor->decrypt($supplier->config), true);
         if (! is_array($config)) {
-            throw new RuntimeException('RechargeOrderPlacementService: supplier #' . $supplier->id . ' config is not a valid JSON object.');
+            throw new RuntimeException('SupplierDriverFactory: supplier #' . $supplier->id . ' config is not a valid JSON object.');
         }
+
+        return $config;
+    }
+
+    private function buildKasushouDriver(Supplier $supplier): KasushouDriver
+    {
+        $config = $this->decodeConfig($supplier);
 
         return new KasushouDriver(
             (string) ($config['base_url'] ?? ''),

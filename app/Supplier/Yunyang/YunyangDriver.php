@@ -142,7 +142,8 @@ class YunyangDriver
      * @param array<string, mixed> $content
      * @return list<array{channel_id: null|string, channel_name: null|string, freight: null|string,
      *     freight_insured: null|string, freight_haocai: null|string, total_freight: null|string,
-     *     official_price: null|string, allow_insured: bool, appointment_times: list<string>}>
+     *     official_price: null|string, billing_rule: null|string, allow_insured: bool,
+     *     appointment_times: list<string>}>
      */
     public function checkChannels(array $content): array
     {
@@ -480,7 +481,8 @@ class YunyangDriver
      * @param array<string, mixed> $raw
      * @return array{channel_id: null|string, channel_name: null|string, freight: null|string,
      *     freight_insured: null|string, freight_haocai: null|string, total_freight: null|string,
-     *     official_price: null|string, allow_insured: bool, appointment_times: list<string>}
+     *     official_price: null|string, billing_rule: null|string, allow_insured: bool,
+     *     appointment_times: list<string>}
      */
     private function parseChannel(array $raw): array
     {
@@ -503,6 +505,9 @@ class YunyangDriver
             'freight_haocai' => $this->toMoneyString($raw['freightHaocai'] ?? null),
             'total_freight' => $this->toMoneyString($raw['totalFreight'] ?? null),
             'official_price' => $this->toMoneyString($raw['officialPrice'] ?? null),
+            // 计费规则说明（首重/续重那段文案），原样透传给商户（requirements.md 7.2
+            // 查价要返回"计费说明"）
+            'billing_rule' => $this->toStringOrNull($raw['chargeRule'] ?? $raw['billingRule'] ?? null),
             // 只有 allowInsured=1 的渠道能选保价（yunyang.md 第 4 节）
             'allow_insured' => $this->toNullableInt($raw['allowInsured'] ?? null) === 1,
             'appointment_times' => $times,

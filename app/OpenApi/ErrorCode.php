@@ -58,6 +58,7 @@ enum ErrorCode: int
     case OrderNotFound = 42005;
     case ProductUnavailable = 42006;
     case BusinessNotSubscribed = 42007;
+    case ExpressChannelUnavailable = 42008;
 
     // 430xx 订单失败原因
     case InsufficientBalance = 43001;
@@ -102,6 +103,7 @@ enum ErrorCode: int
             self::OrderNotFound => '订单不存在',
             self::ProductUnavailable => '商品暂不可售',
             self::BusinessNotSubscribed => '未开通该业务线，请在商户后台申请开通',
+            self::ExpressChannelUnavailable => '快递渠道暂时不可用，请稍后重试',
             self::InsufficientBalance => '可用余额不足',
             self::NoSupplierAvailable => '商品暂时无法供货',
             self::OrderFailed => '订单处理失败',
