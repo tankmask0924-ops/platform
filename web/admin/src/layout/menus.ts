@@ -45,6 +45,7 @@ export const menus: MenuItem[] = [
     children: [
       { path: '/products', title: '本地商品', icon: Box, permission: 'product.view' },
       { path: '/suppliers', title: '供应商', icon: OfficeBuilding, permission: 'supplier.view' },
+      { path: '/pricing-rules', title: '加价规则', icon: Money, permission: 'pricing.view' },
     ],
   },
   {

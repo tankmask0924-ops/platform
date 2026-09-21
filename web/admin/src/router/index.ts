@@ -102,6 +102,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'pricing-rules',
+          name: 'pricing-rules',
+          component: () => import('@/views/product/PricingRuleView.vue'),
+          meta: { title: '加价规则' },
+        },
+        {
           path: 'finance-report',
           name: 'finance-report',
           component: () => import('@/views/FinanceReportView.vue'),

@@ -420,7 +420,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商管理：商品映射（新建/列表/改价（必留痕）/优先级/启停，requirements.md 6.4） | 一期 | ✅ `App\Controller\Admin\ProductMappingController` | ✅ `App\Service\Admin\ProductMappingAdminService` | `views/product/ProductDetailView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | 一期（熔断二期，均已完成） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Supplier\SupplierCallLogService` / `SupplierNotifyAddressService`、`App\Service\Admin\SupplierAdminService` / `SupplierStatsService` | `views/supplier/SupplierDetailView.vue`（列表点名称进入）✅ 已在浏览器点过刷新余额、同步商品、调用日志；统计卡片已联调（2026-09-21，按天/按商品都用真实 order_attempts 数据核对过） | ✅ 回调地址、余额监控、商品同步、调用日志、统计、熔断状态都已完成。熔断见第 5 节「熔断」说明，其余见下方说明 |
 | 商户等级：CRUD / 各业务线比例设置 | 一期 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | `views/merchant/MerchantLevelView.vue` ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。商品单独覆盖某等级比例（`product_level_rebates`）已在「本地商品库」行完成 |
-| 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ✅ `App\Controller\Admin\PricingRuleController` | ✅ `App\Service\Product\PricingRuleService` | `views/product/PricingRuleView.vue`（菜单在商品与供应商下）✅ 已联调（2026-09-21） | ✅ 见下方「价格设置」说明 |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18） | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
@@ -428,6 +428,33 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | 🔨 订单对账 + 差异标记处理已完成；返佣对账三期随电影票/快递业务线一起做，见下方「对账」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+
+> 「价格设置」（requirements.md 5.1、8.3，2026-09-21）：新建 `pricing_rules` 表（三期表里第一张）+
+> `App\Model\PricingRule` / `App\Dao\PricingRuleDao`，规则读写和售价计算都在
+> `App\Service\Product\PricingRuleService`。
+> - **电影票、快递各一条规则，所有商户统一**（`business_line` 唯一索引，Dao 用原生 upsert 原地更新，
+>   两个运营同时保存不会插出两行）。话费、卡券不走这张表——它们的售价是运营给每个商品直接设置的。
+> - **快递只对运费加价**：保价费、耗材费、逆向费按成本转给商户（5.1 + 7.2）。服务本身看不出传进来的成本是
+>   "一整单"还是"其中一项"，所以这个约定写在类注释里：快递下单流程接上时只把运费传进
+>   `salePriceFor()`，别把 `totalFreight` 整个丢进去加价。
+> - **百分比四舍五入到分，跟商户返佣的"向下取整"方向相反**（5.1 和 5.3 分别白纸黑字写的，不要互相"统一"）：
+>   返佣是平台付出去的钱，向下取整对平台有利；售价是商户付的钱，文档要求四舍五入。bcmath 的 scale 是截断，
+>   所以四舍五入靠"先加半分再截断"实现，用例里专门验了 0.10 × 1.05 = 0.105 要进位成 0.11。
+> - **没配规则时 `salePriceFor()` 抛错，绝不"按成本卖"**：那是平台白干还倒贴。也因此没有删除接口——
+>   "不想加价"应该显式设成加价 0，不是把规则删了让下单直接失败。
+> - **加价不能为负**（5.5 要求提示"低于成本价"，负加价一定低于成本，直接拒绝）；固定金额上限 9999.99 元、
+>   百分比上限 1000%，纯粹防手滑。
+> - 价格预览（8.3 明确列的）：给一个成本看售价和毛利，可以传 `rule_type`/`value` 预览"改成这样会是多少"
+>   而**不保存**——运营调参数试算时不该改到线上价格。预览和下单用的是同一个 `apply()`，两处各写一遍迟早会漂。
+> - 接口：`GET /admin/pricing-rules`（两条业务线各一行，没配过的返回 null 规则而不是 0，前端要能分清
+>   "没设置"和"加价 0 元"）、`PUT /admin/pricing-rules/{businessLine}`、`GET /admin/pricing-rules/preview`。
+>   权限 `pricing.view` / `pricing.manage`（已进 `KNOWN_PERMISSIONS`，**部署后执行 `admin:sync-permissions`**；
+>   预置给运营两个都有、财务只有 view——加价规则决定毛利，财务要能看，改由运营负责）。
+> - 前端：菜单「商品与供应商 → 加价规则」，两条业务线各一张卡片 + 一个价格预览区。百分比在界面上按 `%` 输入、
+>   存的是比例（5% ↔ 0.0500），换算只在页面里做一次。
+> - 测试 `test/Cases/Admin/PricingRuleControllerTest.php`（11 个：未设置返回 null、固定/百分比保存与就地更新、
+>   四舍五入进位、7.2 的"成本 10 → 售价 12"例子、预览未保存规则不落库、没规则时预览 422、
+>   非法值和非法业务线 422、只读权限不能改、`salePriceFor()` 没配规则抛错）。
 
 > 「财务报表」（requirements.md 8.3、1.2，2026-09-21）：两个只读聚合接口，不建表
 > （database-design.md 6「财务报表走查询/视图，不新增表」）。
@@ -827,9 +854,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 14 | 4 | 1 |
+| 系统管理后台 | 19 | 15 | 4 | 0 |
 | 异步任务与定时任务 | 11 | 8 | 0 | 3 |
-| **合计** | **107** | **69** | **11** | **27** |
+| **合计** | **107** | **70** | **11** | **26** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -860,4 +887,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
-5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ 快递订单流程（三期建表 + 第 6/7/8 节快递相关行）→ 第 4 节芒果驱动与电影票流程 → 沙箱环境
+5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ 快递订单流程（三期建表 + 第 6/7/8 节快递相关行）→ 第 4 节芒果驱动与电影票流程 → 沙箱环境

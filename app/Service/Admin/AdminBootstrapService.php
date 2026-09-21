@@ -104,6 +104,8 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'reconciliation.view', 'module' => 'reconciliation', 'name' => '对账差异查看', 'type' => 'action'],
         ['code' => 'reconciliation.handle', 'module' => 'reconciliation', 'name' => '对账差异标记处理/重跑批次', 'type' => 'action'],
         ['code' => 'report.view', 'module' => 'report', 'name' => '财务报表查看', 'type' => 'action'],
+        ['code' => 'pricing.view', 'module' => 'pricing', 'name' => '加价规则查看/价格预览', 'type' => 'action'],
+        ['code' => 'pricing.manage', 'module' => 'pricing', 'name' => '加价规则设置', 'type' => 'action'],
     ];
 
     /**
@@ -121,6 +123,8 @@ class AdminBootstrapService extends AbstractService
                 'product.view', 'product.manage', 'product_mapping.view', 'product_mapping.manage', 'supplier.view',
                 'order.view', 'order.manage', 'aftersale.view',
                 'alert.view', 'alert.handle',
+                // 电影票、快递的加价规则跟商品定价是同一件事，归运营
+                'pricing.view', 'pricing.manage',
                 // 运营能看对账差异（多半是供应商侧的问题，要他们去跟供应商对），
                 // 但标记处理和重跑归财务
                 'reconciliation.view',
@@ -137,6 +141,8 @@ class AdminBootstrapService extends AbstractService
                 'reconciliation.view', 'reconciliation.handle',
                 // 财务报表把全平台的成本价和毛利摊开，只给财务，不给运营和客服
                 'report.view',
+                // 加价规则决定毛利，财务要能看（改由运营负责）
+                'pricing.view',
             ],
         ],
         '客服' => [

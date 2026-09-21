@@ -200,3 +200,9 @@ export const reportGroupByLabels: LabelMap = {
   business_line: { label: '按业务线' },
   supplier: { label: '按供应商' },
 }
+
+/** 加价方式：App\Model\PricingRule::TYPES（requirements.md 5.1） */
+export const pricingRuleTypeLabels: LabelMap = {
+  fixed: { label: '固定金额' },
+  percentage: { label: '百分比' },
+}

@@ -622,3 +622,33 @@ export const reportApi = {
   profit: (params: Query) => http.get<ProfitReport>('/admin/reports/profit', params),
   balanceFlows: (params: Query) => http.get<BalanceFlowReport>('/admin/reports/balance-flows', params),
 }
+
+/** 加价规则：App\Controller\Admin\PricingRuleController（requirements.md 5.1、8.3「价格设置」） */
+export interface PricingRule {
+  /** movie 电影票 / express 快递；话费、卡券的售价在商品上直接设置 */
+  business_line: string
+  /** fixed 固定金额 / percentage 百分比；没设置过是 null */
+  rule_type: string | null
+  /** fixed 时是元（两位小数），percentage 时是比例（四位小数，0.0500 = 5%） */
+  value: string | null
+  /** 最后修改人姓名 */
+  updated_by: string | null
+  updated_at: string | null
+}
+
+export interface PricingPreview {
+  business_line: string
+  rule_type: string
+  value: string
+  cost: string
+  sale_price: string
+  /** 售价 − 成本 */
+  gross_profit: string
+}
+
+export const pricingRuleApi = {
+  list: () => http.get<{ data: PricingRule[] }>('/admin/pricing-rules'),
+  update: (businessLine: string, payload: Query) =>
+    http.put<{ data: PricingRule[] }>(`/admin/pricing-rules/${businessLine}`, payload),
+  preview: (params: Query) => http.get<PricingPreview>('/admin/pricing-rules/preview', params),
+}
