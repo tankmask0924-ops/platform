@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Service\Supplier;
 
 use App\Crypto\Encryptor;
+use App\Model\Alert;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Model\OrderAttempt;
@@ -60,6 +61,10 @@ class CircuitBreakerServiceTest extends HttpTestCase
     protected function tearDown(): void
     {
         $this->clearThresholdSettings();
+        // 熔断触发会报告警（AlertService），关联的供应商/商品删掉后告警行会变成孤儿，
+        // 一起清掉——测试造的告警不该留在后台告警列表里
+        Alert::where('related_type', 'supplier')->whereIn('related_id', $this->supplierIds ?: [0])->delete();
+        Alert::where('related_type', 'product')->whereIn('related_id', $this->productIds ?: [0])->delete();
         SupplierCircuitBreaker::whereIn('supplier_id', $this->supplierIds)->delete();
         OrderAttempt::whereIn('order_id', $this->orderIds)->delete();
         OrderRecharge::whereIn('order_id', $this->orderIds)->delete();

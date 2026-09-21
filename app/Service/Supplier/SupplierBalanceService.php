@@ -14,8 +14,10 @@ namespace App\Service\Supplier;
 
 use App\Dao\SupplierDao;
 use App\Job\RefreshSupplierBalanceJob;
+use App\Model\Alert;
 use App\Model\Supplier;
 use App\Service\AbstractService;
+use App\Service\Alert\AlertService;
 use App\Supplier\SupplierDriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\Coroutine\Parallel;
@@ -36,8 +38,9 @@ use Throwable;
  *   （App\Job\RefreshSupplierBalanceJob）。
  * - 查询失败只记日志，保留上一次的余额，不清空——清空会让路由把它当成"余额未知"
  *   继续分单。
- * - 低于预警阈值：告警表 `alerts` 是二期才建，目前先写 `supplier` 渠道 warning 日志，
- *   告警模块落地后改成写告警记录。
+ * - 低于预警阈值、以及供应商报告预存款不足：报 `supplier_low_balance` 告警
+ *   （App\Service\Alert\AlertService，去重后进后台「告警」列表），同时保留原来的
+ *   `supplier` 渠道 warning 日志。定时刷新每 5 分钟命中一次同一条，靠告警去重不会刷屏。
  */
 class SupplierBalanceService extends AbstractService
 {
@@ -48,6 +51,9 @@ class SupplierBalanceService extends AbstractService
 
     #[Inject]
     protected SupplierDriverFactory $supplierDriverFactory;
+
+    #[Inject]
+    protected AlertService $alertService;
 
     #[Inject]
     protected DriverFactory $queueDriverFactory;
@@ -77,6 +83,15 @@ class SupplierBalanceService extends AbstractService
             'supplier_id' => $supplierId,
             'context' => $context,
         ]);
+
+        // 供应商自己说预存款不够了，比"低于预警线"严重一档：这时订单已经在失败了
+        $this->alertService->raise(
+            Alert::TYPE_SUPPLIER_LOW_BALANCE,
+            Alert::LEVEL_CRITICAL,
+            '供应商报告预存款不足，订单已经开始失败' . ($context !== null ? '（' . $context . '）' : ''),
+            'supplier',
+            $supplierId
+        );
 
         $this->queueDriverFactory->get('default')->push(new RefreshSupplierBalanceJob($supplierId));
     }
@@ -116,6 +131,13 @@ class SupplierBalanceService extends AbstractService
                 'balance' => $balance,
                 'threshold' => (string) $threshold,
             ]);
+            $this->alertService->raise(
+                Alert::TYPE_SUPPLIER_LOW_BALANCE,
+                Alert::LEVEL_WARNING,
+                sprintf('供应商「%s」预存款 %s 元，低于预警线 %s 元', $supplier->name, $balance, (string) $threshold),
+                'supplier',
+                (int) $supplier->id
+            );
         }
 
         return true;

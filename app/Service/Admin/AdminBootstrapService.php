@@ -99,6 +99,8 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'setting.view', 'module' => 'system', 'name' => '系统参数查看', 'type' => 'action'],
         ['code' => 'setting.manage', 'module' => 'system', 'name' => '系统参数修改', 'type' => 'action'],
         ['code' => 'operation_log.view', 'module' => 'system', 'name' => '操作日志查看', 'type' => 'action'],
+        ['code' => 'alert.view', 'module' => 'alert', 'name' => '告警查看', 'type' => 'action'],
+        ['code' => 'alert.handle', 'module' => 'alert', 'name' => '告警标记处理/忽略', 'type' => 'action'],
     ];
 
     /**
@@ -115,12 +117,15 @@ class AdminBootstrapService extends AbstractService
                 'merchant_level.view', 'merchant_level.manage',
                 'product.view', 'product.manage', 'product_mapping.view', 'product_mapping.manage', 'supplier.view',
                 'order.view', 'order.manage', 'aftersale.view',
+                'alert.view', 'alert.handle',
             ],
         ],
         '财务' => [
             'remark' => '充值审核、调账、资金核对',
             'permissions' => [
                 'merchant.view', 'merchant.balance_adjust', 'recharge.view', 'recharge.manage', 'order.view', 'aftersale.view', 'rebate.view',
+                // 供应商余额不足、商户欠款超线这类告警是财务要盯的，但处理与否由运营决定
+                'alert.view',
             ],
         ],
         '客服' => [

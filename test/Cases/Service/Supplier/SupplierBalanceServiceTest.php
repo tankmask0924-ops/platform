@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Service\Supplier;
 
 use App\Job\RefreshSupplierBalanceJob;
+use App\Model\Alert;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantBusinessSubscription;
@@ -80,6 +81,8 @@ class SupplierBalanceServiceTest extends TestCase
             MerchantBusinessSubscription::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
         }
+        // 低于预警线 / 预存款不足现在会写 alerts（App\Service\Alert\AlertService）
+        Alert::where('related_type', 'supplier')->whereIn('related_id', $this->supplierIds ?: [0])->delete();
         foreach ($this->supplierIds as $id) {
             Supplier::destroy($id);
         }
@@ -124,6 +127,9 @@ class SupplierBalanceServiceTest extends TestCase
         $logger->shouldReceive('warning')
             ->once()
             ->with('supplier balance below warning threshold', Mockery::on(static fn (array $ctx) => $ctx['supplier_id'] === $low->id && $ctx['balance'] === '99.99'));
+        // AlertService 也走同一个 LoggerFactory 记一条 'alert raised'，放行掉；
+        // 声明顺序在具体期望之后，Mockery 才会先匹配上面那条
+        $logger->shouldReceive('warning')->withAnyArgs()->zeroOrMoreTimes();
         $loggerFactory = Mockery::mock(LoggerFactory::class);
         $loggerFactory->shouldReceive('get')->andReturn($logger);
         $this->instance(LoggerFactory::class, $loggerFactory);

@@ -102,6 +102,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'alerts',
+          name: 'alerts',
+          component: () => import('@/views/AlertListView.vue'),
+          meta: { title: '告警' },
+        },
+        {
           path: 'system/admin-users',
           name: 'admin-users',
           component: () => import('@/views/system/AdminUserListView.vue'),

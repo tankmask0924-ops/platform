@@ -132,3 +132,33 @@ export const operationActionLabels: LabelMap = {
   delete_role: { label: '删除角色' },
   update_setting: { label: '修改系统参数' },
 }
+
+/** 告警类型：App\Model\Alert::TYPES（requirements.md 8.3） */
+export const alertTypeLabels: LabelMap = {
+  supplier_low_balance: { label: '供应商余额不足' },
+  supplier_circuit_broken: { label: '供应商被熔断' },
+  product_fail_rate_spike: { label: '商品失败率突增' },
+  abnormal_order_backlog: { label: '异常单积压' },
+  supplier_refund_after_success: { label: '供应商成功后退款' },
+  rebate_loss: { label: '返佣后亏本' },
+  merchant_debt_exceeded: { label: '商户欠款超预警线' },
+}
+
+export const alertLevelLabels: LabelMap = {
+  warning: { label: '警告', type: 'warning' },
+  critical: { label: '严重', type: 'danger' },
+}
+
+export const alertStatusLabels: LabelMap = {
+  open: { label: '未处理', type: 'danger' },
+  resolved: { label: '已处理', type: 'success' },
+  ignored: { label: '已忽略', type: 'info' },
+}
+
+/** 告警关联对象类型，决定详情里跳到哪个页面 */
+export const alertRelatedTypeLabels: LabelMap = {
+  supplier: { label: '供应商' },
+  product: { label: '商品' },
+  merchant: { label: '商户' },
+  order: { label: '订单' },
+}

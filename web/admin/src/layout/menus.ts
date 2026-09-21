@@ -1,4 +1,5 @@
 import {
+  Bell,
   Box,
   Checked,
   Coin,
@@ -53,6 +54,9 @@ export const menus: MenuItem[] = [
       { path: '/disputes', title: '售后争议', icon: Service, permission: 'aftersale.view' },
     ],
   },
+  // 告警放顶层而不是塞进某个模块：7 类告警分别指向供应商、商品、商户、订单，
+  // 挂在任何一个模块下都会显得它只跟那个模块有关
+  { path: '/alerts', title: '告警', icon: Bell, permission: 'alert.view' },
   {
     path: '/system',
     title: '系统设置',

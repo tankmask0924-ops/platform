@@ -393,8 +393,40 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 告警：列表查看 / 标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+
+> 「告警」（requirements.md 8.3，database-design.md 4.14，2026-09-21）：新建 `alerts` 表 + `App\Model\Alert`
+> / `App\Dao\AlertDao`。产生全部走 `App\Service\Alert\AlertService::raise()`（全平台唯一写这张表的地方），
+> 后台只读和标记状态。
+> - **去重是这个服务存在的主要理由**：同一 `(type, related_type, related_id)` 已有 `open` 记录时不新插，
+>   只更新最近触发时间、内容和 `occurrence_count`。供应商余额持续走低时定时任务每 5 分钟命中同一条，
+>   没有去重后台一天就会被刷出几百条一样的记录，真正的新问题反而被淹掉。**处理或忽略之后再触发算新的一条**——
+>   这正是"这个问题又回来了"该有的信号，不是把已处理的那条偷偷改回未处理。`occurrence_count` 用数据库
+>   原地自增，定时任务和下单链路同时触发时不会丢计数。
+> - **`raise()` 永不抛**：调用方都是下单链路、定时任务这种"告警只是副作用"的地方，写不进去最多少一条记录，
+>   不能反过来把主流程搞挂。每条告警同时记一条 `alert` 渠道日志：后台列表给运营看，日志给排查的人看。
+> - **后台不产生也不删除告警**，只有 `resolve`（已处理）/ `ignore`（已忽略）两个动作。告警是系统观察到的事实，
+>   运营能做的是"我处理了/这条不用管"，不是把它抹掉。两者行为相同、语义不同，分开记是为了回看历史时能分辨
+>   "修过多少次"和"忽略过多少次"。并发标记靠条件更新，后一个拿 409 而不是覆盖前一个的处理人。
+> - 接口：`GET /admin/alerts`（status / type / level / related_type / related_id / triggered_from / triggered_to
+>   筛选，未处理在前、其次最近触发倒序，额外返回不受筛选影响的 `open_count`）、`POST /admin/alerts/{id}/resolve`、
+>   `POST /admin/alerts/{id}/ignore`。权限 `alert.view` / `alert.handle`（已进 `KNOWN_PERMISSIONS`，
+>   **部署后执行 `admin:sync-permissions`**；预置角色里运营两个都有、财务只有 view——余额和欠款类告警是财务要盯的，
+>   处理与否由运营决定）。
+> - **7 个 type 常量一次定义齐全**（取值范围是 8.3 给定的，不是按"现在写了几个触发点"决定），当前的产生方：
+>   `supplier_low_balance` ✅（`SupplierBalanceService`：定时刷新后低于预警线报 warning，供应商返回"预存款不足"
+>   报 critical——后者说明订单已经在失败了）、`supplier_circuit_broken` ✅ 和 `product_fail_rate_spike` ✅
+>   （`CircuitBreakerService`：整家熔断报前者 critical，单商品熔断报后者 warning，两者影响面差一个量级，
+>   在列表里要能一眼分开）。**还没有产生方**：`abnormal_order_backlog`（缺"积压多少算多"的阈值和巡检点）、
+>   `supplier_refund_after_success`（缺"成功订单的供应商状态变化"检测链路，见「售后处理」说明）、
+>   `rebate_loss`（5.5 的保护提示目前只在前端算）、`merchant_debt_exceeded`（`isOverDebtWarningThreshold()`
+>   只是个读取端判断，要告警得在余额变动后或用巡检任务触发）。补检测链路时只需找地方调 `AlertService`，
+>   不用回头改枚举、迁移注释和前端中文名三处。
+> - 前端：顶层菜单「告警」（不塞进某个模块——7 类告警分别指向供应商、商品、商户、订单，挂在任何一个模块下
+>   都会显得只跟那个模块有关），列表默认筛"未处理"，关联对象直接跳对应详情页，重复次数 > 1 标黄。
+> - 测试 `test/Cases/Admin/AlertControllerTest.php`（去重累加、不同对象/类型分开、处理后再触发是新的一条、
+>   列表排序与筛选、忽略与已处理分开记、重复标记 409、非法筛选 422、只读权限不能标记）。
 
 > 「系统设置」四页联调（2026-09-21）：没有改代码，四页的功能都按设计工作，记录一下核对过哪些点。
 > - **管理员账号**：列表带角色/状态筛选，自己那行标「（我）」且没有禁用按钮；新建弹窗的角色下拉走
@@ -695,16 +727,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 12 | 3 | 4 |
+| 系统管理后台 | 19 | 13 | 3 | 3 |
 | 异步任务与定时任务 | 10 | 7 | 0 | 3 |
-| **合计** | **106** | **65** | **3** | **38** |
+| **合计** | **106** | **66** | **3** | **37** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
 | 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
-| 系统管理后台（web/admin） | 19 | 16 | 16 | 0 |
+| 系统管理后台（web/admin） | 19 | 17 | 17 | 0 |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -727,5 +759,5 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
-4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ 告警 → 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境

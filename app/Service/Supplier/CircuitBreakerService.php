@@ -15,8 +15,10 @@ namespace App\Service\Supplier;
 use App\Dao\OrderAttemptDao;
 use App\Dao\SupplierCircuitBreakerDao;
 use App\Dao\SystemSettingDao;
+use App\Model\Alert;
 use App\Model\SupplierCircuitBreaker;
 use App\Service\AbstractService;
+use App\Service\Alert\AlertService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
@@ -47,9 +49,10 @@ use Throwable;
  * 定时任务一分钟一跑而多停几十秒。定时任务（App\Crontab\CircuitBreakerRecoveryCrontab）
  * 只做把过期行写回 `normal` 的收尾，让后台列表和日志如实反映状态。
  *
- * **告警未接**：需求要求熔断时告警，但 `alerts` 表和告警模块同属二期、还没建
- * （docs/modules.md 第 8 节「告警」行）。这里先记 error 日志（`supplier` 渠道），
- * 告警模块落地时把 `alert()` 里的 TODO 换成写 `alerts` 行即可，调用点不用动。
+ * **告警**：熔断时报一条告警（requirements.md 6.6「自动暂停分配新订单 5 分钟并告警」）。
+ * 整家熔断报 `supplier_circuit_broken`，单个商品熔断报 `product_fail_rate_spike`——
+ * 后者正是 8.3 告警列表里"商品失败率突增"那一条，两者影响面差一个量级，在后台
+ * 告警列表里要能一眼分开。
  */
 class CircuitBreakerService extends AbstractService
 {
@@ -87,6 +90,9 @@ class CircuitBreakerService extends AbstractService
 
     #[Inject]
     protected SystemSettingDao $systemSettingDao;
+
+    #[Inject]
+    protected AlertService $alertService;
 
     #[Inject]
     protected LoggerFactory $loggerFactory;
@@ -253,18 +259,29 @@ class CircuitBreakerService extends AbstractService
 
     /**
      * requirements.md 6.6「自动暂停分配新订单 5 分钟并告警」的告警那一半。
-     * TODO（告警模块，docs/modules.md 第 8 节「告警」行，二期）：这里改成写一条
-     * `alerts` 行（type = supplier_circuit_broken，见 database-design.md 4.10）。
-     * 在那之前先记 error 日志，至少排查时查得到。
+     * 整家熔断和单商品熔断分成两个 type，见类注释。
      */
     private function alert(int $supplierId, int $productId, string $reason, int $pauseMinutes): void
     {
+        $isAll = $productId === SupplierCircuitBreaker::PRODUCT_ID_ALL;
+
         $this->logger()->error('supplier circuit broken', [
             'supplier_id' => $supplierId,
-            'product_id' => $productId === SupplierCircuitBreaker::PRODUCT_ID_ALL ? 'all' : $productId,
+            'product_id' => $isAll ? 'all' : $productId,
             'reason' => $reason,
             'pause_minutes' => $pauseMinutes,
         ]);
+
+        $this->alertService->raise(
+            $isAll ? Alert::TYPE_SUPPLIER_CIRCUIT_BROKEN : Alert::TYPE_PRODUCT_FAIL_RATE_SPIKE,
+            // 整家被切掉影响这家的全部订单，单商品只影响一个商品
+            $isAll ? Alert::LEVEL_CRITICAL : Alert::LEVEL_WARNING,
+            $isAll
+                ? sprintf('供应商已熔断，暂停分单 %d 分钟：%s', $pauseMinutes, $reason)
+                : sprintf('商品失败率突增已熔断，暂停分单 %d 分钟：%s', $pauseMinutes, $reason),
+            $isAll ? 'supplier' : 'product',
+            $isAll ? $supplierId : $productId
+        );
     }
 
     private function logger(): LoggerInterface

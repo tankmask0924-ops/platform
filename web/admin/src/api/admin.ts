@@ -494,3 +494,30 @@ export const subscriptionApi = {
   approve: (id: number) => http.post<Ok>(`/admin/subscriptions/${id}/approve`),
   reject: (id: number, reason: string) => http.post<Ok>(`/admin/subscriptions/${id}/reject`, { reason }),
 }
+
+/** 告警：App\Controller\Admin\AlertController（requirements.md 8.3） */
+export interface Alert {
+  id: number
+  type: string
+  level: 'warning' | 'critical'
+  /** supplier/product/merchant/order，null 表示全局告警 */
+  related_type: string | null
+  related_id: number | null
+  message: string
+  status: 'open' | 'resolved' | 'ignored'
+  /** 同一条告警重复触发的次数 */
+  occurrence_count: number
+  /** 处理人姓名 */
+  resolved_by: string | null
+  resolved_at: string | null
+  triggered_at: string | null
+  created_at: string | null
+}
+
+export type AlertList = Paged<Alert> & { open_count: number }
+
+export const alertApi = {
+  list: (params: Query) => http.get<AlertList>('/admin/alerts', params),
+  resolve: (id: number, params: Query) => http.post<AlertList>(`/admin/alerts/${id}/resolve`, params),
+  ignore: (id: number, params: Query) => http.post<AlertList>(`/admin/alerts/${id}/ignore`, params),
+}
