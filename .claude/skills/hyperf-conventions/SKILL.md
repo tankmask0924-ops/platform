@@ -147,9 +147,13 @@ docker exec pf composer test
 ```bash
 docker compose up -d --build   # 改了 Dockerfile 或依赖后重建
 docker compose restart         # 只改了 .env / 代码，重启生效
-docker compose down            # 彻底停止并删除容器
+docker compose stop            # 停止容器（保留容器，用 start 原样起回来）
+docker compose start           # 起回被 stop 的容器
+docker compose down            # 停止并删除容器和网络，只在确实要清理时用
 ```
 
+- **"停掉服务"= `docker compose stop`，不是 `down`**：`down` 会把容器和网络一起删掉，下次得重新创建容器。这个项目里 `down` 的实际损失很小（compose 里唯一的挂载是 `./:/opt/www` 这个 bind mount，代码、`vendor/`、`runtime/logs` 全在宿主机；没有任何 named volume；MySQL/Redis 在 `192.168.1.12` 不在容器里），但"停止"和"删除"是两件事，**别替用户把范围扩大**。踩过：用户说"把服务停掉"，执行的是 `docker compose down`。
+- 同理，`down -v` 会连 volume 一起删，这个项目现在没有 named volume，但以后加了就是真丢数据 —— 任何时候都不要自己加 `-v`。
 - **改完 PHP 代码后必须 `docker compose restart` 才生效**——Swoole worker 常驻内存跑，不会自动感知文件变化重新加载，改代码后直接 curl 测试大概率还是跑的旧代码，报错也可能是旧错误堆栈（日志时间戳没变就是这个原因）
 - 改了依赖注入相关代码或者加了新注解类，重启前建议先 `docker exec pf rm -rf runtime/container` 清一下容器缓存，避免用到过期的代理类
 
