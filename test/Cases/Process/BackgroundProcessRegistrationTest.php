@@ -14,6 +14,7 @@ namespace HyperfTest\Cases\Process;
 
 use App\Crontab\AbnormalOrderCrontab;
 use App\Crontab\RebateSettlementCrontab;
+use App\Crontab\ReconciliationCrontab;
 use App\Crontab\SupplierBalanceCrontab;
 use App\Crontab\SupplierProductSyncCrontab;
 use App\Crontab\SupplierResultQueryCrontab;
@@ -81,6 +82,21 @@ class BackgroundProcessRegistrationTest extends TestCase
 
         $this->assertInstanceOf(Crontab::class, $annotation);
         $this->assertSame('0 4 * * *', $annotation->rule);
+        $this->assertTrue($annotation->onOneServer);
+        $this->assertTrue($annotation->singleton);
+        $this->assertGreaterThanOrEqual(3600, $annotation->mutexExpires);
+    }
+
+    /**
+     * 每日对账 05:00 跑，跟 04:00 的商品全量校准错开；逐笔调供应商查询可能很久，
+     * 锁不能比一批对账的最坏耗时先过期。
+     */
+    public function testReconciliationRunsDailyOnOneServerAfterProductSync()
+    {
+        $annotation = AnnotationCollector::getClassesByAnnotation(Crontab::class)[ReconciliationCrontab::class] ?? null;
+
+        $this->assertInstanceOf(Crontab::class, $annotation);
+        $this->assertSame('0 5 * * *', $annotation->rule);
         $this->assertTrue($annotation->onOneServer);
         $this->assertTrue($annotation->singleton);
         $this->assertGreaterThanOrEqual(3600, $annotation->mutexExpires);

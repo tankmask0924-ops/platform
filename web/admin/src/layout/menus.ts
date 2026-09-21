@@ -4,6 +4,7 @@ import {
   Checked,
   Coin,
   Document,
+  Finished,
   Goods,
   HomeFilled,
   Key,
@@ -54,6 +55,9 @@ export const menus: MenuItem[] = [
       { path: '/disputes', title: '售后争议', icon: Service, permission: 'aftersale.view' },
     ],
   },
+  // 对账跟告警一样放顶层：它既不属于订单模块也不属于供应商模块，
+  // 对的是两边的差异，而且是财务每天固定要看的一页
+  { path: '/reconciliations', title: '对账', icon: Finished, permission: 'reconciliation.view' },
   // 告警放顶层而不是塞进某个模块：7 类告警分别指向供应商、商品、商户、订单，
   // 挂在任何一个模块下都会显得它只跟那个模块有关
   { path: '/alerts', title: '告警', icon: Bell, permission: 'alert.view' },

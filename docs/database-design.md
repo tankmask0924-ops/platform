@@ -562,6 +562,7 @@ erDiagram
 - `(business_line, status)`
 - `(supplier_id, status)`
 - `(status, completed_at)`（异常单扫描、对账用）
+- `finished_at`（每日对账按「当天进入终态」取订单，2026-09-21 补；`completed_at` 只有成功的订单才有，代替不了它，见 `App\Dao\OrderDao::listFinishedBetween()`）
 
 #### `order_attempts`
 

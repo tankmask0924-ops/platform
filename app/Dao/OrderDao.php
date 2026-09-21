@@ -183,6 +183,32 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 对账用：某个自然日内进入终态、且真的下给过供应商的订单，按 id 升序分页取
+     * （App\Service\Reconciliation\ReconciliationService）。
+     *
+     * 按 `finished_at` 而不是 `created_at` 取：对账比的是"这笔订单最后算成什么样"，
+     * 跨日完成的订单应该落在完成那天的批次里，否则昨天创建、今天才出结果的订单会在
+     * 昨天的批次里被对成"平台处理中 vs 供应商成功"的假差异。
+     *
+     * 处理中、异常单不参与对账：前者还没有结论可对，后者本来就在等人工处理
+     * （requirements.md 7.4），对账再报一遍只是把同一件事说两次。
+     *
+     * @param list<string> $statuses 参与对账的终态
+     * @return Collection<int, Order>
+     */
+    public function listFinishedBetween(array $statuses, string $from, string $to, int $afterId, int $limit): Collection
+    {
+        return $this->newQuery()
+            ->whereIn('status', $statuses)
+            ->whereNotNull('supplier_id')
+            ->whereBetween('finished_at', [$from, $to])
+            ->where('id', '>', $afterId)
+            ->orderBy('id')
+            ->limit($limit)
+            ->get();
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function filterQuery(array $filters): Builder

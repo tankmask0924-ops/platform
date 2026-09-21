@@ -521,3 +521,49 @@ export const alertApi = {
   resolve: (id: number, params: Query) => http.post<AlertList>(`/admin/alerts/${id}/resolve`, params),
   ignore: (id: number, params: Query) => http.post<AlertList>(`/admin/alerts/${id}/ignore`, params),
 }
+
+/** 对账差异：App\Controller\Admin\ReconciliationController（requirements.md 8.3） */
+export interface ReconciliationDiff {
+  id: number
+  /** order 订单对账 / rebate 返佣对账（返佣对账三期才有产生方） */
+  type: string
+  order_id: number
+  order_no: string | null
+  supplier_id: number
+  supplier_name: string | null
+  /** 批次日期，对的是它前一天完成的订单 */
+  reconciliation_date: string | null
+  /** status / cost_price / rebate_amount */
+  field: string
+  platform_value: string
+  supplier_value: string
+  /** 金额类差异的差额（平台 - 供应商），状态差异为 null */
+  diff_amount: string | null
+  status: 'open' | 'resolved' | 'ignored'
+  /** 处理人姓名 */
+  resolved_by: string | null
+  resolved_at: string | null
+  remark: string | null
+  created_at: string | null
+}
+
+export type ReconciliationList = Paged<ReconciliationDiff> & { open_count: number }
+
+/** 跑一个批次的汇总 */
+export interface ReconciliationRunSummary {
+  type: string
+  reconciliation_date: string
+  order_date: string
+  /** 实际比对过的订单数 */
+  checked: number
+  /** 没能拿到供应商记录、这次没对成的订单数 */
+  unreachable: number
+  diff_count: number
+}
+
+export const reconciliationApi = {
+  list: (params: Query) => http.get<ReconciliationList>('/admin/reconciliations', params),
+  run: (date: string) => http.post<ReconciliationRunSummary>('/admin/reconciliations/run', { date }),
+  resolve: (id: number, params: Query) => http.post<ReconciliationList>(`/admin/reconciliations/${id}/resolve`, params),
+  ignore: (id: number, params: Query) => http.post<ReconciliationList>(`/admin/reconciliations/${id}/ignore`, params),
+}

@@ -162,3 +162,32 @@ export const alertRelatedTypeLabels: LabelMap = {
   merchant: { label: '商户' },
   order: { label: '订单' },
 }
+
+/** 对账差异类型：App\Model\ReconciliationDiff::TYPES（requirements.md 8.3） */
+export const reconciliationTypeLabels: LabelMap = {
+  order: { label: '订单对账' },
+  rebate: { label: '返佣对账' },
+}
+
+/** 对比的字段 */
+export const reconciliationFieldLabels: LabelMap = {
+  status: { label: '订单状态', type: 'warning' },
+  cost_price: { label: '成本金额', type: 'danger' },
+  rebate_amount: { label: '返佣金额', type: 'danger' },
+}
+
+export const reconciliationStatusLabels: LabelMap = {
+  open: { label: '待处理', type: 'danger' },
+  resolved: { label: '已处理', type: 'success' },
+  ignored: { label: '已忽略', type: 'info' },
+}
+
+/** 对账里两侧的订单状态取值，跟订单状态是同一套词，但只有这四种 */
+export const reconciliationSideStatusLabels: LabelMap = {
+  success: { label: '成功', type: 'success' },
+  failed: { label: '失败', type: 'danger' },
+  processing: { label: '处理中', type: 'warning' },
+  refunded: { label: '已退款', type: 'info' },
+  cancelled: { label: '已取消', type: 'info' },
+  unknown: { label: '结果不确定', type: 'warning' },
+}

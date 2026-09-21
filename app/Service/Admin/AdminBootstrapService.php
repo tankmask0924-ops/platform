@@ -101,6 +101,8 @@ class AdminBootstrapService extends AbstractService
         ['code' => 'operation_log.view', 'module' => 'system', 'name' => '操作日志查看', 'type' => 'action'],
         ['code' => 'alert.view', 'module' => 'alert', 'name' => '告警查看', 'type' => 'action'],
         ['code' => 'alert.handle', 'module' => 'alert', 'name' => '告警标记处理/忽略', 'type' => 'action'],
+        ['code' => 'reconciliation.view', 'module' => 'reconciliation', 'name' => '对账差异查看', 'type' => 'action'],
+        ['code' => 'reconciliation.handle', 'module' => 'reconciliation', 'name' => '对账差异标记处理/重跑批次', 'type' => 'action'],
     ];
 
     /**
@@ -118,6 +120,9 @@ class AdminBootstrapService extends AbstractService
                 'product.view', 'product.manage', 'product_mapping.view', 'product_mapping.manage', 'supplier.view',
                 'order.view', 'order.manage', 'aftersale.view',
                 'alert.view', 'alert.handle',
+                // 运营能看对账差异（多半是供应商侧的问题，要他们去跟供应商对），
+                // 但标记处理和重跑归财务
+                'reconciliation.view',
             ],
         ],
         '财务' => [
@@ -126,6 +131,9 @@ class AdminBootstrapService extends AbstractService
                 'merchant.view', 'merchant.balance_adjust', 'recharge.view', 'recharge.manage', 'order.view', 'aftersale.view', 'rebate.view',
                 // 供应商余额不足、商户欠款超线这类告警是财务要盯的，但处理与否由运营决定
                 'alert.view',
+                // 对账是财务的活（requirements.md 8.3 跟财务报表放在一起），
+                // 查差异、标记处理、重跑批次都给财务
+                'reconciliation.view', 'reconciliation.handle',
             ],
         ],
         '客服' => [

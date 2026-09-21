@@ -102,6 +102,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'reconciliations',
+          name: 'reconciliations',
+          component: () => import('@/views/ReconciliationListView.vue'),
+          meta: { title: '对账' },
+        },
+        {
           path: 'alerts',
           name: 'alerts',
           component: () => import('@/views/AlertListView.vue'),

@@ -392,9 +392,45 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18） | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明 |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | 🔨 订单对账 + 差异标记处理已完成；返佣对账三期随电影票/快递业务线一起做，见下方「对账」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+
+> 「对账」（requirements.md 8.3，database-design.md 4.15，2026-09-21）：新建 `reconciliation_diffs` 表 +
+> `App\Model\ReconciliationDiff` / `App\Dao\ReconciliationDiffDao`，差异由
+> `App\Service\Reconciliation\ReconciliationService` 产生，后台只读和标记状态（同「告警」的取舍）。
+> - **一批 = 一天**：`reconciliation_date` 按 4.15 存"跑对账任务的日期"，批次对的是**前一天完成**的订单
+>   （09-21 的批次对 09-20 的订单）。手动重跑传的也是批次日期，覆盖窗口跟着往前推一天，
+>   这样"重跑 09-21 这批"永远指同一批订单，整批替换（先删该 `(type, date)` 的旧行再写新行，不追加）才有意义。
+>   重跑会把上一轮已标记处理的行一起换掉：批次是"这一天对出来的事实"，保留旧标记会出现"差异还在却显示已处理"。
+> - **按 `finished_at` 取终态订单**（`OrderDao::listFinishedBetween()`，为此给 `orders.finished_at` 补了索引）。
+>   用 `created_at` 会让昨天下单、今天才出结果的订单在昨天的批次里被对成"平台处理中 vs 供应商成功"的假差异。
+>   处理中和异常单不参与：前者还没有结论可对，后者本来就在等人工处理（7.4），对账再报一遍是把同一件事说两次。
+> - **拿不到供应商记录不算差异**：查询超时/网络错误时驱动返回 `Unknown`，这是"我们没查到"而不是"两边对不上"，
+>   只计进 `unreachable` 并记日志，下一天的批次会再对一次。但**供应商确实答了、只是结果本身不确定**
+>   （卡速售部分退款，kasushou.md 第 2 节）要报差异——这正是最该被人看见的情况。两者都是 `Unknown`，
+>   靠"驱动有没有解析出这笔订单"（`supplierOrderNo` / `actualCost` 至少有一个有值）区分，判断的是结构不是文案。
+> - 比两项：`status`（平台终态 vs 供应商状态，成功后被全额退款就落在这里）和 `cost_price`
+>   （只在两边都成功时比，差额 = 平台 − 供应商，用 `bcsub` 不转 float）。一边失败时供应商返回的金额要么是 0、
+>   要么是退款前的原值，比了只会把 `status` 那条差异重复说一遍。
+> - **`rebate` 类型暂时没有对账器**：供应商返佣只有电影票、快递才有（5.4），这两条业务线是三期，
+>   平台侧现在没有任何供应商返佣记录可对。常量先定义齐全（同 `Alert` 的 7 个 type），三期加一个 `runRebate()`
+>   即可，不用改表结构和前端。
+> - 接口：`GET /admin/reconciliations`（type / status / field / supplier_id / order_no / date_from / date_to
+>   筛选，待处理在前、其次批次倒序，带出订单号和供应商名，额外返回不受筛选影响的 `open_count`）、
+>   `POST /admin/reconciliations/run`（`date` 批次日期，默认今天，只允许最近 90 天，**同步执行**，跟供应商商品
+>   手动同步一致）、`POST /admin/reconciliations/{id}/resolve`、`.../ignore`（都可带 `remark`，列表里直接显示，
+>   避免下一个人重查一遍同一笔订单）。权限 `reconciliation.view` / `reconciliation.handle`（已进
+>   `KNOWN_PERMISSIONS`，**部署后执行 `admin:sync-permissions`**；预置角色里财务两个都有——对账是财务的活，
+>   运营只有 view）。重跑归到 `handle` 而不是单开第三个编码：它改的是同一批差异记录。
+> - 前端：顶层菜单「对账」（跟「告警」一样不塞进某个模块），默认筛"待处理"，表头可以选批次日期重跑并提示
+>   会整体替换该批次，订单号和供应商名直接跳对应详情页。2026-09-21 已登录联调：跑批次（供应商配置解密失败的
+>   历史数据如实计进"没拿到供应商记录"）、列表渲染、标记已处理带备注、忽略不带备注、按订单号和状态筛选都走过一遍。
+> - 测试 `test/Cases/Service/Reconciliation/ReconciliationServiceTest.php`（一致不报差异、状态不一致、供应商
+>   仍处理中、金额差额带符号、一边失败不比金额、查不到供应商记录不算差异、答了但结果不确定算差异、单个供应商
+>   配置坏了不影响别家、重跑整体替换、只对窗口内的终态订单）+ `test/Cases/Admin/ReconciliationControllerTest.php`
+>   （重跑后能按订单号查到、备注与处理人、忽略与重复标记 409、非法筛选和批次日期 422、查不到的订单号返回空列表、
+>   只读权限不能标记也不能重跑）。
 
 > 「告警」（requirements.md 8.3，database-design.md 4.14，2026-09-21）：新建 `alerts` 表 + `App\Model\Alert`
 > / `App\Dao\AlertDao`。产生全部走 `App\Service\Alert\AlertService::raise()`（全平台唯一写这张表的地方），
@@ -660,6 +696,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
+| 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
 
 **供应商结果查询轮询**（requirements.md 6.2 / 7.1）：每分钟一次（`onOneServer` + `singleton`），
 取"订单处理中、最新一次尝试仍是处理中/未知、距上次更新超过 60 秒"的尝试，每批最多 100 条、
@@ -727,16 +764,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 13 | 3 | 3 |
-| 异步任务与定时任务 | 10 | 7 | 0 | 3 |
-| **合计** | **106** | **66** | **3** | **37** |
+| 系统管理后台 | 19 | 13 | 4 | 2 |
+| 异步任务与定时任务 | 11 | 8 | 0 | 3 |
+| **合计** | **107** | **67** | **4** | **36** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
 | 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
-| 系统管理后台（web/admin） | 19 | 17 | 17 | 0 |
+| 系统管理后台（web/admin） | 19 | 18 | 18 | 0 |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -759,5 +796,5 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
-4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ 财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境
