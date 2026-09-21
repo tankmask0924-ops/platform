@@ -61,6 +61,67 @@ class OrderAttemptDao extends AbstractDao
         }
     }
 
+    /**
+     * 供应商统计（requirements.md 6.8「订单量、成功率、平均到账时长、成本总额……按天/商品查看」）。
+     *
+     * 统计口径以 `order_attempts` 为准，不是 `orders.supplier_id`：订单只记最后一次尝试的
+     * 供应商，A 家失败切到 B 家成功的订单在 `orders` 上只看得到 B，A 的失败会凭空消失，
+     * 成功率就会虚高——而成功率正是这份统计要用来调整优先级的核心指标。尝试表里每家各占
+     * 一行，谁失败谁记在谁头上。
+     *
+     * - 订单量 = 分给这家的尝试次数；
+     * - 成功率的分母只算已经有结果的（success + failed），处理中/结果未知不计入；
+     * - 到账时长 = 这次尝试从占号（调用供应商前）到写下最终结果之间的秒数，只算成功的尝试。
+     *   同步就成功的订单是 0 秒（秒级精度，不是真的没耗时）；
+     * - 成本总额只累计成功的尝试，用订单上的成本快照（`orders.cost_price` 在成功时
+     *   写的就是这家的成本，见 App\Service\Order\OrderResultApplier::applySuccess()）。
+     *
+     * 按商品分组时联 `order_recharges`（话费、卡券的商品在这张表上），电影票、快递
+     * 没有本地商品也没有这张表的行，`product_id` 为 null 归成一组。
+     *
+     * @return list<array{group: null|string, product_id: null|int, count: int, success: int,
+     *     failed: int, cost_total: string, avg_seconds: null|float}>
+     */
+    public function statsForSupplier(int $supplierId, string $from, string $to, bool $byProduct): array
+    {
+        $query = $this->newQuery()
+            ->join('orders', 'orders.id', '=', 'order_attempts.order_id')
+            ->where('order_attempts.supplier_id', $supplierId)
+            ->where('order_attempts.created_at', '>=', $from)
+            ->where('order_attempts.created_at', '<=', $to)
+            ->selectRaw('count(*) as n')
+            ->selectRaw("SUM(CASE WHEN order_attempts.result = 'success' THEN 1 ELSE 0 END) as success_n")
+            ->selectRaw("SUM(CASE WHEN order_attempts.result = 'failed' THEN 1 ELSE 0 END) as failed_n")
+            ->selectRaw("COALESCE(SUM(CASE WHEN order_attempts.result = 'success' THEN orders.cost_price ELSE 0 END), 0) as cost_total")
+            ->selectRaw("AVG(CASE WHEN order_attempts.result = 'success' THEN TIMESTAMPDIFF(SECOND, order_attempts.created_at, order_attempts.updated_at) END) as avg_seconds");
+
+        if ($byProduct) {
+            $query->leftJoin('order_recharges', 'order_recharges.order_id', '=', 'order_attempts.order_id')
+                ->leftJoin('products', 'products.id', '=', 'order_recharges.product_id')
+                ->selectRaw('order_recharges.product_id as product_id, products.name as g')
+                ->groupBy('order_recharges.product_id', 'products.name')
+                ->orderByDesc('n');
+        } else {
+            $query->selectRaw('DATE(order_attempts.created_at) as g')
+                ->selectRaw('NULL as product_id')
+                ->groupBy('g')
+                ->orderBy('g');
+        }
+
+        return $query->get()
+            ->map(static fn ($row) => [
+                'group' => $row->g === null ? null : (string) $row->g,
+                'product_id' => $row->product_id === null ? null : (int) $row->product_id,
+                'count' => (int) $row->n,
+                'success' => (int) $row->success_n,
+                'failed' => (int) $row->failed_n,
+                'cost_total' => (string) $row->cost_total,
+                'avg_seconds' => $row->avg_seconds === null ? null : (float) $row->avg_seconds,
+            ])
+            ->values()
+            ->all();
+    }
+
     public function findLatestForOrder(int $orderId): ?OrderAttempt
     {
         return $this->newQuery()

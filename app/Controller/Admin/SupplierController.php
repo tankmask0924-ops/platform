@@ -17,6 +17,7 @@ use App\Controller\AbstractController;
 use App\Middleware\AdminAuthMiddleware;
 use App\Middleware\AdminPermissionMiddleware;
 use App\Service\Admin\SupplierAdminService;
+use App\Service\Admin\SupplierStatsService;
 use App\Service\Supplier\SupplierCallLogService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -49,6 +50,9 @@ class SupplierController extends AbstractController
 
     #[Inject]
     protected SupplierCallLogService $callLogService;
+
+    #[Inject]
+    protected SupplierStatsService $statsService;
 
     #[Middleware(AdminAuthMiddleware::class)]
     #[Middleware(AdminPermissionMiddleware::class)]
@@ -127,5 +131,14 @@ class SupplierController extends AbstractController
     public function callLogs(int $id): array
     {
         return $this->callLogService->listForSupplier($id, $this->request->all());
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.view')]
+    #[GetMapping(path: '{id}/stats')]
+    public function stats(int $id): array
+    {
+        return $this->statsService->forSupplier($id, $this->request->all());
     }
 }

@@ -251,6 +251,33 @@ export interface SupplierCallLog {
   created_at: string | null
 }
 
+/** 供应商统计：App\Service\Admin\SupplierStatsService，按尝试统计（失败切换的那家也算它头上） */
+export interface SupplierStatsRow {
+  /** 按天是日期，按商品是商品名；汇总行是 null */
+  label: string | null
+  product_id: number | null
+  order_count: number
+  success_count: number
+  failed_count: number
+  /** 处理中 / 结果未知，不计入成功率 */
+  pending_count: number
+  /** 百分比，没有已出结果的尝试时为 null */
+  success_rate: number | null
+  /** 平均到账时长，秒，没有成功的尝试时为 null */
+  avg_delivery_seconds: number | null
+  cost_total: string
+  /** 话费、卡券没有供应商返佣，固定 0.00，电影票/快递三期才有 */
+  supplier_rebate_total: string
+}
+
+export interface SupplierStats {
+  group_by: 'day' | 'product'
+  created_from: string
+  created_to: string
+  summary: SupplierStatsRow
+  data: SupplierStatsRow[]
+}
+
 export interface SupplierForm {
   name?: string
   code?: string
@@ -273,6 +300,7 @@ export const supplierApi = {
   refreshBalance: (id: number) => http.post<SupplierDetail>(`/admin/suppliers/${id}/balance/refresh`),
   syncProducts: (id: number) => http.post<Ok>(`/admin/suppliers/${id}/product-sync`),
   callLogs: (id: number, params: Query) => http.get<Paged<SupplierCallLog>>(`/admin/suppliers/${id}/call-logs`, params),
+  stats: (id: number, params: Query) => http.get<SupplierStats>(`/admin/suppliers/${id}/stats`, params),
 }
 
 /** 订单：App\Controller\Admin\OrderController */

@@ -3,7 +3,7 @@ import { businessLineLabels, copyText, labelOf, money, StatusTag, toOptions, use
 import { ElMessage } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { type SupplierCallLog, supplierApi, type SupplierDetail } from '@/api/admin'
+import { type SupplierCallLog, supplierApi, type SupplierDetail, type SupplierStats, type SupplierStatsRow } from '@/api/admin'
 import { driverLabels, supplierCallActionLabels, supplierStatusLabels } from '@/labels'
 import { usePermissionStore } from '@/stores/permission'
 
@@ -53,6 +53,45 @@ async function syncProducts() {
   }
 }
 
+// 统计（requirements.md 6.8：订单量、成功率、平均到账时长、成本总额、供应商返佣总额，按天/商品看）
+const stats = ref<SupplierStats | null>(null)
+const statsLoading = ref(false)
+const statsGroupBy = ref<'day' | 'product'>('day')
+const statsRange = ref<[string, string] | null>(null)
+
+async function loadStats() {
+  statsLoading.value = true
+  try {
+    stats.value = await supplierApi.stats(id, {
+      group_by: statsGroupBy.value,
+      created_from: statsRange.value?.[0] ?? '',
+      created_to: statsRange.value?.[1] ?? '',
+    })
+    // 不传时间时后端按最近 7 天算，回填给日期框，免得看起来像"全部时间"
+    statsRange.value = [stats.value.created_from, stats.value.created_to]
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+const percent = (value: number | null) => (value === null ? '-' : `${value}%`)
+
+/** 到账时长：后端给的是秒 */
+function duration(seconds: number | null): string {
+  if (seconds === null) {
+    return '-'
+  }
+  if (seconds < 60) {
+    return `${seconds} 秒`
+  }
+  return `${Math.floor(seconds / 60)} 分 ${Math.round(seconds % 60)} 秒`
+}
+
+/** 成功率低于 90% 且有一定单量时标红，调优先级时一眼能看到 */
+function rateDanger(row: SupplierStatsRow): boolean {
+  return row.success_rate !== null && row.success_rate < 90 && row.success_count + row.failed_count >= 10
+}
+
 // 调用日志
 const initial = { action: '', order_no: '', created_from: '', created_to: '' }
 const logs = usePagedList<SupplierCallLog, typeof initial>((p) => supplierApi.callLogs(id, p), initial, 20)
@@ -81,6 +120,7 @@ const json = (value: unknown) => (value === null || value === undefined ? '-' : 
 
 onMounted(() => {
   load()
+  loadStats()
   logs.load()
 })
 </script>
@@ -139,6 +179,87 @@ onMounted(() => {
         </el-descriptions>
       </el-card>
     </template>
+
+    <el-card shadow="never" header="统计">
+      <el-form inline @submit.prevent="loadStats">
+        <el-form-item label="维度">
+          <el-radio-group v-model="statsGroupBy" @change="loadStats">
+            <el-radio-button value="day">按天</el-radio-button>
+            <el-radio-button value="product">按商品</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="时间">
+          <el-date-picker
+            v-model="statsRange"
+            type="daterange"
+            value-format="YYYY-MM-DD"
+            start-placeholder="开始"
+            end-placeholder="结束"
+            style="width: 240px"
+            @change="loadStats"
+          />
+        </el-form-item>
+        <el-form-item>
+          <span class="muted">最多查 92 天；成功率的分母只算已经出结果的，处理中不算</span>
+        </el-form-item>
+      </el-form>
+
+      <div v-if="stats" v-loading="statsLoading">
+        <div class="tiles">
+          <div class="tile">
+            <div class="tile-label">订单量</div>
+            <div class="tile-value">{{ stats.summary.order_count }}</div>
+            <div class="muted">成功 {{ stats.summary.success_count }} / 失败 {{ stats.summary.failed_count }} / 处理中 {{ stats.summary.pending_count }}</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">成功率</div>
+            <div class="tile-value" :class="{ danger: rateDanger(stats.summary) }">{{ percent(stats.summary.success_rate) }}</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">平均到账时长</div>
+            <div class="tile-value">{{ duration(stats.summary.avg_delivery_seconds) }}</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">成本总额</div>
+            <div class="tile-value">{{ money(stats.summary.cost_total) }}</div>
+          </div>
+          <div class="tile">
+            <div class="tile-label">供应商返佣总额</div>
+            <div class="tile-value">{{ money(stats.summary.supplier_rebate_total) }}</div>
+            <div class="muted">话费、卡券没有供应商返佣</div>
+          </div>
+        </div>
+
+        <el-table :data="stats.data" border size="small" empty-text="这段时间没有分给这家供应商的订单">
+          <el-table-column :label="stats.group_by === 'day' ? '日期' : '商品'" min-width="180">
+            <template #default="{ row }">
+              <router-link v-if="row.product_id" :to="{ name: 'product-detail', params: { id: row.product_id } }">{{ row.label }}</router-link>
+              <span v-else>{{ row.label }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="order_count" label="订单量" width="90" align="right" />
+          <el-table-column prop="success_count" label="成功" width="80" align="right" />
+          <el-table-column prop="failed_count" label="失败" width="80" align="right" />
+          <el-table-column label="处理中" width="90" align="right">
+            <template #default="{ row }">{{ row.pending_count }}</template>
+          </el-table-column>
+          <el-table-column label="成功率" width="100" align="right">
+            <template #default="{ row }">
+              <span :class="{ danger: rateDanger(row as SupplierStatsRow) }">{{ percent(row.success_rate) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="平均到账时长" width="130" align="right">
+            <template #default="{ row }">{{ duration(row.avg_delivery_seconds) }}</template>
+          </el-table-column>
+          <el-table-column label="成本总额" width="120" align="right">
+            <template #default="{ row }">{{ money(row.cost_total) }}</template>
+          </el-table-column>
+          <el-table-column label="供应商返佣" width="120" align="right">
+            <template #default="{ row }">{{ money(row.supplier_rebate_total) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-card>
 
     <el-card shadow="never" header="调用日志">
       <el-form inline @submit.prevent="logs.search">
@@ -273,6 +394,30 @@ pre {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tile {
+  padding: 12px;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+}
+
+.tile-label {
+  color: #909399;
+  font-size: 12px;
+}
+
+.tile-value {
+  margin: 4px 0;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .pagination {
