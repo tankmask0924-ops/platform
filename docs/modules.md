@@ -345,7 +345,24 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 财务报表 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 告警：列表查看 / 标记处理 | 二期 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` 🔨 页面已写好，待登录联调；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+| 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
+
+> 「系统设置」四页联调（2026-09-21）：没有改代码，四页的功能都按设计工作，记录一下核对过哪些点。
+> - **管理员账号**：列表带角色/状态筛选，自己那行标「（我）」且没有禁用按钮；新建弹窗的角色下拉走
+>   `GET /admin/admin-users/role-options`。
+> - **角色权限**：预置角色带「预置」标记且没有删除按钮；超管自己所在的角色整行没有编辑/删除按钮
+>   （"不能改自己所在角色的权限"）；编辑弹窗的权限树按模块分组，逐项跟 `AdminBootstrapService::KNOWN_PERMISSIONS`
+>   对过，**代码与数据库两边各 29 项、零差异**（`comm` 双向比对），`/admin/auth/me` 返回的也是这 29 项。
+> - **系统参数**：6 项都渲染出范围和默认值；超范围保存由后端返回 422、前端弹出「欠款预警线的范围是
+>   0.00~10000000.00 元」；保存成功后「默认」标记消失、「最近修改」显示操作人和时间，并多出「恢复默认」按钮；
+>   恢复默认带二次确认，确认后删掉 `system_settings` 里那一行（联调用 `debt_warning_threshold`
+>   1000 → 1500 → 恢复默认走了一遍，表回到 0 行，数据已还原）。
+> - **操作日志**：`moduleLabels` 覆盖了库里出现的全部 module 值（merchant / merchant_level / product /
+>   product_mapping / recharge / supplier / system）；详情展开能看到修改前后对比（上面那次改参数显示
+>   `1000.00 → 1500.00`）；**操作人账号被删掉的历史日志降级显示 `#id` 而不是整条消失**，说明联表是 LEFT JOIN，
+>   这是对的——审计日志不该因为账号注销而丢。
+> - 顺带发现两处测试残留脏数据（不是功能问题）：角色列表里有一个测试中断留下的 `role_<uniqid>` 角色；
+>   操作日志里大量测试产生的记录操作人显示成 `#id`。
 
 > 「供应商管理：商品同步接入 / 余额监控 / 调用日志」（requirements.md 6.3 / 6.7 / 6.8，2026-09-18）：
 > - **供应商回调地址**：原来下单传给卡速售的回调地址是写死的占位 `https://platform.example.com/notify/{code}`，生产上供应商回调根本到不了。
@@ -638,7 +655,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
 | 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
-| 系统管理后台（web/admin） | 19 | 16 | 15 | 0（系统设置 1 行页面已写好待联调） |
+| 系统管理后台（web/admin） | 19 | 16 | 16 | 0 |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
@@ -659,6 +676,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、~~商品同步接入与余额监控、调用日志~~（已完成）、~~供应商统计~~（已完成）
    - ~~商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算~~（已完成，前端计算）
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
-   - 一期只剩：系统后台「系统设置」页面登录联调；后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
+   - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
+   - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境
