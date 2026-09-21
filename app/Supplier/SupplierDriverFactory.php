@@ -22,9 +22,17 @@ use RuntimeException;
 /**
  * 供应商驱动派发，从 App\Service\Order\RechargeOrderPlacementService 抽出来的独立、
  * 可被 Hyperf DI 容器注入/替换的类。跟 App\Supplier\Kasushou\KasushouDriver 类注释
- * 同一个判断：目前只有卡速售一个驱动实现，用 `match($supplier->driver) {...}` 直接
- * 分支即可，不建 `DriverInterface` + 多驱动工厂抽象——等云洋/芒果任一个驱动落地、
- * 真正验证过这几个方法签名对两家供应商都合适之后再抽取。
+ * 同一个判断：用 `match($supplier->driver) {...}` 直接分支，不建 `DriverInterface` +
+ * 多驱动工厂抽象。云洋驱动落地后重新量过一次，两家同形状的只有 queryBalance() 一个方法，
+ * 理由见那边的类注释。
+ *
+ * **本工厂目前只建卡速售驱动**：云洋驱动（App\Supplier\Yunyang\YunyangDriver）已经写完
+ * 并有单测，但快递的订单流程（docs/modules.md 第 6/7/8 节快递相关行）还没建，没有调用方，
+ * 所以先不接进来——接进来意味着 build() 的返回类型要放宽成联合类型或接口，而六个调用方
+ * 全部只会用卡速售的方法，那是为一个还不存在的流程提前改形状。快递下单流程开工时，
+ * 这里跟着加 `yunyang` 分支，`suppliers.config` 的形状是
+ * `{"base_url": "https://...", "app_id": "...", "secret_key": "..."}`（base_url 必须是
+ * https，驱动构造时会拒绝 http，见 yunyang.md 第 3 节）。
  *
  * `suppliers.config` 对 `kasushou` 驱动的 JSON 形状（解密后）：
  * `{"base_url": "...", "user_id": "...", "api_key": "..."}`，这是
