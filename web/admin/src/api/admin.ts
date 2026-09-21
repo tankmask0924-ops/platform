@@ -281,6 +281,33 @@ export interface SupplierStats {
   data: SupplierStatsRow[]
 }
 
+/** 熔断状态：App\Service\Admin\CircuitBreakerAdminService（requirements.md 6.6） */
+export interface CircuitBreakerRow {
+  id: number
+  /** null 表示整个供应商 */
+  product_id: number | null
+  product_name: string | null
+  /** 按 paused_until 实时判断的状态，展示用这个 */
+  status: 'paused' | 'normal'
+  /** 库里存的状态；到期但定时任务还没写回时会是 paused */
+  stored_status: string
+  /** null 且 status=paused 表示无限期暂停，只能人工恢复 */
+  paused_until: string | null
+  /** true = 运营手动暂停，false = 自动熔断 */
+  manual: boolean
+  triggered_reason: string | null
+  updated_at: string | null
+}
+
+export interface CircuitBreakerStatus {
+  thresholds: { window_minutes: number; min_orders: number; fail_rate_percent: string; pause_minutes: number }
+  /** 整个供应商此刻是否被熔断（不看单个商品的行） */
+  supplier_paused: boolean
+  data: CircuitBreakerRow[]
+  /** 这家供应商映射了哪些商品，给"只熔断某个商品"的下拉用 */
+  mapped_products: { id: number; name: string }[]
+}
+
 export interface SupplierForm {
   name?: string
   code?: string
@@ -304,6 +331,9 @@ export const supplierApi = {
   syncProducts: (id: number) => http.post<Ok>(`/admin/suppliers/${id}/product-sync`),
   callLogs: (id: number, params: Query) => http.get<Paged<SupplierCallLog>>(`/admin/suppliers/${id}/call-logs`, params),
   stats: (id: number, params: Query) => http.get<SupplierStats>(`/admin/suppliers/${id}/stats`, params),
+  circuitBreakers: (id: number) => http.get<CircuitBreakerStatus>(`/admin/suppliers/${id}/circuit-breakers`),
+  pauseCircuitBreaker: (id: number, data: Query) => http.post<CircuitBreakerStatus>(`/admin/suppliers/${id}/circuit-breakers/pause`, data),
+  resumeCircuitBreaker: (id: number, data: Query) => http.post<CircuitBreakerStatus>(`/admin/suppliers/${id}/circuit-breakers/resume`, data),
 }
 
 /** 订单：App\Controller\Admin\OrderController */

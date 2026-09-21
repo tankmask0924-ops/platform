@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { businessLineLabels, copyText, labelOf, money, StatusTag, toOptions, usePagedList } from '@platform/shared'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { type SupplierCallLog, supplierApi, type SupplierDetail, type SupplierStats, type SupplierStatsRow } from '@/api/admin'
+import { type CircuitBreakerRow, type CircuitBreakerStatus, type SupplierCallLog, supplierApi, type SupplierDetail, type SupplierStats, type SupplierStatsRow } from '@/api/admin'
 import { driverLabels, supplierCallActionLabels, supplierStatusLabels } from '@/labels'
 import { usePermissionStore } from '@/stores/permission'
 
@@ -51,6 +51,67 @@ async function syncProducts() {
   } finally {
     syncing.value = false
   }
+}
+
+// 熔断（requirements.md 6.6）
+const breakers = ref<CircuitBreakerStatus | null>(null)
+const breakersLoading = ref(false)
+
+async function loadBreakers() {
+  breakersLoading.value = true
+  try {
+    breakers.value = await supplierApi.circuitBreakers(id)
+  } finally {
+    breakersLoading.value = false
+  }
+}
+
+const pauseVisible = ref(false)
+const pauseSubmitting = ref(false)
+const pauseForm = ref<{ product_id: number | null; minutes: number | null; remark: string }>({
+  product_id: null,
+  minutes: null,
+  remark: '',
+})
+
+function openPause() {
+  pauseForm.value = { product_id: null, minutes: breakers.value?.thresholds.pause_minutes ?? 5, remark: '' }
+  pauseVisible.value = true
+}
+
+async function submitPause() {
+  if (pauseForm.value.remark.trim() === '') {
+    ElMessage.warning('请填写暂停原因')
+
+    return
+  }
+  pauseSubmitting.value = true
+  try {
+    breakers.value = await supplierApi.pauseCircuitBreaker(id, {
+      product_id: pauseForm.value.product_id ?? '',
+      minutes: pauseForm.value.minutes ?? '',
+      remark: pauseForm.value.remark.trim(),
+    })
+    pauseVisible.value = false
+    ElMessage.success('已暂停，路由不再给这个范围分配新订单')
+  } finally {
+    pauseSubmitting.value = false
+  }
+}
+
+async function resumeBreaker(row: CircuitBreakerRow) {
+  const scope = row.product_id === null ? '整个供应商' : `商品「${row.product_name ?? row.product_id}」`
+  await ElMessageBox.confirm(`恢复${scope}的分单？`, '恢复', { type: 'warning' })
+  breakers.value = await supplierApi.resumeCircuitBreaker(id, { product_id: row.product_id ?? '' })
+  ElMessage.success('已恢复')
+}
+
+/** 无限期暂停没有截止时间 */
+function pausedUntilText(row: CircuitBreakerRow): string {
+  if (row.status !== 'paused') {
+    return '-'
+  }
+  return row.paused_until ?? '无限期（需人工恢复）'
 }
 
 // 统计（requirements.md 6.8：订单量、成功率、平均到账时长、成本总额、供应商返佣总额，按天/商品看）
@@ -120,6 +181,7 @@ const json = (value: unknown) => (value === null || value === undefined ? '-' : 
 
 onMounted(() => {
   load()
+  loadBreakers()
   loadStats()
   logs.load()
 })
@@ -188,6 +250,58 @@ onMounted(() => {
         </el-descriptions>
       </el-card>
     </template>
+
+    <el-card v-loading="breakersLoading" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>
+            熔断状态
+            <el-tag v-if="breakers?.supplier_paused" type="danger" size="small" class="gap-left">整个供应商熔断中</el-tag>
+          </span>
+          <el-button v-if="canManage" @click="openPause">手动暂停</el-button>
+        </div>
+      </template>
+
+      <div v-if="breakers" class="muted block">
+        当前阈值：近 {{ breakers.thresholds.window_minutes }} 分钟内出结果的订单达到
+        {{ breakers.thresholds.min_orders }} 单、且失败率超过 {{ breakers.thresholds.fail_rate_percent }}% 时，
+        自动暂停分单 {{ breakers.thresholds.pause_minutes }} 分钟，到期自动恢复。阈值在「系统设置 - 系统参数」里改。
+      </div>
+
+      <el-table :data="breakers?.data ?? []" border size="small" empty-text="没有熔断记录，这家供应商一直正常">
+        <el-table-column label="范围" min-width="200">
+          <template #default="{ row }">
+            <span v-if="row.product_id === null">整个供应商</span>
+            <router-link v-else :to="{ name: 'product-detail', params: { id: row.product_id } }">
+              {{ row.product_name ?? `#${row.product_id}` }}
+            </router-link>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">
+            <el-tag v-if="row.status === 'paused'" type="danger" size="small">熔断中</el-tag>
+            <el-tag v-else type="success" size="small">正常</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="来源" width="100">
+          <!-- 恢复后 triggered_reason 被清空，这时已经无所谓来源了，显示 - 而不是误标成"自动" -->
+          <template #default="{ row }">{{ row.triggered_reason === null ? '-' : row.manual ? '人工' : '自动' }}</template>
+        </el-table-column>
+        <el-table-column label="恢复时间" width="190">
+          <template #default="{ row }">{{ pausedUntilText(row as CircuitBreakerRow) }}</template>
+        </el-table-column>
+        <el-table-column prop="triggered_reason" label="原因" min-width="280">
+          <template #default="{ row }">{{ row.triggered_reason ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="170" />
+        <el-table-column v-if="canManage" label="操作" width="90">
+          <template #default="{ row }">
+            <el-button v-if="row.status === 'paused'" link type="primary" @click="resumeBreaker(row as CircuitBreakerRow)">恢复</el-button>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
 
     <el-card shadow="never" header="统计">
       <el-form inline @submit.prevent="loadStats">
@@ -269,6 +383,28 @@ onMounted(() => {
         </el-table>
       </div>
     </el-card>
+
+    <el-dialog v-model="pauseVisible" title="手动暂停分单" width="520px">
+      <el-form label-width="90px">
+        <el-form-item label="范围">
+          <el-select v-model="pauseForm.product_id" clearable placeholder="整个供应商" style="width: 100%">
+            <el-option v-for="p in breakers?.mapped_products ?? []" :key="p.id" :value="p.id" :label="p.name" />
+          </el-select>
+          <div class="muted">留空＝暂停这家供应商的全部商品；选一个商品＝只暂停这个商品，不影响其他商品</div>
+        </el-form-item>
+        <el-form-item label="暂停时长">
+          <el-input-number v-model="pauseForm.minutes" :min="1" :max="1440" controls-position="right" />
+          <span class="muted gap-left">分钟，最多 1440；清空表示无限期，只能人工恢复</span>
+        </el-form-item>
+        <el-form-item label="原因" required>
+          <el-input v-model="pauseForm.remark" type="textarea" :rows="2" maxlength="200" show-word-limit placeholder="必填，会记在熔断记录上" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pauseVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pauseSubmitting" @click="submitPause">确定</el-button>
+      </template>
+    </el-dialog>
 
     <el-card shadow="never" header="调用日志">
       <el-form inline @submit.prevent="logs.search">

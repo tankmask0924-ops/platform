@@ -21,9 +21,11 @@ use App\Model\OrderAttempt;
 use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
+use App\Model\SupplierCircuitBreaker;
 use App\Model\SupplierProduct;
 use App\OpenApi\ErrorCode;
 use App\Service\Order\SupplierCallbackService;
+use App\Service\Order\SupplierRouter;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
 use App\Supplier\SupplierDriverFactory;
@@ -72,6 +74,7 @@ class SupplierRouterTest extends TestCase
         $this->supplierProductIds = [];
 
         foreach ($this->supplierIds as $id) {
+            SupplierCircuitBreaker::where('supplier_id', $id)->delete();
             Supplier::destroy($id);
         }
         $this->supplierIds = [];
@@ -223,6 +226,77 @@ class SupplierRouterTest extends TestCase
 
         $this->assertNotNull($dao->claim($order->id, $supplierB->id, 2));
         $this->assertNull($dao->claim($order->id, $supplierB->id, 2), '并发切换时只有一个请求能占到下一个序号');
+    }
+
+    /**
+     * requirements.md 6.6：熔断中的供应商不再分配新订单。这里验证的是路由筛选那一层
+     * （`eligibleCandidates()`），判定逻辑本身在 CircuitBreakerServiceTest 里。
+     */
+    public function testPausedSupplierIsSkippedByRouting()
+    {
+        [, $product, $supplierA, $supplierB] = $this->setUpTwoSuppliers();
+        $router = $this->getContainer()->get(SupplierRouter::class);
+
+        $this->assertSame(
+            [$supplierA->id, $supplierB->id],
+            array_map(static fn (array $c) => $c[1]->id, $router->eligibleCandidates($product)),
+        );
+
+        SupplierCircuitBreaker::create([
+            'supplier_id' => $supplierA->id,
+            'product_id' => SupplierCircuitBreaker::PRODUCT_ID_ALL,
+            'status' => SupplierCircuitBreaker::STATUS_PAUSED,
+            'paused_until' => date('Y-m-d H:i:s', time() + 300),
+            'triggered_reason' => '测试熔断',
+        ]);
+
+        $this->assertSame(
+            [$supplierB->id],
+            array_map(static fn (array $c) => $c[1]->id, $router->eligibleCandidates($product)),
+            '熔断中的 A 被跳过，仍然能路由到 B',
+        );
+        $this->assertTrue($router->hasEligibleSupplier($product));
+    }
+
+    /**
+     * 所有供应商都熔断时，下单前预检就该判定"商品暂不可售"，不建单不冻结。
+     */
+    public function testProductBecomesUnavailableWhenEverySupplierIsPaused()
+    {
+        [, $product, $supplierA, $supplierB] = $this->setUpTwoSuppliers();
+        $router = $this->getContainer()->get(SupplierRouter::class);
+
+        foreach ([$supplierA, $supplierB] as $supplier) {
+            SupplierCircuitBreaker::create([
+                'supplier_id' => $supplier->id,
+                'product_id' => SupplierCircuitBreaker::PRODUCT_ID_ALL,
+                'status' => SupplierCircuitBreaker::STATUS_PAUSED,
+                'paused_until' => date('Y-m-d H:i:s', time() + 300),
+                'triggered_reason' => '测试熔断',
+            ]);
+        }
+
+        $this->assertFalse($router->hasEligibleSupplier($product));
+    }
+
+    /**
+     * 到期的熔断行不再拦路由，不用等定时任务把它写回 normal。
+     */
+    public function testExpiredPauseNoLongerBlocksRouting()
+    {
+        [, $product, $supplierA] = $this->setUpTwoSuppliers();
+        SupplierCircuitBreaker::create([
+            'supplier_id' => $supplierA->id,
+            'product_id' => SupplierCircuitBreaker::PRODUCT_ID_ALL,
+            // 库里还标着 paused，但截止时间已经过了
+            'status' => SupplierCircuitBreaker::STATUS_PAUSED,
+            'paused_until' => date('Y-m-d H:i:s', time() - 1),
+            'triggered_reason' => '已过期',
+        ]);
+
+        $candidates = $this->getContainer()->get(SupplierRouter::class)->eligibleCandidates($product);
+
+        $this->assertContains($supplierA->id, array_map(static fn (array $c) => $c[1]->id, $candidates));
     }
 
     /**

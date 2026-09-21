@@ -52,6 +52,19 @@ class SupplierProductDao extends AbstractDao
      * 范围（见 App\Service\Admin\ProductMappingAdminService 类注释），但排序规则现在
      * 就按最终会被消费的方式定下来，不留给以后再改。
      */
+    /**
+     * 按"本地商品 + 供应商"取映射行（`(product_id, supplier_id)` 唯一）。
+     * 熔断的"供应商 + 商品"粒度要用它确认这个组合真的存在——给一个没映射过的组合
+     * 建熔断行，路由根本不会走到，只会在后台留下一条永远不生效的记录。
+     */
+    public function findMapping(int $supplierId, int $productId): ?SupplierProduct
+    {
+        return $this->newQuery()
+            ->where('supplier_id', $supplierId)
+            ->where('product_id', $productId)
+            ->first();
+    }
+
     public function listForProduct(int $productId): Collection
     {
         return $this->newQuery()

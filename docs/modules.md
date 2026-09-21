@@ -111,14 +111,14 @@
 |---|---|---|
 | 固定优先级路由与失败切换 | [requirements.md 6.5](requirements.md#65-路由与失败切换) | ✅ |
 | 切换时长限制 | [requirements.md 6.5](requirements.md#65-路由与失败切换) | ✅ |
-| 熔断判定与自动恢复（二期） | [requirements.md 6.6](requirements.md#66-熔断) | ⬜ |
+| 熔断判定与自动恢复（二期） | [requirements.md 6.6](requirements.md#66-熔断) | ✅ `App\Service\Supplier\CircuitBreakerService` + `App\Crontab\CircuitBreakerRecoveryCrontab`，路由筛选见下方「熔断」说明 |
 | 供应商商品成本价同步任务（卡速售自动，其余人工） | [requirements.md 6.4](requirements.md#64-商品映射与成本价) | ✅ 自动：见第 9 节"供应商商品同步"；人工：后台商品映射改价（第 8 节） |
 | 结果未知 / 明确失败归类的统一处理框架 | [requirements.md 6.2](requirements.md#62-对接驱动的统一能力) | ⬜ |
 
 **路由与失败切换（6.5）**：`App\Service\Order\SupplierRouter`，话费、卡券共用；同步下单
 （`AbstractOrderPlacementService::routeAndFinalize()`）和供应商异步回调
 （`SupplierCallbackService`）都走它。
-- 筛选：映射行非 active、库存为 0、供应商停用、供应商余额已知且低于成本价的去掉；熔断是二期，暂不筛。按 `priority` 升序，每家最多一次（`order_attempts` 里出现过的供应商不再尝试）。
+- 筛选：映射行非 active、库存为 0、供应商停用、供应商余额已知且低于成本价的、正在熔断中的去掉。按 `priority` 升序，每家最多一次（`order_attempts` 里出现过的供应商不再尝试）。
 - 下单前预检：没有可用供应商时直接返回 42006「商品暂不可售」，不建单、不冻结。预检之后到路由之间供应商状态变了、一家都没试成，仍按旧逻辑失败解冻（43002）。
 - 只有明确失败才换下一家；受理后异步回调给出明确失败也换，平台订单号不变，供应商侧单号用 `{order_no}-{attempt_no}` 区分。处理中/结果未知停在当前供应商。
 - 切换时长：`system_settings.switch_duration_minutes`（默认 30），从 `orders.created_at` 起算；超时后明确失败不再换，订单失败、解冻。只影响"换不换"，不影响等结果的订单。后台配置入口还没做，目前改表生效。
@@ -126,6 +126,38 @@
 - 卡速售回调需要 `isCardProduct`：验签前用回调里原始单号找订单只用来选解析方式，验签后权威单号必须指向同一笔订单。
 - `order_attempts.fail_reason` 写入时截断到 255（驱动构造失败的异常信息可能超长，此前会让下单请求 500）。
 - 测试：`test/Cases/Service/Order/SupplierRouterTest.php`（异步失败切换、超出切换时长、最后一家失败、过期回调、序号占位），`RechargeOrderPlacementServiceTest` 的筛选/无供应商用例，两个下单 Controller 测试。
+
+**熔断（6.6，2026-09-21）**：`App\Service\Supplier\CircuitBreakerService` + `supplier_circuit_breakers` 表
+（新迁移）+ `App\Model\SupplierCircuitBreaker` / `App\Dao\SupplierCircuitBreakerDao`。
+- **判定**：一次尝试拿到**明确失败**后同步触发，重算近 `circuit_breaker_window_minutes` 分钟的失败率：
+  出结果的尝试达到 `circuit_breaker_min_orders` 次、且失败率超过 `circuit_breaker_fail_rate_percent`，
+  就暂停 `circuit_breaker_pause_minutes` 分钟。四个阈值都在「系统设置 - 系统参数」里配。
+  分母只算已出结果的（success + failed），跟供应商统计同一套口径：把处理中的放进分母，会在下单高峰
+  （处理中的多）把失败率稀释掉，正好是最需要熔断的时候失灵。
+- **两个作用域都判**：先判"这家供应商的这个商品"，再判"整个供应商"。先判商品是有意的——一个商品出问题
+  只切那个商品，不牵连同一家的其他商品（6.6 原文）。两个作用域共用同一组阈值，没有再拆一套商品级阈值：
+  需求只给了一组值，多一组配置就是多一处要运营理解和调的东西。
+- **同步判定不进队列**：一条聚合查询 + 可能一次 upsert，比一次供应商 HTTP 调用便宜得多；放进队列等于
+  "已经知道这家在连续失败，还要再放几笔过去"，正好抵消熔断的意义。整个判定包在 try/catch 里——
+  熔断是保护机制，它坏了最多是没保护到，不能反过来把正常订单搞挂。
+- **到期恢复不依赖定时任务**：`isPaused()` 直接看 `paused_until` 过没过（`SupplierCircuitBreaker::isPausedNow()`），
+  暂停 5 分钟就是 5 分钟，不会因为定时任务一分钟一跑而多停几十秒。`CircuitBreakerRecoveryCrontab`
+  只做把过期行写回 `normal` 的收尾，让后台列表和日志如实反映状态；它整个没跑，路由行为也完全正确。
+- **手动暂停/恢复**（6.6「运营也可以手动暂停/恢复」）：`POST /admin/suppliers/{id}/circuit-breakers/pause`
+  （`product_id` 留空=整家、`minutes` 留空=无限期、`remark` 必填）、`.../resume`，权限 `supplier.manage`；
+  查看 `GET .../circuit-breakers`，权限 `supplier.view`。手动暂停时长上限 24 小时：更长的"暂停"实质是
+  "停用这家供应商"，该走供应商启停或停掉商品映射，而不是挂一个几天后到期、谁也不记得的熔断。
+  只能对**已经映射**到这家供应商的商品单独熔断——给没映射的组合建行，路由根本不会走到，只会留下一条
+  永远不生效的记录。
+- **熔断行不删**：恢复只把 `status` 改回 `normal`，保留这一行才能在后台看到"这家曾经熔断过、上次什么原因"。
+- **告警未接**：6.6 要求熔断时告警，但 `alerts` 表和告警模块同属二期、还没建（第 8 节「告警」行）。
+  现在先记 error 日志（`supplier` 渠道，`supplier circuit broken`），告警模块落地时把
+  `CircuitBreakerService::alert()` 里的 TODO 换成写 `alerts` 行即可，调用点不用动。
+- 前端：供应商详情页新增「熔断状态」卡片（当前阈值说明 + 记录表 + 手动暂停弹窗 + 恢复），已联调。
+- 测试：`test/Cases/Service/Supplier/CircuitBreakerServiceTest.php`（最小订单数下限、阈值边界"等于不熔断"、
+  窗口外的旧尝试不计、处理中不进分母、商品级熔断不牵连同供应商其他商品、整家熔断覆盖所有商品、
+  到期即恢复、无限期手动暂停不被定时任务碰、手动恢复能提前解除自动熔断、阈值读系统参数）、
+  `test/Cases/Admin/CircuitBreakerControllerTest.php`、`SupplierRouterTest` 三个路由筛选用例。
 
 ---
 
@@ -353,7 +385,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 本地商品库：CRUD | 一期 | ✅ `App\Controller\Admin\ProductController` | ✅ `App\Service\Admin\ProductAdminService` | `views/product/ProductListView.vue`、`ProductDetailView.vue`（含等级比例覆盖、5.5 保护提示前端计算） ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/products`、`GET/PUT /admin/products/{id}`、`POST /admin/products/{id}/status`、`PUT/DELETE /admin/products/{id}/level-rebates/{levelId}`；权限 `product.view` / `product.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。这是 `App\Model\Product`/`App\Dao\ProductDao`（commit 233d5d9）此前一直缺失的写入侧——那次提交只建了模型和开放 API 用的只读查询，商品行此前只能靠测试直接用 Dao 插入。新建商品默认下架（`status` 默认 `off_shelf`：避免刚建好、字段可能还没配置齐全的商品被意外立即上架，需运营显式上架）；`business_line` 只接受 recharge/card（这个代码库目前只有这两条业务线建了下单路由基础设施，即便数据库列本身不限制取值也主动拒绝其它值）；按 recharge/card 分别要求 `operator`/`card_type` 必填，供错业务线的字段（如给 recharge 商品传 `card_type`）直接拒绝，清晰 4xx 而非静默接受；详情接口带出该商品全部 `ProductLevelRebate` 覆盖（联表 `level_name`，同 `ProductMappingAdminService` 联表供应商名称的做法）。等级比例覆盖的写入/删除结构跟商户等级任务（commit 4de61e8）一致：设置用 `ProductLevelRebateDao::upsertRate()`（数据库原生 upsert，按 `(product_id, level_id)` 唯一索引原地更新，跟 `MerchantLevelBusinessRateDao::upsertRate()` 同一技术）；新增 `DELETE /admin/products/{id}/level-rebates/{levelId}`（商户等级任务没有的接口——删除有实际业务含义：回退到该等级在该业务线的默认比例，对不存在的覆盖行删除返回 404 而非静默成功），已用真实联调测试验证：设置覆盖后 `RebateCalculator` 读到 `rateSource='product_level'`，删除覆盖后回退读到 `rateSource='level'`。测试 `test/Cases/Admin/ProductControllerTest.php`。**范围之外**：5.5 的价格/返佣保护提示（低于成本价、毛利为负、返佣比例超 100%）与操作日志记录均未建（没有后台前端展示 / 没有操作日志基础设施，见 `ProductAdminService` 类注释）；不含 `supplier_products` 商品映射（已是独立功能，`ProductMappingController`） |
 | 供应商管理：配置 CRUD（新建/列表/详情/修改/启用禁用，requirements.md 6.3） | 一期 | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Admin\SupplierAdminService` | `views/supplier/SupplierListView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 供应商管理：商品映射（新建/列表/改价（必留痕）/优先级/启停，requirements.md 6.4） | 一期 | ✅ `App\Controller\Admin\ProductMappingController` | ✅ `App\Service\Admin\ProductMappingAdminService` | `views/product/ProductDetailView.vue` ✅ 已联调（2026-09-18） | ✅ |
-| 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | 一期（熔断二期） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Supplier\SupplierCallLogService` / `SupplierNotifyAddressService`、`App\Service\Admin\SupplierAdminService` / `SupplierStatsService` | `views/supplier/SupplierDetailView.vue`（列表点名称进入）✅ 已在浏览器点过刷新余额、同步商品、调用日志；统计卡片已联调（2026-09-21，按天/按商品都用真实 order_attempts 数据核对过） | ✅ 回调地址、余额监控、商品同步、调用日志、统计都已完成，熔断二期。见下方说明 |
+| 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | 一期（熔断二期，均已完成） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Supplier\SupplierCallLogService` / `SupplierNotifyAddressService`、`App\Service\Admin\SupplierAdminService` / `SupplierStatsService` | `views/supplier/SupplierDetailView.vue`（列表点名称进入）✅ 已在浏览器点过刷新余额、同步商品、调用日志；统计卡片已联调（2026-09-21，按天/按商品都用真实 order_attempts 数据核对过） | ✅ 回调地址、余额监控、商品同步、调用日志、统计、熔断状态都已完成。熔断见第 5 节「熔断」说明，其余见下方说明 |
 | 商户等级：CRUD / 各业务线比例设置 | 一期 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | `views/merchant/MerchantLevelView.vue` ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。商品单独覆盖某等级比例（`product_level_rebates`）已在「本地商品库」行完成 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
@@ -591,7 +623,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ✅ `App\Job\NotifyMerchantJob` 失败后按间隔自己重新入队（第 6 节"结果回调"时已实现，此前本表漏更新） |
 | 供应商余额监控 | Crontab | ✅ `App\Crontab\SupplierBalanceCrontab` → `App\Service\Supplier\SupplierBalanceService`，见下方说明 |
 | 供应商商品同步（每日全量校准） | Crontab | ✅ `App\Crontab\SupplierProductSyncCrontab` → `App\Service\Supplier\ProductSyncService`，见下方说明 |
-| 熔断自动恢复（二期） | Crontab | ⬜ |
+| 熔断自动恢复（二期） | Crontab | ✅ `App\Crontab\CircuitBreakerRecoveryCrontab`，每分钟把到期的熔断行写回 `normal`；**不是恢复机制本身**，路由按 `paused_until` 实时判断，见第 5 节「熔断」说明 |
 | 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
 | 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
@@ -660,12 +692,12 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 卡速售 2.0 驱动 | 8 | 6 | 0 | 2 |
 | 云洋驱动 | 9 | 0 | 0 | 9 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
-| 供应商路由与风控 | 5 | 3 | 0 | 2 |
+| 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 7 | 0 | 8 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 12 | 3 | 4 |
-| 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **63** | **3** | **40** |
+| 异步任务与定时任务 | 10 | 7 | 0 | 3 |
+| **合计** | **106** | **65** | **3** | **38** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -695,5 +727,5 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
-4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ 熔断 → 告警 → 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ 告警 → 对账 → 财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境

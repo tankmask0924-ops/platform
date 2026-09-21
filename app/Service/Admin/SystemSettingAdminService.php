@@ -23,6 +23,7 @@ use App\Service\Merchant\RateLimitSettingService;
 use App\Service\Order\AbnormalOrderService;
 use App\Service\Order\OrderResultApplier;
 use App\Service\Order\SupplierRouter;
+use App\Service\Supplier\CircuitBreakerService;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -32,7 +33,7 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *
  * 只列出代码里真正在读的参数；key 和默认值直接引用读取方的常量，两边不会对不上。
  * 表里没有这一行时，读取方用代码默认值——所以"恢复默认"就是删掉这一行。
- * 熔断阈值（二期）、快递完成兜底天数和电影票锁座有效期（三期）等功能上线时再加进来。
+ * 快递完成兜底天数和电影票锁座有效期（三期）等功能上线时再加进来。
  * 每次修改记操作日志（requirements.md 9「系统参数相关操作重点审计」）。
  */
 class SystemSettingAdminService extends AbstractService
@@ -98,6 +99,42 @@ class SystemSettingAdminService extends AbstractService
             'max' => 365,
             'default' => OrderResultApplier::DEFAULT_REBATE_DUE_PERIOD_DAYS,
             'description' => '订单完成后多少天返佣到账；只影响之后完成的订单。短于售后争议时限时，到账后才核实未到账的订单要从余额扣回返佣',
+        ],
+        CircuitBreakerService::WINDOW_MINUTES_SETTING_KEY => [
+            'name' => '熔断统计窗口',
+            'type' => 'int',
+            'unit' => '分钟',
+            'min' => 1,
+            'max' => 1440,
+            'default' => CircuitBreakerService::DEFAULT_WINDOW_MINUTES,
+            'description' => '判断供应商失败率时，往前看多长时间的下单记录',
+        ],
+        CircuitBreakerService::MIN_ORDERS_SETTING_KEY => [
+            'name' => '熔断最小订单数',
+            'type' => 'int',
+            'unit' => '单',
+            'min' => 1,
+            'max' => 10000,
+            'default' => CircuitBreakerService::DEFAULT_MIN_ORDERS,
+            'description' => '统计窗口内出结果的订单不到这个数就不熔断，避免订单少时一两单失败就误暂停',
+        ],
+        CircuitBreakerService::FAIL_RATE_PERCENT_SETTING_KEY => [
+            'name' => '熔断失败率阈值',
+            'type' => 'money',
+            'unit' => '%',
+            'min' => '1.00',
+            'max' => '100.00',
+            'default' => CircuitBreakerService::DEFAULT_FAIL_RATE_PERCENT,
+            'description' => '统计窗口内失败率超过这个百分比就暂停给该供应商分配新订单；100% 相当于只有全部失败才熔断',
+        ],
+        CircuitBreakerService::PAUSE_MINUTES_SETTING_KEY => [
+            'name' => '熔断暂停时长',
+            'type' => 'int',
+            'unit' => '分钟',
+            'min' => 1,
+            'max' => 1440,
+            'default' => CircuitBreakerService::DEFAULT_PAUSE_MINUTES,
+            'description' => '触发熔断后暂停多久，到期自动恢复；运营也可以在供应商详情页手动暂停/恢复',
         ],
     ];
 

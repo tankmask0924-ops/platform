@@ -28,6 +28,7 @@ use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
+use App\Service\Supplier\CircuitBreakerService;
 use App\Service\Supplier\SupplierBalanceService;
 use App\Service\Supplier\SupplierNotifyAddressService;
 use App\Supplier\CardSecretMasker;
@@ -47,7 +48,8 @@ use Throwable;
  *
  * 每笔订单：
  * 1. 筛选：去掉映射行非 active（暂停/禁售）、库存为 0、供应商停用、供应商余额已知且
- *    低于这次的成本价的；熔断是二期，没有数据可读，暂不筛。
+ *    低于这次的成本价的、以及正在熔断中的（requirements.md 6.6，
+ *    App\Service\Supplier\CircuitBreakerService）。
  * 2. 按 supplier_products.priority 升序。
  * 3. 依次尝试，每家最多一次（已经在 order_attempts 里出现过的供应商不再尝试）；
  *    只有明确失败才换下一家，处理中/结果未知停在当前供应商等结果。
@@ -126,6 +128,9 @@ class SupplierRouter extends AbstractService
     protected SupplierBalanceService $supplierBalanceService;
 
     #[Inject]
+    protected CircuitBreakerService $circuitBreaker;
+
+    #[Inject]
     protected LoggerFactory $loggerFactory;
 
     /**
@@ -154,6 +159,11 @@ class SupplierRouter extends AbstractService
             }
             // 余额只是余额监控任务写入的缓存，没查过（null）时不据此排除
             if ($supplier->balance !== null && bccomp((string) $supplier->balance, (string) $mapping->cost_price, 2) < 0) {
+                continue;
+            }
+            // 熔断中的不分配新订单（requirements.md 6.6）。按"供应商 + 这个商品"判，
+            // 整个供应商被熔断时它的每个商品都算熔断，见 CircuitBreakerService::isPaused()
+            if ($this->circuitBreaker->isPaused((int) $supplier->id, (int) $product->id)) {
                 continue;
             }
 
@@ -206,7 +216,7 @@ class SupplierRouter extends AbstractService
             $attempt->isDirty() ? $attempt->save() : $attempt->touch();
         }
 
-        $this->reportSupplierSideProblems($supplierId, $result, $order);
+        $this->reactToSupplierSideSignals($supplierId, $result, $order);
 
         if ($order->status !== Order::STATUS_PROCESSING) {
             // 异常单只能人工处理：结果留在尝试记录上供核实，不改订单、不切换供应商
@@ -292,7 +302,7 @@ class SupplierRouter extends AbstractService
             }
 
             $result = $this->callSupplier($order, $mapping, $supplier, $rechargeAccount, $attemptNo);
-            $this->reportSupplierSideProblems((int) $supplier->id, $result, $order);
+            $this->reactToSupplierSideSignals((int) $supplier->id, $result, $order);
             $attempt->fill([
                 'result' => self::RESULT_MAP[$result->result->name],
                 'fail_reason' => $result->failReason,
@@ -408,10 +418,27 @@ class SupplierRouter extends AbstractService
      * requirements.md 6.7：预存款不足除了按明确失败换下一家，还要告警财务并立即刷新余额，
      * 刷新后路由的余额筛选就会跳过它。
      */
-    private function reportSupplierSideProblems(int $supplierId, DriverResult $result, Order $order): void
+    /**
+     * 一次尝试拿到结果后，对"供应商这一侧出了什么问题"的统一反应点。两条路径
+     * （同步下单、受理后的回调/定时查询）都会走到这里，新增的供应商侧信号加在这里
+     * 就不会漏掉其中一条。
+     *
+     * - 预存款不足：立刻刷一次余额，别让路由继续把新订单分给它（requirements.md 6.7）；
+     * - 明确失败：重算近期失败率，超标就熔断（requirements.md 6.6）。只在明确失败后
+     *   触发——处理中/结果未知不改变失败率，成功也不会让一个已经熔断的作用域提前恢复
+     *   （恢复只看暂停时间或人工操作），这时候去查一遍纯属浪费。
+     */
+    private function reactToSupplierSideSignals(int $supplierId, DriverResult $result, Order $order): void
     {
         if ($result->supplierBalanceInsufficient) {
             $this->supplierBalanceService->reportInsufficient($supplierId, 'order ' . $order->order_no);
+        }
+
+        if ($result->result === UnifiedResult::DefiniteFailure) {
+            $this->circuitBreaker->evaluate(
+                $supplierId,
+                $this->orderRechargeDao->find((int) $order->id)?->product_id
+            );
         }
     }
 

@@ -122,6 +122,38 @@ class OrderAttemptDao extends AbstractDao
             ->all();
     }
 
+    /**
+     * 熔断判定用（requirements.md 6.6）：`$since` 之后分给这家供应商的尝试里，已经有
+     * 结果的有多少次、其中明确失败多少次。`$productId` 非 null 时只统计这个商品
+     * （"供应商 + 商品"粒度）。
+     *
+     * **分母只算已经有结果的（success + failed）**，处理中/结果未知不计入：一笔还在
+     * 等结果的尝试既不能算这家供应商失败，也不能算它成功，把它放进分母只会在下单高峰
+     * （处理中的多）时把失败率稀释掉，正好是最需要熔断的时候失灵。这跟供应商统计
+     * （statsForSupplier()）的口径是同一套。
+     *
+     * @return array{total: int, failed: int}
+     */
+    public function resultCountsForSupplier(int $supplierId, string $since, ?int $productId = null): array
+    {
+        $query = $this->newQuery()
+            ->where('order_attempts.supplier_id', $supplierId)
+            ->where('order_attempts.created_at', '>=', $since)
+            ->whereIn('order_attempts.result', ['success', 'failed']);
+
+        if ($productId !== null) {
+            $query->join('order_recharges', 'order_recharges.order_id', '=', 'order_attempts.order_id')
+                ->where('order_recharges.product_id', $productId);
+        }
+
+        $row = $query
+            ->selectRaw('count(*) as n')
+            ->selectRaw("SUM(CASE WHEN order_attempts.result = 'failed' THEN 1 ELSE 0 END) as failed_n")
+            ->first();
+
+        return ['total' => (int) $row->n, 'failed' => (int) $row->failed_n];
+    }
+
     public function findLatestForOrder(int $orderId): ?OrderAttempt
     {
         return $this->newQuery()

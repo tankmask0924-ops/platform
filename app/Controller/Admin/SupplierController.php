@@ -16,6 +16,7 @@ use App\Annotation\RequiresPermission;
 use App\Controller\AbstractController;
 use App\Middleware\AdminAuthMiddleware;
 use App\Middleware\AdminPermissionMiddleware;
+use App\Service\Admin\CircuitBreakerAdminService;
 use App\Service\Admin\SupplierAdminService;
 use App\Service\Admin\SupplierStatsService;
 use App\Service\Supplier\SupplierCallLogService;
@@ -53,6 +54,9 @@ class SupplierController extends AbstractController
 
     #[Inject]
     protected SupplierStatsService $statsService;
+
+    #[Inject]
+    protected CircuitBreakerAdminService $circuitBreakerAdminService;
 
     #[Middleware(AdminAuthMiddleware::class)]
     #[Middleware(AdminPermissionMiddleware::class)]
@@ -140,5 +144,36 @@ class SupplierController extends AbstractController
     public function stats(int $id): array
     {
         return $this->statsService->forSupplier($id, $this->request->all());
+    }
+
+    /**
+     * 熔断状态（requirements.md 6.6）。看用 `supplier.view`；手动暂停/恢复会直接改变
+     * 路由行为（暂停就是不再给这家分单），跟启停供应商同一个量级，用 `supplier.manage`。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.view')]
+    #[GetMapping(path: '{id}/circuit-breakers')]
+    public function circuitBreakers(int $id): array
+    {
+        return $this->circuitBreakerAdminService->forSupplier($id);
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.manage')]
+    #[PostMapping(path: '{id}/circuit-breakers/pause')]
+    public function pauseCircuitBreaker(int $id): array
+    {
+        return $this->circuitBreakerAdminService->pause($id, $this->request->all());
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('supplier.manage')]
+    #[PostMapping(path: '{id}/circuit-breakers/resume')]
+    public function resumeCircuitBreaker(int $id): array
+    {
+        return $this->circuitBreakerAdminService->resume($id, $this->request->all());
     }
 }
