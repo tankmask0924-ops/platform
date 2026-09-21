@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Service\Merchant;
 
 use App\Dao\MerchantBalanceLogDao;
+use App\Export\ExportLimit;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Service\AbstractService;
@@ -31,8 +32,8 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * （MerchantAuthMiddleware）从 token 解出的那个商户模型，商户没有办法在请求里
  * 指定别的 merchant_id 去看别人的资金流水。
  *
- * 导出（requirements.md 7.2 提到的"查询与导出"的另一半）不在本次任务范围内，
- * 这里只做"支持筛选"这部分。
+ * 导出（requirements.md 7.2「查询与导出」的另一半）走 export()：同一套筛选条件、
+ * 同一份 format()，只是不分页、带行数上限，见该方法注释。
  */
 class BalanceLogService extends AbstractService
 {
@@ -53,6 +54,31 @@ class BalanceLogService extends AbstractService
             'total' => $this->balanceLogDao->countByMerchantId($merchant->id, $type),
             'page' => $page,
             'per_page' => $perPage,
+        ];
+    }
+
+    /**
+     * 导出用：同一套筛选条件下的全部流水，不分页（requirements.md 7.2「支持筛选导出」）。
+     *
+     * **返回的是 JSON，不是 CSV 文件**：真正拼 CSV 的是前端（web/shared 的 `downloadCsv`）。
+     * 这样枚举值的中文名（充值/冻结/扣款……）只在 `web/shared/src/labels.ts` 存一份，
+     * 不用在 PHP 里再抄一份中文标签跟着前端一起漂——导出的列和页面上看到的列因此天然一致。
+     * 代价是前端要把全部行拿进内存，由 ExportLimit::MAX_ROWS 兜底。
+     *
+     * @return array{data: array<int, array<string, mixed>>, total: int}
+     */
+    public function export(Merchant $merchant, mixed $type): array
+    {
+        $type = $this->normalizeTypeFilter($type);
+
+        $total = $this->balanceLogDao->countByMerchantId($merchant->id, $type);
+        ExportLimit::assertWithinLimit($total);
+
+        $logs = $this->balanceLogDao->paginateByMerchantId($merchant->id, 1, ExportLimit::MAX_ROWS, $type);
+
+        return [
+            'data' => $logs->map(fn (MerchantBalanceLog $log) => $this->format($log))->values()->all(),
+            'total' => $total,
         ];
     }
 

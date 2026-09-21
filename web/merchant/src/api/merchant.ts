@@ -59,8 +59,12 @@ export interface BalanceLog {
   created_at: string | null
 }
 
+/** 导出接口：同一套筛选、不分页（后端有 1 万行上限，超了返回 422） */
+export type Exported<T> = { data: T[]; total: number }
+
 export const balanceLogApi = {
   list: (params: Query) => http.get<Paged<BalanceLog>>('/merchant/balance-logs', params),
+  export: (params: Query) => http.get<Exported<BalanceLog>>('/merchant/balance-logs/export', params),
 }
 
 /** 订单：App\Controller\Merchant\OrderController */
@@ -99,6 +103,7 @@ export const orderApi = {
   list: (params: Query) => http.get<Paged<Order>>('/merchant/orders', params),
   detail: (orderNo: string) => http.get<OrderDetail>(`/merchant/orders/${encodeURIComponent(orderNo)}`),
   renotify: (orderNo: string) => http.post<{ success: boolean }>(`/merchant/orders/${encodeURIComponent(orderNo)}/renotify`),
+  export: (params: Query) => http.get<Exported<Order>>('/merchant/orders/export', params),
 }
 
 /** 售后争议：App\Controller\Merchant\DisputeController */
@@ -145,6 +150,7 @@ export type RebateSummary = Record<string, { count: number; amount: string }>
 
 export const rebateApi = {
   list: (params: Query) => http.get<Paged<Rebate> & { summary: RebateSummary }>('/merchant/rebates', params),
+  export: (params: Query) => http.get<Exported<Rebate>>('/merchant/rebates/export', params),
 }
 
 /** 资质资料：App\Controller\Merchant\QualificationController */

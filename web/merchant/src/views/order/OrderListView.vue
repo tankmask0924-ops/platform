@@ -2,6 +2,9 @@
 import {
   businessLineLabels,
   copyText,
+  type CsvColumn,
+  csvFilename,
+  downloadCsv,
   labelOf,
   merchantOrderStatusLabels,
   money,
@@ -39,6 +42,37 @@ function reset() {
   Object.assign(filters, { status: '', business_line: '', order_no: '', merchant_order_no: '', created_from: '', created_to: '' })
   createdRange.value = null
   list.search()
+}
+
+// 导出的列跟下面表格一一对应；失败原因用接口给的对外文案
+const columns: CsvColumn<Order>[] = [
+  { header: '下单时间', value: (r) => r.created_at },
+  { header: '平台订单号', value: (r) => r.order_no },
+  { header: '商户订单号', value: (r) => r.merchant_order_no },
+  { header: '业务线', value: (r) => labelOf(businessLineLabels, r.business_line) },
+  { header: '状态', value: (r) => labelOf(merchantOrderStatusLabels, r.status) },
+  { header: '订单金额', value: (r) => r.sale_price },
+  { header: '冻结金额', value: (r) => r.frozen_amount },
+  { header: '实扣金额', value: (r) => r.deducted_amount },
+  { header: '已退款', value: (r) => r.refunded_amount },
+  { header: '完成时间', value: (r) => r.completed_at },
+  { header: '失败原因', value: (r) => r.fail_reason },
+]
+
+const exporting = ref(false)
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const { data } = await orderApi.export({ ...filters })
+    if (data.length === 0) {
+      ElMessage.warning('当前筛选条件下没有记录')
+
+      return
+    }
+    downloadCsv(csvFilename('订单'), columns, data)
+  } finally {
+    exporting.value = false
+  }
 }
 
 // 详情抽屉
@@ -128,6 +162,7 @@ onMounted(list.load)
       <el-form-item>
         <el-button type="primary" native-type="submit">查询</el-button>
         <el-button @click="reset">重置</el-button>
+        <el-button :loading="exporting" @click="exportCsv">导出</el-button>
       </el-form-item>
     </el-form>
 

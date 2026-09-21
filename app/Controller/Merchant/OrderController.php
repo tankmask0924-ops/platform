@@ -40,6 +40,20 @@ class OrderController extends AbstractController
         return $this->orderService->list($this->currentMerchant(), $this->request->all());
     }
 
+    /**
+     * 导出（requirements.md 8.2「订单管理……导出」）：同一套筛选、不分页，返回 JSON
+     * 由前端拼 CSV，原因见 App\Service\Merchant\BalanceLogService::export()。
+     *
+     * 路由声明在 `{orderNo}` 之前，且 FastRoute 本身也是静态段优先于变量段匹配，
+     * 所以不会有订单号叫 "export" 的订单把这个接口挡掉（`testExportRouteIsNotShadowedByOrderNo`）。
+     */
+    #[Middleware(MerchantAuthMiddleware::class)]
+    #[GetMapping(path: 'export')]
+    public function export(): array
+    {
+        return $this->orderService->export($this->currentMerchant(), $this->request->all());
+    }
+
     #[Middleware(MerchantAuthMiddleware::class)]
     #[GetMapping(path: '{orderNo}')]
     public function show(string $orderNo): array

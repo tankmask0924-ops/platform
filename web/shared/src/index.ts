@@ -6,6 +6,8 @@ export { default as ChangePasswordDialog } from './components/ChangePasswordDial
 export { default as LoginPanel } from './components/LoginPanel.vue'
 export { default as StatusTag } from './components/StatusTag.vue'
 export { copyText } from './clipboard'
+export { csvFilename, downloadCsv } from './csv'
+export type { CsvColumn } from './csv'
 export { isHttpUrl, isNegative, money, percentToRate, ratePercent, splitLines } from './format'
 export { createHttp, ignoreHandledHttpErrors } from './http'
 export type { Http, HttpOptions } from './http'

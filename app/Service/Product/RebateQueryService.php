@@ -17,10 +17,12 @@ use App\Dao\MerchantLevelDao;
 use App\Dao\MerchantRebateDao;
 use App\Dao\OrderDao;
 use App\Dao\SystemSettingDao;
+use App\Export\ExportLimit;
 use App\Model\Merchant;
 use App\Model\MerchantRebate;
 use App\Service\AbstractService;
 use App\Service\Order\OrderResultApplier;
+use Hyperf\Database\Model\Collection;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
@@ -30,6 +32,7 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 商户看到的是订单、等级比例、金额、状态和预计到账时间；返佣基数（平台的商品返佣金额或
  * 供应商返佣）和比例来源属于平台内部数据，只在系统后台返回。
  * 汇总（summary）按当前筛选条件、不分页，按状态给出笔数和金额。
+ * 导出（requirements.md 7.2「支持筛选导出」）走 exportForMerchant()，见该方法注释。
  */
 class RebateQueryService extends AbstractService
 {
@@ -90,6 +93,32 @@ class RebateQueryService extends AbstractService
     }
 
     /**
+     * 商户导出用：同一套筛选条件下的全部返佣记录，不分页，列跟商户列表一样
+     * （`$internal = false`，不含返佣基数/比例来源/等级这些平台内部字段）。
+     * 为什么返回 JSON 而不是 CSV 文件、为什么要有行数上限，见
+     * App\Service\Merchant\BalanceLogService::export() 和 App\Export\ExportLimit 的注释。
+     *
+     * 系统后台的返佣导出暂时没做（requirements.md 8.3 的「返佣管理」没提导出，
+     * 只有 8.2 商户后台那一行明确要求）；真要加时把这个方法的 $internal 开成参数即可。
+     *
+     * @param array<string, mixed> $query 同 listForMerchant()，不含 page / per_page
+     * @return array{data: list<array<string, mixed>>, total: int}
+     */
+    public function exportForMerchant(Merchant $merchant, array $query): array
+    {
+        $filters = $this->normalizeFilters($query);
+        $filters['merchant_id'] = (int) $merchant->id;
+
+        $total = $this->rebateDao->countFiltered($filters);
+        ExportLimit::assertWithinLimit($total);
+
+        // 不走 list()：那里的 per_page 会被 MAX_PER_PAGE(100) 夹住，导出要的是全量
+        $rebates = $this->rebateDao->paginateFiltered($filters, 1, ExportLimit::MAX_ROWS);
+
+        return ['data' => $this->formatRows($rebates, false), 'total' => $total];
+    }
+
+    /**
      * @param array<string, mixed> $filters
      * @param array<string, mixed> $query
      * @return array<string, mixed>
@@ -100,6 +129,31 @@ class RebateQueryService extends AbstractService
         $perPage = min(self::MAX_PER_PAGE, max(1, (int) ($query['per_page'] ?? 15)));
 
         $rebates = $this->rebateDao->paginateFiltered($filters, $page, $perPage);
+
+        $summary = [];
+        $counts = $this->rebateDao->summarizeByStatus($filters);
+        foreach (self::STATUSES as $status) {
+            $summary[$status] = $counts[$status] ?? ['count' => 0, 'amount' => '0.00'];
+        }
+
+        return [
+            'data' => $this->formatRows($rebates, $internal),
+            'total' => $this->rebateDao->countFiltered($filters),
+            'page' => $page,
+            'per_page' => $perPage,
+            'summary' => $summary,
+        ];
+    }
+
+    /**
+     * 把一页（或导出时的全量）返佣行格式化成响应结构。关联的订单号、商户联系方式、
+     * 等级名都按整批 id 一次查出来再对应，不在循环里逐行查。
+     *
+     * @param Collection<int, MerchantRebate> $rebates
+     * @return list<array<string, mixed>>
+     */
+    private function formatRows(Collection $rebates, bool $internal): array
+    {
         $orders = $this->orderDao->newQuery()
             ->whereIn('id', $rebates->pluck('order_id')->unique()->all())
             ->get(['id', 'order_no', 'merchant_order_no', 'sale_price'])
@@ -109,53 +163,41 @@ class RebateQueryService extends AbstractService
             : null;
         $levels = $internal ? $this->levelDao->all()->keyBy('id') : null;
 
-        $summary = [];
-        $counts = $this->rebateDao->summarizeByStatus($filters);
-        foreach (self::STATUSES as $status) {
-            $summary[$status] = $counts[$status] ?? ['count' => 0, 'amount' => '0.00'];
-        }
-
-        return [
-            'data' => $rebates->map(function (MerchantRebate $rebate) use ($orders, $merchants, $levels, $internal) {
-                $order = $orders->get($rebate->order_id);
-                $row = [
-                    'id' => $rebate->id,
-                    'order_no' => $order?->order_no,
-                    'merchant_order_no' => $order?->merchant_order_no,
-                    'business_line' => $rebate->business_line,
-                    'sale_price' => $order?->sale_price,
-                    'rebate_rate' => $rebate->rebate_rate,
-                    'amount' => $rebate->amount,
-                    'status' => $rebate->status,
-                    'order_completed_at' => $rebate->order_completed_at?->toDateTimeString(),
-                    'due_at' => $rebate->due_at?->toDateTimeString(),
-                    'settled_at' => $rebate->settled_at?->toDateTimeString(),
-                    'voided_at' => $rebate->voided_at?->toDateTimeString(),
-                    'clawed_back_at' => $rebate->clawed_back_at?->toDateTimeString(),
-                    'created_at' => $rebate->created_at?->toDateTimeString(),
+        return $rebates->map(function (MerchantRebate $rebate) use ($orders, $merchants, $levels, $internal) {
+            $order = $orders->get($rebate->order_id);
+            $row = [
+                'id' => $rebate->id,
+                'order_no' => $order?->order_no,
+                'merchant_order_no' => $order?->merchant_order_no,
+                'business_line' => $rebate->business_line,
+                'sale_price' => $order?->sale_price,
+                'rebate_rate' => $rebate->rebate_rate,
+                'amount' => $rebate->amount,
+                'status' => $rebate->status,
+                'order_completed_at' => $rebate->order_completed_at?->toDateTimeString(),
+                'due_at' => $rebate->due_at?->toDateTimeString(),
+                'settled_at' => $rebate->settled_at?->toDateTimeString(),
+                'voided_at' => $rebate->voided_at?->toDateTimeString(),
+                'clawed_back_at' => $rebate->clawed_back_at?->toDateTimeString(),
+                'created_at' => $rebate->created_at?->toDateTimeString(),
+            ];
+            if ($internal) {
+                $merchant = $merchants->get($rebate->merchant_id);
+                $row += [
+                    'order_id' => $rebate->order_id,
+                    'merchant_id' => $rebate->merchant_id,
+                    'merchant_phone' => $merchant?->phone,
+                    'merchant_email' => $merchant?->email,
+                    'level_id' => $rebate->level_id,
+                    'level_name' => $levels->get($rebate->level_id)?->name,
+                    'rebate_base' => $rebate->rebate_base,
+                    'rebate_base_source' => $rebate->rebate_base_source,
+                    'rebate_rate_source' => $rebate->rebate_rate_source,
                 ];
-                if ($internal) {
-                    $merchant = $merchants->get($rebate->merchant_id);
-                    $row += [
-                        'order_id' => $rebate->order_id,
-                        'merchant_id' => $rebate->merchant_id,
-                        'merchant_phone' => $merchant?->phone,
-                        'merchant_email' => $merchant?->email,
-                        'level_id' => $rebate->level_id,
-                        'level_name' => $levels->get($rebate->level_id)?->name,
-                        'rebate_base' => $rebate->rebate_base,
-                        'rebate_base_source' => $rebate->rebate_base_source,
-                        'rebate_rate_source' => $rebate->rebate_rate_source,
-                    ];
-                }
+            }
 
-                return $row;
-            })->values()->all(),
-            'total' => $this->rebateDao->countFiltered($filters),
-            'page' => $page,
-            'per_page' => $perPage,
-            'summary' => $summary,
-        ];
+            return $row;
+        })->values()->all();
     }
 
     /**

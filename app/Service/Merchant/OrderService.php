@@ -15,6 +15,7 @@ namespace App\Service\Merchant;
 use App\Dao\MerchantNotifyLogDao;
 use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
+use App\Export\ExportLimit;
 use App\Model\Merchant;
 use App\Model\MerchantNotifyLog;
 use App\Model\Order;
@@ -26,8 +27,7 @@ use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
 /**
- * 商户管理后台「订单管理」（requirements.md 8.2）：列表、详情（含回调记录）、手动重推回调。
- * 导出不在本次范围内（同"资金流水"一行的处理）。
+ * 商户管理后台「订单管理」（requirements.md 8.2）：列表、详情（含回调记录）、手动重推回调、导出。
  *
  * - 只查当前登录商户自己的订单，merchant_id 一律来自登录态。
  * - 商户看到的就是开放 API 给的那一份：不含供应商、成本价；异常单显示为处理中
@@ -89,6 +89,30 @@ class OrderService extends AbstractService
             'total' => $this->orderDao->countFiltered($filters),
             'page' => $page,
             'per_page' => $perPage,
+        ];
+    }
+
+    /**
+     * 导出用：同一套筛选条件下的全部订单，不分页。列跟列表一模一样（共用
+     * formatOrder()），同样不含供应商和成本价。为什么返回 JSON 而不是 CSV 文件、
+     * 为什么要有行数上限，见 App\Service\Merchant\BalanceLogService::export()
+     * 和 App\Export\ExportLimit 的注释。
+     *
+     * @param array<string, mixed> $query 同 list()，不含 page / per_page
+     * @return array{data: list<array<string, mixed>>, total: int}
+     */
+    public function export(Merchant $merchant, array $query): array
+    {
+        $filters = $this->normalizeFilters($query);
+        $filters['merchant_id'] = (int) $merchant->id;
+
+        $total = $this->orderDao->countFiltered($filters);
+        ExportLimit::assertWithinLimit($total);
+
+        return [
+            'data' => $this->orderDao->paginateFiltered($filters, 1, ExportLimit::MAX_ROWS)
+                ->map(fn (Order $order) => $this->formatOrder($order))->values()->all(),
+            'total' => $total,
         ];
     }
 

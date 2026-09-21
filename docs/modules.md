@@ -294,11 +294,30 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 服务开通：查看可开通业务线 / 提交申请 / 查看状态 | 一期 | ✅ `App\Controller\Merchant\SubscriptionController` | ✅ `App\Service\Merchant\SubscriptionService` | `views/ServiceView.vue` ✅ 已在浏览器看过列表（申请动作靠接口测试覆盖） | ✅ `GET /merchant/subscriptions`（四条业务线及开通状态，电影票/快递 `available=false` 暂未开放）、`POST /merchant/subscriptions`（`business_line`）：只有 active 商户能申请；每个商户每条业务线一行（表上 `(merchant_id, business_line)` 唯一），驳回后重新申请是把这一行改回 pending；审核中/已开通重复申请 409。**开放 API 门槛**：`SubscriptionService::isSubscribed()`，没开通的业务线商品列表和下单都返回新错误码 42007「未开通该业务线」（下单时放在幂等重放之后、欠款拦截之前，已下成功的单重提仍原样返回）。测试 `test/Cases/Merchant/SubscriptionControllerTest.php`，开放 API 侧见 `ProductControllerTest`/`RechargeOrderPlacementServiceTest` 新增用例（其余下单测试的商户 fixture 都补了已开通的话费/卡券） |
 | 商品价格：售价与自己等级的返佣展示 | 一期 | ✅ `App\Controller\Merchant\ProductController` | ✅ `App\Service\Merchant\ProductPriceService` | `views/ProductPriceView.vue` ✅（按业务线分页签；在浏览器看过未开通/暂未开放两种状态，有商品的表格靠接口测试覆盖） | ✅ `GET /merchant/products?business_line=`：`available`（平台是否开放）、`subscribed`（本商户是否开通）、`level_rate`（本等级在该业务线的默认比例，电影票/快递就靠它展示）、`data`（只有已开通的话费/卡券才返回在架商品：面值、售价、每单返佣，返佣跟开放 API 同一个 `RebateCalculator`，含商品单独覆盖）。不返回返佣基数和比例来源。商品枚举文案（运营商/到账速度/卡券类型）从 admin 挪到 `web/shared` 共用。测试 `test/Cases/Merchant/ProductControllerTest.php` |
 | 充值：提交申请 / 查看记录 | 一期 | ✅ `App\Controller\Merchant\RechargeRequestController` | ✅ `App\Service\Merchant\RechargeRequestService` | `views/finance/RechargeView.vue` ✅ 已联调（2026-09-18）（凭证只能填图片链接，上传接口未做） | ✅ |
-| 资金流水：查询与导出 | 一期 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | `views/finance/BalanceLogView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"（`GET /merchant/balance-logs`，支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明），"导出"不在本次任务范围内 |
-| 返佣：明细查询与导出 | 一期 | ✅ `App\Controller\Merchant\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/finance/RebateView.vue` ✅ 已联调（2026-09-18） | ✅ 只做"查询"：`GET /merchant/rebates`（status / business_line / order_no / created_from / created_to 筛选，最新在前），返回订单、业务线、订单金额、等级比例、返佣金额、状态、订单完成时间、预计到账和到账/作废/扣回时间，外加按当前筛选条件的分状态汇总 `summary`（笔数 + 金额，不分页）；返佣基数及来源、比例来源、等级属于平台内部数据，不返回。导出不在本次范围。测试 `test/Cases/Merchant/RebateControllerTest.php` |
-| 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | 一期 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | `views/order/OrderListView.vue` ✅ 已联调（2026-09-18）（列表可直接申请售后） | 🔨 除导出外已完成：`GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价。测试 `test/Cases/Merchant/OrderControllerTest.php` |
+| 资金流水：查询与导出 | 一期 | ✅ `App\Controller\Merchant\BalanceLogController` | ✅ `App\Service\Merchant\BalanceLogService` | `views/finance/BalanceLogView.vue` ✅ 已联调（2026-09-18；导出 2026-09-21） | ✅ 查询 `GET /merchant/balance-logs`（支持 `?type=` 筛选、分页，见第 8 节"充值与调账"行下方的说明）；导出 `GET /merchant/balance-logs/export`（同一套筛选、不分页），见下方「三处导出」说明 |
+| 返佣：明细查询与导出 | 一期 | ✅ `App\Controller\Merchant\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/finance/RebateView.vue` ✅ 已联调（2026-09-18；导出 2026-09-21） | ✅ 查询：`GET /merchant/rebates`（status / business_line / order_no / created_from / created_to 筛选，最新在前），返回订单、业务线、订单金额、等级比例、返佣金额、状态、订单完成时间、预计到账和到账/作废/扣回时间，外加按当前筛选条件的分状态汇总 `summary`（笔数 + 金额，不分页）；返佣基数及来源、比例来源、等级属于平台内部数据，不返回。导出 `GET /merchant/rebates/export`（同一套筛选、不分页、不带 `summary`），见下方「三处导出」说明。测试 `test/Cases/Merchant/RebateControllerTest.php` |
+| 订单管理：列表 / 详情 / 回调记录与手动重推 / 导出 | 一期 | ✅ `App\Controller\Merchant\OrderController` | ✅ `App\Service\Merchant\OrderService` | `views/order/OrderListView.vue` ✅ 已联调（2026-09-18；导出 2026-09-21）（列表可直接申请售后） | ✅ `GET /merchant/orders`（status / business_line / order_no / merchant_order_no / created_from / created_to 筛选，最新在前）、`GET /merchant/orders/{orderNo}`（字段同开放 API 订单查询，含明文卡密 + 回调记录）、`POST /merchant/orders/{orderNo}/renotify`（只允许已有最终结果的订单，60 秒内有过回调记录返回 429）；异常单显示为处理中，按 `status=processing` 筛选时包含异常单，不接受 `status=abnormal`；不含供应商和成本价；导出 `GET /merchant/orders/export`（同一套筛选、不分页，列同列表），见下方「三处导出」说明。测试 `test/Cases/Merchant/OrderControllerTest.php` |
 | 售后：未到账争议提交与查看 | 一期 | ✅ `App\Controller\Merchant\DisputeController` | ✅ `App\Service\Merchant\DisputeService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | ✅ `POST /merchant/disputes`（`order_no`）、`GET /merchant/disputes`（`status` 筛选）、`GET /merchant/disputes/{id}`；只接受话费、卡券成功订单，订单成功后 `dispute_deadline_days`（默认 7）天内，一笔订单只能提交一次（被驳回后不能再提）；处理结果、说明和凭证商户可见。表里没有商户描述字段，提交时只选订单。见第 8 节"售后处理"说明，测试 `test/Cases/Merchant/DisputeControllerTest.php` |
 | 接口文档：在线查看 / 下载签名示例 | 一期 | ✅ `App\Controller\Merchant\ApiDocController` | ➖ | `views/ApiDocView.vue` ✅ 已在浏览器看过各页签、错误码表和下载链接 | ✅ 文档正文在前端：接入流程、接口地址（默认当前域名 + `VITE_API_BASE_URL` + `/open-api`，开放 API 另有域名时配 `VITE_OPEN_API_BASE_URL`）、公共参数与签名规则（带固定参数的示例签名）、已上线的 5 个接口（余额、话费商品列表、话费下单、卡券下单、订单查询）的参数和返回、结果回调（字段、验签、`success` 应答、重试间隔）。错误码表由 `GET /merchant/api-docs/error-codes` 直接读 `ErrorCode::catalog()`，新增错误码不用改文档。签名示例放在 `web/merchant/public/sign-examples/`（PHP、Java、Python、Node.js，含签名、回调验签和查余额调用），四种语言对固定参数的输出、以及对服务端 `SignatureSigner` 签出的回调（值里带 `&`、`=`）的验签都已实际跑过、结果一致；Go 等其它语言没有运行环境验证，暂不提供。电影票、快递接口上线时要同步补文档。测试 `test/Cases/Merchant/ApiDocControllerTest.php` |
+
+
+> 「三处导出」（requirements.md 7.2 资金流水 / 返佣、8.2 订单，2026-09-21）：`GET /merchant/balance-logs/export`、
+> `GET /merchant/rebates/export`、`GET /merchant/orders/export`，筛选参数跟各自的列表接口完全一样，只是不接受
+> `page`/`per_page`，一次返回 `{data, total}` 全量。
+> - **导出接口返回 JSON，CSV 在前端拼**（`web/shared/src/csv.ts` 的 `downloadCsv`）：枚举值的中文名（充值/冻结/待到账……）
+>   只在 `web/shared/src/labels.ts` 存一份，后端不用再抄一份中文标签跟着前端一起漂，导出的列和页面上看到的列因此天然一致。
+>   代价是前端要把全部行拿进内存，由行数上限兜底。CSV 带 UTF-8 BOM（否则 Excel 按 GBK 猜编码，中文全是乱码），
+>   `=`/`+`/`-`/`@` 开头的单元格前面补单引号（Excel 会把它们当公式执行，导出的内容里有商户自己填的备注）。
+> - **行数上限 `App\Export\ExportLimit::MAX_ROWS` = 10000，超了返回 422 而不是截断**：导出接口不分页，Swoole worker
+>   常驻内存、多个请求共用进程，无上限的全量导出最容易把 worker 拖垮；而截断会安静地少给数据，商户拿去对账时发现不了，
+>   比导不出来严重得多。要导更多应该走离线任务。
+> - 返佣导出复用 `RebateQueryService`，本次把行格式化从 `list()` 抽成 `formatRows()` 两边共用——导出不能走 `list()`，
+>   那里的 `per_page` 会被 `MAX_PER_PAGE`(100) 夹住。系统后台的返佣导出没做（8.3 没要求，只有 8.2 商户后台明确要求）。
+> - `/merchant/orders/export` 跟 `/merchant/orders/{orderNo}` 同前缀，靠 FastRoute 静态段优先于变量段匹配，
+>   有专门的用例守着（`testExportRouteIsNotShadowedByOrderNo`）。
+> - 测试 `test/Cases/Merchant/ExportControllerTest.php`；三个按钮已在浏览器点过（2026-09-21），核对过导出的
+>   CSV 字节：开头是 UTF-8 BOM（EF BB BF）、行数 = 表头 + 全部数据行（资金流水 15 行、订单 8 行，都超过或等于一页）、
+>   枚举列是中文（冻结/扣款/话费/处理中）、没有记录时不下载空文件只提示。
 
 ---
 
@@ -599,10 +618,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 3 | 0 | 2 |
 | 开放 API 接口 | 15 | 6 | 0 | 9 |
-| 商户管理后台 | 16 | 15 | 1 | 0 |
+| 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 12 | 3 | 4 |
 | 异步任务与定时任务 | 10 | 6 | 0 | 4 |
-| **合计** | **106** | **61** | **4** | **41** |
+| **合计** | **106** | **62** | **3** | **41** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -626,8 +645,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 商户后台：注册、开发设置（密钥 + IP 白名单）、充值申请、资金流水、订单、售后争议
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
-   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成，导出未做）、~~接口文档~~（已完成）
+   - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成）、~~接口文档~~（已完成）
    - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、~~商品同步接入与余额监控、调用日志~~（已完成）、~~供应商统计~~（已完成）
-   - 商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算
+   - ~~商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算~~（已完成，前端计算）
+   - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
+   - 一期只剩：系统后台「系统设置」页面登录联调；后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
 4. 二期：卡券相关行、熔断、告警、对账、财务报表，每个功能接口 + 页面一起做完再做下一个
 5. 三期：第 3、4 节云洋/芒果驱动、快递与电影票相关的第 6/7/8 节行、沙箱环境

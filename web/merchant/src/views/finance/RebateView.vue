@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import {
   businessLineLabels,
+  type CsvColumn,
+  csvFilename,
+  downloadCsv,
   labelOf,
   money,
   ratePercent,
@@ -9,6 +12,7 @@ import {
   toOptions,
   usePagedList,
 } from '@platform/shared'
+import { ElMessage } from 'element-plus'
 import { onMounted, ref } from 'vue'
 import { type Rebate, rebateApi, type RebateSummary } from '@/api/merchant'
 
@@ -44,6 +48,36 @@ function statusTime(row: Rebate): string {
   const times: Record<string, string | null> = { settled: row.settled_at, voided: row.voided_at, clawed_back: row.clawed_back_at }
   const time = times[row.status]
   return time ?? '-'
+}
+
+// 导出的列跟下面表格一一对应
+const columns: CsvColumn<Rebate>[] = [
+  { header: '平台订单号', value: (r) => r.order_no },
+  { header: '商户订单号', value: (r) => r.merchant_order_no },
+  { header: '业务线', value: (r) => labelOf(businessLineLabels, r.business_line) },
+  { header: '订单金额', value: (r) => r.sale_price },
+  { header: '返佣比例', value: (r) => ratePercent(r.rebate_rate) },
+  { header: '返佣金额', value: (r) => r.amount },
+  { header: '状态', value: (r) => labelOf(rebateStatusLabels, r.status) },
+  { header: '订单完成时间', value: (r) => r.order_completed_at },
+  { header: '预计到账时间', value: (r) => r.due_at },
+  { header: '状态发生时间', value: (r) => statusTime(r) },
+]
+
+const exporting = ref(false)
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const { data } = await rebateApi.export({ ...filters })
+    if (data.length === 0) {
+      ElMessage.warning('当前筛选条件下没有记录')
+
+      return
+    }
+    downloadCsv(csvFilename('返佣明细'), columns, data)
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(list.load)
@@ -88,6 +122,7 @@ onMounted(list.load)
       <el-form-item>
         <el-button type="primary" native-type="submit">查询</el-button>
         <el-button @click="reset">重置</el-button>
+        <el-button :loading="exporting" @click="exportCsv">导出</el-button>
       </el-form-item>
     </el-form>
 

@@ -22,7 +22,7 @@ use Hyperf\HttpServer\Annotation\GetMapping;
 use Hyperf\HttpServer\Annotation\Middleware;
 
 /**
- * 商户管理后台（web/merchant）「资金流水：查询」（requirements.md 4.4/4.5、7.2），
+ * 商户管理后台（web/merchant）「资金流水：查询与导出」（requirements.md 4.4/4.5、7.2），
  * docs/modules.md 第 7 节。结构模板取自
  * App\Controller\Merchant\RechargeRequestController：方法级
  * `#[Middleware(MerchantAuthMiddleware::class)]`，商户身份从
@@ -48,6 +48,17 @@ class BalanceLogController extends AbstractController
         $type = $this->request->input('type');
 
         return $this->balanceLogService->list($this->currentMerchant(), $page, $perPage, $type);
+    }
+
+    /**
+     * 导出（requirements.md 7.2「查询与导出」）：同一套筛选、不分页，
+     * 返回 JSON 由前端拼 CSV，原因见 BalanceLogService::export()。
+     */
+    #[Middleware(MerchantAuthMiddleware::class)]
+    #[GetMapping(path: 'export')]
+    public function export(): array
+    {
+        return $this->balanceLogService->export($this->currentMerchant(), $this->request->input('type'));
     }
 
     private function currentMerchant(): Merchant

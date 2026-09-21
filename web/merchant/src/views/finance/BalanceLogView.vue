@@ -1,11 +1,40 @@
 <script setup lang="ts">
-import { balanceLogTypeLabels, StatusTag, toOptions, usePagedList } from '@platform/shared'
-import { onMounted } from 'vue'
+import { balanceLogTypeLabels, type CsvColumn, csvFilename, downloadCsv, labelOf, StatusTag, toOptions, usePagedList } from '@platform/shared'
+import { ElMessage } from 'element-plus'
+import { onMounted, ref } from 'vue'
 import { type BalanceLog, balanceLogApi } from '@/api/merchant'
 
 const list = usePagedList<BalanceLog, { type: string }>(balanceLogApi.list, { type: '' })
 const { rows, total, page, perPage, loading, filters } = list
 const typeOptions = toOptions(balanceLogTypeLabels)
+
+// 导出的列跟上面表格一一对应
+const columns: CsvColumn<BalanceLog>[] = [
+  { header: '时间', value: (r) => r.created_at },
+  { header: '类型', value: (r) => labelOf(balanceLogTypeLabels, r.type) },
+  { header: '金额', value: (r) => r.amount },
+  { header: '可用余额（前）', value: (r) => r.available_before },
+  { header: '可用余额（后）', value: (r) => r.available_after },
+  { header: '冻结金额（前）', value: (r) => r.frozen_before },
+  { header: '冻结金额（后）', value: (r) => r.frozen_after },
+  { header: '说明', value: (r) => r.reason },
+]
+
+const exporting = ref(false)
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const { data } = await balanceLogApi.export({ type: filters.type })
+    if (data.length === 0) {
+      ElMessage.warning('当前筛选条件下没有记录')
+
+      return
+    }
+    downloadCsv(csvFilename('资金流水'), columns, data)
+  } finally {
+    exporting.value = false
+  }
+}
 
 onMounted(list.load)
 </script>
@@ -17,6 +46,9 @@ onMounted(list.load)
         <el-select v-model="filters.type" clearable placeholder="全部" style="width: 160px" @change="list.search">
           <el-option v-for="o in typeOptions" :key="o.value" :value="o.value" :label="o.label" />
         </el-select>
+      </el-form-item>
+      <el-form-item>
+        <el-button :loading="exporting" @click="exportCsv">导出</el-button>
       </el-form-item>
     </el-form>
 
