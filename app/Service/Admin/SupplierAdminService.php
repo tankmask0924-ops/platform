@@ -23,6 +23,8 @@ use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
+use Hyperf\Logger\LoggerFactory;
+use Throwable;
 
 /**
  * 系统管理后台（web/admin）「供应商管理 - 配置 CRUD」（requirements.md 6.3），
@@ -92,6 +94,9 @@ class SupplierAdminService extends AbstractService
 
     #[Inject]
     protected DriverFactory $queueDriverFactory;
+
+    #[Inject]
+    protected LoggerFactory $loggerFactory;
 
     /**
      * 列表接口不返回 config（哪怕是脱敏后的）——列表场景只需要知道「这是哪个供应商、
@@ -296,13 +301,17 @@ class SupplierAdminService extends AbstractService
      */
     private function format(Supplier $supplier): array
     {
+        $config = $this->readConfig($supplier);
+
         return [
             'id' => $supplier->id,
             'name' => $supplier->name,
             'code' => $supplier->code,
             'business_line' => $supplier->business_line,
             'driver' => $supplier->driver,
-            'config' => $this->maskConfig(json_decode($this->encryptor->decrypt($supplier->config), true)),
+            'config' => $config,
+            // 配置解不开时为 true，前端据此提示"重新填写配置"，见 readConfig()
+            'config_unreadable' => $config === null,
             'status' => $supplier->status,
             'balance' => $supplier->balance,
             'balance_synced_at' => $supplier->balance_synced_at?->toDateTimeString(),
@@ -317,6 +326,50 @@ class SupplierAdminService extends AbstractService
             'created_at' => $supplier->created_at?->toDateTimeString(),
             'updated_at' => $supplier->updated_at?->toDateTimeString(),
         ];
+    }
+
+    /**
+     * 解密并脱敏 config，解不开时返回 null（详情接口据此给出 `config_unreadable: true`）。
+     *
+     * **为什么要降级而不是让异常冒到 500**：库里存在早期测试/调试留下的供应商行，它们的
+     * `config` 是用别的 `APP_ENCRYPTION_KEY` 加密的（或干脆是垃圾数据），当前密钥解不开。
+     * 原来 format() 无条件 decrypt()，一条解不开的行会让整个详情接口 500——页面上的名称、
+     * 状态、余额、回调地址全都打不开，而运营要做的恰恰是进这个页面把配置重新填一遍，
+     * 等于被自己的坏数据锁在门外。轮换密钥时同样会出现这种行。
+     * `App\Service\Supplier\SupplierBalanceService::refresh()` 那条路径早就是捕获降级的
+     * （日志里 `supplier balance query failed ... Invalid ciphertext.` 就是它），
+     * 这里只是把详情接口补齐到同一个策略。
+     *
+     * **不静默吞掉**：每次解不开都记一条 error 日志（只记 supplier_id 和异常消息，
+     * 不记密文本身），跟余额刷新用同一个 `supplier` 渠道。
+     *
+     * 解密成功但 JSON 解不出对象的情况（历史脏数据）走同一条降级路径：对调用方来说
+     * "配置读不出来、需要重新填"是同一件事，没必要分两种错误码。
+     *
+     * @return null|array<string, mixed>
+     */
+    private function readConfig(Supplier $supplier): ?array
+    {
+        try {
+            $decoded = json_decode($this->encryptor->decrypt($supplier->config), true);
+        } catch (Throwable $e) {
+            $this->loggerFactory->get('supplier')->error('supplier config decrypt failed', [
+                'supplier_id' => $supplier->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if (! is_array($decoded)) {
+            $this->loggerFactory->get('supplier')->error('supplier config is not a JSON object', [
+                'supplier_id' => $supplier->id,
+            ]);
+
+            return null;
+        }
+
+        return $this->maskConfig($decoded);
     }
 
     /**

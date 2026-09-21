@@ -128,6 +128,15 @@ onMounted(() => {
 <template>
   <div v-loading="loading" class="page">
     <template v-if="supplier">
+      <el-alert
+        v-if="supplier.config_unreadable"
+        type="error"
+        show-icon
+        :closable="false"
+        title="接口配置无法解密，请重新填写"
+        description="这条供应商的接口配置是用别的加密密钥存的（或数据已损坏），当前密钥读不出来。下单、查余额、同步商品都会失败，需要在供应商列表点「编辑」把配置整体重新填一遍。"
+      />
+
       <el-card shadow="never">
         <template #header>
           <div class="card-header">

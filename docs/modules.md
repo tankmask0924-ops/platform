@@ -441,6 +441,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > `app_secret` 生成时明文回显一次更严格，见 requirements.md 6.3）。**范围之外**：
 > 不建 `/notify/{code}` 回调路由本身（第 1 节「供应商回调入口与验签框架」仍是
 > ⬜，只保证 `code` 唯一且创建后不可改，给它留好稳定标识）；不把这里建的
+> **config 解不开时详情接口降级**（2026-09-21）：库里有早期测试/调试留下的供应商行，`config` 是用别的
+> `APP_ENCRYPTION_KEY` 加密的（轮换密钥后也会出现同样的行），当前密钥解不开。原来 `format()` 无条件
+> `decrypt()`，一条坏行让整个详情接口 500——页面上的名称、状态、余额、回调地址全打不开，而运营要做的恰恰是
+> 进这个页面把配置重新填一遍，等于被坏数据锁在门外（余额刷新那条路径早就是捕获降级的，只有详情接口没有）。
+> 现在走 `SupplierAdminService::readConfig()`：解不开（或解开后不是 JSON 对象）时 `config` 返回 `null`、
+> 多返回 `config_unreadable: true`，并记一条 error 日志（`supplier config decrypt failed`，只记 supplier_id
+> 和异常消息，不记密文）。前端供应商详情页顶部红色提示「接口配置无法解密，请重新填写」，列表页的编辑弹窗
+> 隐藏"当前配置"、强制打开重填开关。测试见 `SupplierControllerTest::testDetailDegradesGracefullyWhenConfigCannotBeDecrypted`
+> 等三个用例。
+>
 > `Supplier` 行接入实际下单路由去构造 `KasushouDriver` 实例（订单路由，6.5 节，
 > 更大的单独工作）；`balance`/`balance_synced_at` 在这个 API 里只读，由未来的
 > 余额同步任务写入。测试见 `test/Cases/Admin/SupplierControllerTest.php`。

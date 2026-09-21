@@ -75,6 +75,8 @@ async function openDialog(row?: Supplier) {
   if (row) {
     const detail = await supplierApi.detail(row.id)
     editing.value = detail
+    // 配置解不开时没有"保留原配置"这个选项，只能重填
+    editConfig.value = detail.config_unreadable
     Object.assign(form, {
       name: detail.name,
       code: detail.code,
@@ -205,14 +207,23 @@ onMounted(list.load)
 
       <el-divider content-position="left">接口配置（加密存储）</el-divider>
       <template v-if="editing">
-        <el-form-item label="当前配置">
+        <el-alert
+          v-if="editing.config_unreadable"
+          type="error"
+          show-icon
+          :closable="false"
+          class="block"
+          title="当前配置无法解密，必须整体重新填写"
+          description="这条供应商的接口配置是用别的加密密钥存的（或数据已损坏）。在下面把配置重新填一遍保存即可恢复。"
+        />
+        <el-form-item v-else label="当前配置">
           <div class="config">
-            <div v-for="(value, key) in editing.config" :key="key">
+            <div v-for="(value, key) in editing.config ?? {}" :key="key">
               <span class="muted">{{ key }}：</span>{{ value }}
             </div>
           </div>
         </el-form-item>
-        <el-form-item label="重新填写配置">
+        <el-form-item v-if="!editing.config_unreadable" label="重新填写配置">
           <el-switch v-model="editConfig" />
           <span class="muted gap-left">配置整体替换，密钥需要重新输入</span>
         </el-form-item>
@@ -266,6 +277,10 @@ onMounted(list.load)
 .gap-left {
   margin-left: 8px;
   font-size: 12px;
+}
+
+.block {
+  margin-bottom: 12px;
 }
 
 .config {

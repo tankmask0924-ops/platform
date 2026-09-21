@@ -225,7 +225,8 @@ export interface Supplier {
 
 export interface SupplierDetail extends Supplier {
   /** 敏感字段已打码为 ****** */
-  config: Record<string, unknown>
+  /** 密钥字段已脱敏成 ****** ；config 解不开时为 null，见 config_unreadable */
+  config: Record<string, unknown> | null
   contact: string | null
   settlement_info: string | null
   remark: string | null
@@ -236,6 +237,8 @@ export interface SupplierDetail extends Supplier {
   goods_notify_url: string
   /** 没配 SUPPLIER_NOTIFY_BASE_URL 时为 false，回调地址是本机地址，供应商访问不到 */
   notify_base_url_configured: boolean
+  /** 接口配置用当前密钥解不开（换过密钥、或历史脏数据），只能整体重新填写 */
+  config_unreadable: boolean
 }
 
 export interface SupplierCallLog {

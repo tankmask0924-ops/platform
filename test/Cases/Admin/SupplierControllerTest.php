@@ -204,6 +204,67 @@ class SupplierControllerTest extends HttpTestCase
         $this->assertSame('******', $body['config']['api_key']);
     }
 
+    /**
+     * 库里存在早期测试/调试留下的供应商行，`config` 是用别的 APP_ENCRYPTION_KEY 加密的
+     * （轮换密钥后也会出现同样的行），当前密钥解不开。这种行必须还能打开详情页——
+     * 运营要做的恰恰是进去把配置重新填一遍，不能让一条坏数据把整页锁死。
+     * 降级逻辑见 App\Service\Admin\SupplierAdminService::readConfig()。
+     */
+    public function testDetailDegradesGracefullyWhenConfigCannotBeDecrypted()
+    {
+        $supplier = $this->createSupplier();
+        // 绕开 Encryptor 直接写一段当前密钥解不开的密文
+        $supplier->forceFill(['config' => base64_encode(random_bytes(64))])->save();
+        $token = $this->loginAs($this->createAdminWithPermissions([self::VIEW_PERMISSION_CODE]));
+
+        $response = $this->client->request('GET', '/admin/suppliers/' . $supplier->id, [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $this->assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertTrue($body['config_unreadable']);
+        $this->assertNull($body['config']);
+        // 页面其它部分照常可用，运营才能进来重新填配置
+        $this->assertSame($supplier->name, $body['name']);
+        $this->assertSame($supplier->code, $body['code']);
+        $this->assertArrayHasKey('order_notify_url', $body);
+    }
+
+    /**
+     * 解密成功但内容不是 JSON 对象的历史脏数据，走同一条降级路径。
+     */
+    public function testDetailDegradesWhenConfigIsNotAJsonObject()
+    {
+        $supplier = $this->createSupplier();
+        $supplier->forceFill(['config' => make(Encryptor::class)->encrypt('not json at all')])->save();
+        $token = $this->loginAs($this->createAdminWithPermissions([self::VIEW_PERMISSION_CODE]));
+
+        $response = $this->client->request('GET', '/admin/suppliers/' . $supplier->id, [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $this->assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+        $this->assertTrue(json_decode((string) $response->getBody(), true)['config_unreadable']);
+    }
+
+    /**
+     * 正常的行不该被误标成"解不开"。
+     */
+    public function testDetailMarksReadableConfigAsReadable()
+    {
+        $supplier = $this->createSupplier(['config' => ['base_url' => 'https://api.example.com']]);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::VIEW_PERMISSION_CODE]));
+
+        $response = $this->client->request('GET', '/admin/suppliers/' . $supplier->id, [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertFalse($body['config_unreadable']);
+        $this->assertSame('https://api.example.com', $body['config']['base_url']);
+    }
+
     public function testDetailForNonexistentSupplierReturns404()
     {
         $token = $this->loginAs($this->createAdminWithPermissions([self::VIEW_PERMISSION_CODE]));
