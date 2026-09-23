@@ -14,6 +14,7 @@ namespace HyperfTest\Cases\Merchant;
 
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
+use App\Model\Order;
 use App\Service\Merchant\BalanceService;
 use HyperfTest\HttpTestCase;
 
@@ -40,8 +41,12 @@ class BalanceLogControllerTest extends HttpTestCase
 
     private array $merchantIds = [];
 
+    private array $orderIds = [];
+
     protected function tearDown(): void
     {
+        Order::destroy($this->orderIds);
+        $this->orderIds = [];
         foreach ($this->merchantIds as $id) {
             MerchantBalanceLog::where('merchant_id', $id)->delete();
             Merchant::destroy($id);
@@ -72,6 +77,43 @@ class BalanceLogControllerTest extends HttpTestCase
         $types = array_column($body['data'], 'type');
         // 最近发生的排最前面：最后一次调用是 adjust，第一次是 recharge。
         $this->assertSame(['adjustment', 'freeze', 'recharge'], $types);
+    }
+
+    /**
+     * 每行带上关联订单的平台单号、商户单号和业务线；按平台单号或商户单号都能筛出这笔订单的全部流水；
+     * 别的商户的单号筛不出东西（也不报错，不能拿来探测单号）。
+     */
+    public function testRowsCarryTheOrderAndCanBeFilteredByOrderNo()
+    {
+        $merchant = $this->createMerchant();
+        $other = $this->createMerchant();
+        $token = $this->loginAndGetToken($merchant);
+        $balanceService = make(BalanceService::class);
+        $balanceService->recharge($merchant->id, '100.00', '首次充值');
+        $order = $this->createOrder($merchant);
+        $otherOrder = $this->createOrder($other);
+        $balanceService->freeze($merchant->id, $order->id, '10.00');
+        $balanceService->deduct($merchant->id, $order->id, '10.00');
+        $balanceService->adjust($merchant->id, '3.00', '快递理赔：订单 ' . $order->order_no, null, (int) $order->id);
+
+        $all = $this->get($token, []);
+        $this->assertSame(4, $all['total']);
+        $byType = array_column($all['data'], null, 'type');
+        $this->assertSame($order->order_no, $byType['deduct']['order_no']);
+        $this->assertSame($order->merchant_order_no, $byType['deduct']['merchant_order_no']);
+        $this->assertSame('express', $byType['deduct']['business_line']);
+        $this->assertSame($order->order_no, $byType['adjustment']['order_no'], '理赔调账挂在订单上');
+        $this->assertNull($byType['recharge']['order_no']);
+
+        $this->assertSame(['adjustment', 'deduct', 'freeze'], array_column($this->get($token, ['order_no' => $order->order_no])['data'], 'type'));
+        $this->assertSame(3, $this->get($token, ['order_no' => $order->merchant_order_no])['total']);
+        $this->assertSame(0, $this->get($token, ['order_no' => $otherOrder->order_no])['total']);
+
+        $export = $this->client->request('GET', '/merchant/balance-logs/export', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'query' => ['order_no' => $order->order_no],
+        ]);
+        $this->assertSame(3, json_decode((string) $export->getBody(), true)['total']);
     }
 
     public function testTypeFilterOnlyReturnsMatchingRows()
@@ -147,6 +189,36 @@ class BalanceLogControllerTest extends HttpTestCase
         $response = $this->client->request('GET', '/merchant/balance-logs');
 
         $this->assertSame(401, $response->getStatusCode());
+    }
+
+    private function get(string $token, array $query): array
+    {
+        $response = $this->client->request('GET', '/merchant/balance-logs', [
+            'headers' => ['Authorization' => 'Bearer ' . $token],
+            'query' => $query,
+        ]);
+        $this->assertSame(200, $response->getStatusCode());
+
+        return json_decode((string) $response->getBody(), true);
+    }
+
+    private function createOrder(Merchant $merchant): Order
+    {
+        $order = Order::create([
+            'order_no' => 'E' . date('YmdHis') . random_int(100000, 999999),
+            'merchant_id' => $merchant->id,
+            'merchant_order_no' => 'MO-' . uniqid('', true),
+            'business_line' => 'express',
+            'status' => 'success',
+            'sale_price' => '10.00',
+            'cost_price' => '8.00',
+            'frozen_amount' => '10.00',
+            'refunded_amount' => '0.00',
+            'callback_url' => 'https://merchant.example.com/notify',
+        ]);
+        $this->orderIds[] = $order->id;
+
+        return $order;
     }
 
     private function createMerchant(): Merchant

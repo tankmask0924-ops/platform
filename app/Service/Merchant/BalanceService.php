@@ -633,7 +633,7 @@ class BalanceService extends AbstractService
      * 是「金额不能是 0」——调账金额是 0 没有任何业务意义，明显是误操作，在真正
      * 碰数据库之前就直接拒绝。
      */
-    public function adjust(int $merchantId, string $amount, string $reason, ?int $operatorId): void
+    public function adjust(int $merchantId, string $amount, string $reason, ?int $operatorId, ?int $orderId = null): void
     {
         if (! preg_match(self::ADJUST_AMOUNT_PATTERN, $amount)) {
             throw new HttpException(422, 'amount 格式不合法，最多两位小数');
@@ -643,7 +643,7 @@ class BalanceService extends AbstractService
             throw new HttpException(422, 'amount 不能为 0');
         }
 
-        Db::transaction(function () use ($merchantId, $amount, $reason, $operatorId) {
+        Db::transaction(function () use ($merchantId, $amount, $reason, $operatorId, $orderId) {
             $merchant = $this->merchantDao->lockForUpdate($merchantId);
             if (! $merchant) {
                 throw new HttpException(404, '商户不存在');
@@ -660,6 +660,8 @@ class BalanceService extends AbstractService
                 'merchant_id' => $merchantId,
                 'type' => 'adjustment',
                 'amount' => $amount,
+                // 跟某笔订单有关的调账（快递理赔）挂上订单，资金流水里能看到单号；普通调账为 null
+                'order_id' => $orderId,
                 'available_before' => $availableBefore,
                 'available_after' => $availableAfter,
                 'frozen_before' => $frozenBefore,

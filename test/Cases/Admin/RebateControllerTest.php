@@ -124,6 +124,10 @@ class RebateControllerTest extends HttpTestCase
         $onlyMissing = $this->body($this->jsonRequest('GET', '/admin/rebates/supplier?rebate=missing&merchant_id=' . $merchant->id, $token));
         $this->assertSame([$missing->id], array_column($onlyMissing['data'], 'order_id'));
 
+        $empty = $this->jsonRequest('GET', '/admin/rebates/supplier?order_no=NOT-EXIST', $token);
+        $this->assertSame(200, $empty->getStatusCode(), '筛不出任何行时不能报错');
+        $this->assertSame(0, $this->body($empty)['total']);
+
         $this->assertSame(422, $this->jsonRequest('GET', '/admin/rebates/supplier?business_line=recharge', $token)->getStatusCode());
         $this->assertSame(422, $this->jsonRequest('GET', '/admin/rebates/supplier?completed_from=yesterday', $token)->getStatusCode());
         $this->assertSame(403, $this->jsonRequest('GET', '/admin/rebates/supplier', $this->loginAs($this->createAdminWithPermissions(['order.view'])))->getStatusCode());

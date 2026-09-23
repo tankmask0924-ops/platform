@@ -51,21 +51,27 @@ class MerchantBalanceLogDao extends AbstractDao
      * 是插入顺序而不是期望的倒序）。`id` 自增，天然反映真实插入顺序，加上去之后
      * 同秒内的记录也能确定性地按"后发生的排前面"排列。
      */
-    public function paginateByMerchantId(int $merchantId, int $page, int $perPage, ?string $type = null): Collection
+    public function paginateByMerchantId(int $merchantId, int $page, int $perPage, ?string $type = null, ?int $orderId = null): Collection
     {
         $query = $this->newQuery()->where('merchant_id', $merchantId);
         if ($type !== null) {
             $query->where('type', $type);
         }
+        if ($orderId !== null) {
+            $query->where('order_id', $orderId);
+        }
 
         return $query->orderByDesc('created_at')->orderByDesc('id')->forPage($page, $perPage)->get();
     }
 
-    public function countByMerchantId(int $merchantId, ?string $type = null): int
+    public function countByMerchantId(int $merchantId, ?string $type = null, ?int $orderId = null): int
     {
         $query = $this->newQuery()->where('merchant_id', $merchantId);
         if ($type !== null) {
             $query->where('type', $type);
+        }
+        if ($orderId !== null) {
+            $query->where('order_id', $orderId);
         }
 
         return $query->count();

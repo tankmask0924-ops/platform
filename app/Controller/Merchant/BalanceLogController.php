@@ -47,7 +47,7 @@ class BalanceLogController extends AbstractController
         $perPage = (int) $this->request->input('per_page', 15);
         $type = $this->request->input('type');
 
-        return $this->balanceLogService->list($this->currentMerchant(), $page, $perPage, $type);
+        return $this->balanceLogService->list($this->currentMerchant(), $page, $perPage, $type, $this->request->input('order_no'));
     }
 
     /**
@@ -58,7 +58,7 @@ class BalanceLogController extends AbstractController
     #[GetMapping(path: 'export')]
     public function export(): array
     {
-        return $this->balanceLogService->export($this->currentMerchant(), $this->request->input('type'));
+        return $this->balanceLogService->export($this->currentMerchant(), $this->request->input('type'), $this->request->input('order_no'));
     }
 
     private function currentMerchant(): Merchant

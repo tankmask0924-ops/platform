@@ -151,7 +151,7 @@ class MerchantController extends AbstractController
         $perPage = (int) $this->request->input('per_page', 15);
         $type = $this->request->input('type');
 
-        return $this->merchantAdminService->balanceLogs($id, $page, $perPage, $type);
+        return $this->merchantAdminService->balanceLogs($id, $page, $perPage, $type, $this->request->input('order_no'));
     }
 
     /**

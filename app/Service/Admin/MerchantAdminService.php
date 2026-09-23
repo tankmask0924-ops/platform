@@ -22,6 +22,7 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantQualification;
 use App\Service\AbstractService;
+use App\Service\Merchant\BalanceLogService;
 use App\Service\Merchant\BalanceService;
 use App\Service\Merchant\RateLimitSettingService;
 use App\Service\Merchant\SubscriptionService;
@@ -74,6 +75,9 @@ class MerchantAdminService extends AbstractService
 
     #[Inject]
     protected MerchantBalanceLogDao $balanceLogDao;
+
+    #[Inject]
+    protected BalanceLogService $balanceLogService;
 
     #[Inject]
     protected MerchantRateLimitDao $merchantRateLimitDao;
@@ -241,17 +245,19 @@ class MerchantAdminService extends AbstractService
      *
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
      */
-    public function balanceLogs(int $merchantId, int $page, int $perPage, mixed $type): array
+    public function balanceLogs(int $merchantId, int $page, int $perPage, mixed $type, mixed $orderNo = null): array
     {
         $this->findMerchantOrFail($merchantId);
 
         $type = $this->normalizeBalanceLogTypeFilter($type);
+        $orderId = $this->balanceLogService->resolveOrderFilter($merchantId, $orderNo);
 
-        $logs = $this->balanceLogDao->paginateByMerchantId($merchantId, $page, $perPage, $type);
+        $logs = $this->balanceLogDao->paginateByMerchantId($merchantId, $page, $perPage, $type, $orderId);
 
         return [
-            'data' => $logs->map(fn (MerchantBalanceLog $log) => $this->formatBalanceLog($log))->values()->all(),
-            'total' => $this->balanceLogDao->countByMerchantId($merchantId, $type),
+            // 跟商户自己看到的是同一份格式（带关联订单单号），见 BalanceLogService::present()
+            'data' => $this->balanceLogService->present($logs),
+            'total' => $this->balanceLogDao->countByMerchantId($merchantId, $type, $orderId),
             'page' => $page,
             'per_page' => $perPage,
         ];
@@ -351,28 +357,6 @@ class MerchantAdminService extends AbstractService
         }
 
         return $type;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function formatBalanceLog(MerchantBalanceLog $log): array
-    {
-        return [
-            'id' => $log->id,
-            'merchant_id' => $log->merchant_id,
-            'type' => $log->type,
-            'amount' => $log->amount,
-            'available_before' => $log->available_before,
-            'available_after' => $log->available_after,
-            'frozen_before' => $log->frozen_before,
-            'frozen_after' => $log->frozen_after,
-            'order_id' => $log->order_id,
-            'rebate_id' => $log->rebate_id,
-            'reason' => $log->reason,
-            'operator_id' => $log->operator_id,
-            'created_at' => $log->created_at?->toDateTimeString(),
-        ];
     }
 
     /**

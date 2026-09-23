@@ -20,6 +20,8 @@ use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
+use function Hyperf\Collection\collect;
+
 /**
  * 系统后台「返佣管理 - 供应商返佣明细」（requirements.md 8.3、5.4），只读。
  *

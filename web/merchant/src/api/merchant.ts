@@ -54,6 +54,10 @@ export interface BalanceLog {
   frozen_before: string
   frozen_after: string
   order_id: number | null
+  /** 关联订单（冻结、扣款、解冻、补扣、退款、返佣等），没有关联订单为 null */
+  order_no: string | null
+  merchant_order_no: string | null
+  business_line: string | null
   rebate_id: number | null
   reason: string | null
   created_at: string | null

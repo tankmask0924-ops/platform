@@ -96,6 +96,9 @@ class ExpressWorkorderControllerTest extends HttpTestCase
 
         $list = $this->body($this->jsonRequest('GET', '/admin/express-workorders?order_no=' . $order->order_no, $token));
         $this->assertSame(1, $list['total']);
+        $empty = $this->jsonRequest('GET', '/admin/express-workorders?order_no=NOT-EXIST', $token);
+        $this->assertSame(200, $empty->getStatusCode(), '筛不出任何工单时不能报错');
+        $this->assertSame([], $this->body($empty)['data']);
 
         $this->assertSame(422, $this->jsonRequest('POST', '/admin/express-workorders/' . $submitted['id'] . '/complete', $token, ['claim_amount' => '25.50'])->getStatusCode(), '必须写处理结果');
 

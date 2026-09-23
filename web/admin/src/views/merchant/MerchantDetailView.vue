@@ -197,7 +197,10 @@ async function submitAdjust() {
 }
 
 // 资金流水
-const logs = usePagedList<BalanceLog, { type: string }>((params) => merchantApi.balanceLogs(id, params), { type: '' })
+const logs = usePagedList<BalanceLog, { type: string; order_no: string }>((params) => merchantApi.balanceLogs(id, params), {
+  type: '',
+  order_no: '',
+})
 const typeOptions = toOptions(balanceLogTypeLabels)
 
 onMounted(() => {
@@ -333,6 +336,14 @@ onMounted(() => {
           <div class="card-header">
             <span>资金流水</span>
             <div>
+              <el-input
+                v-model="logs.filters.order_no"
+                clearable
+                placeholder="平台单号 / 商户单号"
+                style="width: 200px"
+                class="gap-right"
+                @change="logs.search"
+              />
               <el-select v-model="logs.filters.type" clearable placeholder="全部类型" style="width: 140px" @change="logs.search">
                 <el-option v-for="o in typeOptions" :key="o.value" :value="o.value" :label="o.label" />
               </el-select>
@@ -352,9 +363,12 @@ onMounted(() => {
           <el-table-column label="冻结（前 → 后）" min-width="180">
             <template #default="{ row }">{{ row.frozen_before }} → {{ row.frozen_after }}</template>
           </el-table-column>
-          <el-table-column label="订单" width="90">
+          <el-table-column label="关联订单" min-width="200">
             <template #default="{ row }">
-              <router-link v-if="row.order_id" :to="{ name: 'order-detail', params: { id: row.order_id } }">#{{ row.order_id }}</router-link>
+              <template v-if="row.order_id">
+                <router-link :to="{ name: 'order-detail', params: { id: row.order_id } }">{{ row.order_no ?? `#${row.order_id}` }}</router-link>
+                <div class="muted">{{ labelOf(businessLineLabels, row.business_line) }} · {{ row.merchant_order_no }}</div>
+              </template>
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -461,6 +475,10 @@ onMounted(() => {
 
 .gap {
   margin-right: 12px;
+}
+
+.gap-right {
+  margin-right: 8px;
 }
 
 .gap-left {

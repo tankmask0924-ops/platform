@@ -16,15 +16,17 @@ import {
 } from '@platform/shared'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { disputeApi, type Order, orderApi, type OrderDetail } from '@/api/merchant'
 
 const router = useRouter()
+const route = useRoute()
 
 const list = usePagedList<Order, Record<string, string>>(orderApi.list, {
   status: '',
   business_line: '',
-  order_no: '',
+  // 从资金流水点「关联订单」进来时带着平台单号
+  order_no: typeof route.query.order_no === 'string' ? route.query.order_no : '',
   merchant_order_no: '',
   created_from: '',
   created_to: '',
@@ -129,7 +131,13 @@ async function submitDispute(order: Order) {
   router.push({ name: 'disputes' })
 }
 
-onMounted(list.load)
+onMounted(async () => {
+  await list.load()
+  // 带单号进来：直接打开这笔订单的详情
+  if (typeof route.query.order_no === 'string' && route.query.order_no !== '') {
+    openDetail(route.query.order_no)
+  }
+})
 </script>
 
 <template>
