@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { labelOf, money, StatusTag, toOptions, usePagedList } from '@platform/shared'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { onMounted, reactive, ref } from 'vue'
 import { type ExpressWorkorder, workorderApi } from '@/api/admin'
 import { workorderStatusLabels, workorderTypeLabels } from '@/labels'
@@ -50,6 +50,18 @@ async function submit() {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid || current.value === null) {
     return
+  }
+  const claimAmount = action.value === 'complete' && current.value.type === 'claim' ? form.claim_amount : ''
+  if (claimAmount !== '' && Number(claimAmount) > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `将给商户可用余额调账加 ${claimAmount} 元（理赔款，订单 ${current.value.order_no}），操作不可撤销，确定吗？`,
+        '确认理赔调账',
+        { type: 'warning' },
+      )
+    } catch {
+      return
+    }
   }
   saving.value = true
   try {

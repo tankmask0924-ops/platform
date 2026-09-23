@@ -114,7 +114,7 @@ onMounted(load)
 
       <el-alert type="info" :closable="false" show-icon class="tip">
         按订单完成时间取数：订单毛利（售价 − 成本）和返佣收支（供应商返佣 − 商户返佣）分开统计，最后相加得到合计利润。
-        已退款订单不计毛利、单独列出；返佣只算待到账和已到账，作废和已扣回的不算支出。话费、卡券没有供应商返佣（电影票、快递三期）。
+        已退款订单不计毛利、单独列出；返佣只算待到账和已到账，作废和已扣回的不算支出。供应商返佣只有电影票、快递有（快递的云洋目前没有返佣），话费、卡券没有。
       </el-alert>
 
       <el-form inline @submit.prevent="load">
@@ -195,8 +195,9 @@ onMounted(load)
       </el-table>
       <div v-if="profit" class="summary">
         合计：成功订单 {{ profit.summary.orders }} 笔，售价 {{ profit.summary.sale_total }}，成本
-        {{ profit.summary.cost_total }}，毛利 {{ profit.summary.gross_profit }}，商户返佣
-        {{ profit.summary.merchant_rebate }}，合计利润 {{ profit.summary.total_profit }}
+        {{ profit.summary.cost_total }}，毛利 {{ profit.summary.gross_profit }}，供应商返佣
+        {{ profit.summary.supplier_rebate }}，商户返佣 {{ profit.summary.merchant_rebate }}，返佣收支 {{ profit.summary.rebate_balance }}，合计利润
+        {{ profit.summary.total_profit }}
       </div>
     </el-card>
 

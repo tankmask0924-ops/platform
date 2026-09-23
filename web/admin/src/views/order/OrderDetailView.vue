@@ -16,7 +16,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { orderApi, type OrderDetail } from '@/api/admin'
-import { attemptResultLabels, workorderStatusLabels, workorderTypeLabels } from '@/labels'
+import { attemptResultLabels, operationActionLabels, workorderStatusLabels, workorderTypeLabels } from '@/labels'
 import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
@@ -170,7 +170,15 @@ async function submitRefund() {
   if (!valid) {
     return
   }
-  const full = Number(refundForm.amount) >= Number(refundable.value)
+  if (Number(refundForm.amount) <= 0) {
+    ElMessage.warning('退款金额必须大于 0')
+    return
+  }
+  if (Number(refundForm.amount) > Number(refundable.value)) {
+    ElMessage.warning(`退款金额不能超过可退金额 ${refundable.value} 元`)
+    return
+  }
+  const full = Number(refundForm.amount) === Number(refundable.value)
   const text = full
     ? `退款 ${refundForm.amount} 元等于全部可退金额，订单将改为已退款，返佣作废或扣回。`
     : `退款 ${refundForm.amount} 元退回商户可用余额，订单仍为成功，返佣不变。`
@@ -416,7 +424,9 @@ onMounted(load)
           <el-table-column label="管理员" width="90">
             <template #default="{ row }">#{{ row.admin_user_id }}</template>
           </el-table-column>
-          <el-table-column prop="action" label="动作" width="150" />
+          <el-table-column label="动作" width="150">
+            <template #default="{ row }">{{ labelOf(operationActionLabels, row.action) }}</template>
+          </el-table-column>
           <el-table-column label="内容" min-width="240">
             <template #default="{ row }"><pre class="inline">{{ json(row.after) }}</pre></template>
           </el-table-column>

@@ -92,6 +92,7 @@ class ExpressWorkorderControllerTest extends HttpTestCase
 
         $detail = $this->body($this->jsonRequest('GET', '/admin/orders/' . $order->id, $token));
         $this->assertSame([$submitted['id']], array_column($detail['workorders'], 'id'));
+        $this->assertContains('submit_workorder', array_column($detail['operation_logs'], 'action'), '售后模块记的工单日志也要在订单详情里看得到');
 
         $list = $this->body($this->jsonRequest('GET', '/admin/express-workorders?order_no=' . $order->order_no, $token));
         $this->assertSame(1, $list['total']);

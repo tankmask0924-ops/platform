@@ -210,7 +210,8 @@ class OrderAdminService extends AbstractService
                     'created_at' => $log->created_at?->toDateTimeString(),
                 ])->values()->all(),
             'rebate' => $this->formatRebate($order->id),
-            'operation_logs' => $this->operationLogDao->listForTarget(self::MODULE, 'order', $order->id)
+            // 快递工单的提交和结单记在售后模块下，同样挂在这笔订单上，一起列出来
+            'operation_logs' => $this->operationLogDao->listForTarget([self::MODULE, ExpressWorkorderAdminService::MODULE], 'order', $order->id)
                 ->map(static fn (AdminOperationLog $log) => [
                     'admin_user_id' => $log->admin_user_id,
                     'action' => $log->action,
@@ -362,7 +363,12 @@ class OrderAdminService extends AbstractService
         }
 
         try {
-            $result = $this->supplierDriverFactory->build($supplier)->cancelOrder(
+            $driver = $this->supplierDriverFactory->build($supplier);
+        } catch (Throwable $e) {
+            throw new HttpException(502, '供应商「' . $supplier->name . '」的接口配置读取失败，请到供应商管理检查配置', 0, $e);
+        }
+        try {
+            $result = $driver->cancelOrder(
                 $order->order_no . '-' . $attempt->attempt_no,
                 $this->notifyAddressService->orderNotifyUrl($supplier)
             );
@@ -415,7 +421,7 @@ class OrderAdminService extends AbstractService
 
         $order->refresh();
         $this->operationLogDao->record($adminUserId, self::MODULE, 'partial_refund', 'order', $order->id, $before, $this->formatOrder($order) + [
-            'amount' => $amount,
+            'amount' => bcadd($amount, '0', 2),
             'remark' => $remark,
         ], $ip);
 

@@ -55,10 +55,13 @@ class AdminOperationLogDao extends AbstractDao
     /**
      * @return Collection<int, AdminOperationLog>
      */
-    public function listForTarget(string $module, string $targetType, int $targetId): Collection
+    /**
+     * @param list<string>|string $module 一个或几个模块
+     */
+    public function listForTarget(array|string $module, string $targetType, int $targetId): Collection
     {
         return $this->newQuery()
-            ->where('module', $module)
+            ->whereIn('module', (array) $module)
             ->where('target_type', $targetType)
             ->where('target_id', $targetId)
             ->orderBy('id')
