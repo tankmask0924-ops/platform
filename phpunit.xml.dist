@@ -7,6 +7,8 @@
   </testsuites>
   <php>
     <env name="APP_ENV" value="testing" force="true"/>
+    <!-- 已有的下单/路由用例按同步结果断言；异步分派本身见 SupplierOrderDispatcherTest -->
+    <env name="SUPPLIER_DISPATCH_ASYNC" value="false" force="true"/>
   </php>
   <source>
     <include>

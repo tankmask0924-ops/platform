@@ -197,7 +197,7 @@
 | 切换时长限制 | [requirements.md 6.5](requirements.md#65-路由与失败切换) | ✅ |
 | 熔断判定与自动恢复（二期） | [requirements.md 6.6](requirements.md#66-熔断) | ✅ `App\Service\Supplier\CircuitBreakerService` + `App\Crontab\CircuitBreakerRecoveryCrontab`，路由筛选见下方「熔断」说明 |
 | 供应商商品成本价同步任务（卡速售自动，其余人工） | [requirements.md 6.4](requirements.md#64-商品映射与成本价) | ✅ 自动：见第 9 节"供应商商品同步"；人工：后台商品映射改价（第 8 节） |
-| 结果未知 / 明确失败归类的统一处理框架 | [requirements.md 6.2](requirements.md#62-对接驱动的统一能力) | ⬜ |
+| 结果未知 / 明确失败归类的统一处理框架 | [requirements.md 6.2](requirements.md#62-对接驱动的统一能力) | ✅ 已由各部分拼齐，不另建框架（2026-09-23 核对）：统一结果 `App\Supplier\UnifiedResult` + `DriverResult`；三家驱动各自的映射表 `KasushouStatusMapper` / `YunyangStatusMapper` / `MangoStatusMapper`，表外、传输失败、解析不了一律结果未知；明确失败才切换或解冻（`SupplierRouter`、快递/电影票结算），结果未知保持处理中由 `SupplierResultPollingService` 定时查询，超时由 `AbnormalOrderService` 转异常单人工处理 |
 
 **路由与失败切换（6.5）**：`App\Service\Order\SupplierRouter`，话费、卡券共用；同步下单
 （`AbstractOrderPlacementService::routeAndFinalize()`）和供应商异步回调
@@ -1001,7 +1001,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 
 | 任务 | 触发方式 | 状态 |
 |---|---|---|
-| 供应商下单异步执行 | 队列 Job | ⬜ |
+| 供应商下单异步执行 | 队列 Job | ✅ `App\Job\PlaceSupplierOrderJob` → `App\Service\Order\SupplierOrderDispatcher`，兜底 `App\Crontab\SupplierDispatchRecoveryCrontab`，见下方说明 |
 | 供应商结果查询轮询 | Crontab | ✅ `App\Crontab\SupplierResultQueryCrontab` → `App\Service\Order\SupplierResultPollingService`，见下方说明 |
 | 商户回调重试（1/5/15/60/120/360 分钟） | 队列 Job（延迟） | ✅ `App\Job\NotifyMerchantJob` 失败后按间隔自己重新入队（第 6 节"结果回调"时已实现，此前本表漏更新） |
 | 供应商余额监控 | Crontab | ✅ `App\Crontab\SupplierBalanceCrontab` → `App\Service\Supplier\SupplierBalanceService`，见下方说明 |
@@ -1014,6 +1014,23 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
 | 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
 | 快递完成兜底（三期） | Crontab | ✅ `App\Crontab\ExpressCompletionCrontab` → `ExpressOrderSettlementService::completeOverdue()`，每小时一次，见第 6 节脚注 ⑦ |
+
+> 「供应商下单异步执行」（requirements.md 9「调用供应商下单……走异步队列，不阻塞商户下单请求」，2026-09-23）：
+> - 话费、卡券下单请求里只做幂等、校验、建单、冻结，然后 `SupplierOrderDispatcher::enqueue()` 推一个 `PlaceSupplierOrderJob`（只带订单 id），
+>   立即返回"处理中"；消费者里 `dispatch()` 读 `order_recharges` 拿商品和充值账号，调 `SupplierRouter::routeNewOrder()`，路由、切换、
+>   尝试记录都不变。商户接口文档的下单说明补了一句"接口不等待充值结果，一般返回 processing"。
+> - **幂等**：只处理"仍在处理中、一次尝试都没有"的订单；两个消费者同时拿到同一笔时，`order_attempts` 的唯一索引让后到的退出，不会重复下单。
+>   Job 不靠队列重试（`maxAttempts = 0`），重试交给兜底任务。
+> - **兜底**：入队失败（Redis 不可用）只记日志、不让下单请求报错（钱已冻结、订单已建，报错商户会重下一笔）。`SupplierDispatchRecoveryCrontab`
+>   每分钟把处理中、没有任何尝试、建单超过 1 分钟的话费卡券订单重新入队（`OrderDao::listUndispatchedIds()`）。已经被标成异常单的不再自动下单，
+>   交给人工。
+> - **开关**：`config/autoload/supplier.php` 的 `dispatch_async`（环境变量 `SUPPLIER_DISPATCH_ASYNC`，默认 true，已加进 `.env.example`）。关掉就是
+>   改造前的同步路由。`phpunit.xml.dist` 里关掉：已有的下单、路由、返佣用例按同步结果断言，继续覆盖路由本身；异步分派另有用例。
+> - **电影票锁座、快递下单不走队列**：锁座结果（锁没锁上、锁到几点）是商户下一步确认出票的前提；快递要把云洋的冻结运费同步算进冻结金额返回给商户，
+>   而且云洋没有防重复单号，消费者超时重跑就是重复下单。两者都只调一次供应商、不做多家切换，同步等一次的代价有限。
+> - 测试：`test/Cases/Service/Order/SupplierOrderDispatcherTest.php`（入队不路由、入队失败不报错、只路由没分派过的处理中订单、兜底只捡超过 1 分钟且没有尝试的
+>   处理中订单、同步模式直接路由且没有兜底、Job 委托给分派服务）；已有的 `RechargeOrderControllerTest`、`CardOrderControllerTest`、
+>   `RechargeOrderPlacementServiceTest`、`CardOrderPlacementServiceTest`、`SupplierRouterTest`、`OrderResultApplierRebateTest` 在同步模式下全部通过。
 
 **供应商结果查询轮询**（requirements.md 6.2 / 7.1）：每分钟一次（`onOneServer` + `singleton`），
 取"订单处理中、最新一次尝试仍是处理中/未知、距上次更新超过 60 秒"的尝试，每批最多 100 条、
@@ -1078,12 +1095,12 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 卡速售 2.0 驱动 | 8 | 8 | 0 | 0 |
 | 云洋驱动 | 9 | 9 | 0 | 0 |
 | 芒果驱动 | 11 | 11 | 0 | 0 |
-| 供应商路由与风控 | 5 | 4 | 0 | 1 |
+| 供应商路由与风控 | 5 | 5 | 0 | 0 |
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 19 | 0 | 0 |
-| 异步任务与定时任务 | 13 | 11 | 0 | 2 |
-| **合计** | **109** | **106** | **0** | **3** |
+| 异步任务与定时任务 | 13 | 12 | 0 | 1 |
+| **合计** | **109** | **108** | **0** | **1** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 

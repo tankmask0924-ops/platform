@@ -278,6 +278,29 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 还没分派给任何供应商的订单（处理中、没有任何尝试记录、建单早于 `$createdBefore`），
+     * 给 App\Service\Order\SupplierOrderDispatcher::redispatchStale() 兜底用，最早的在前。
+     *
+     * @param list<string> $businessLines
+     * @return list<int>
+     */
+    public function listUndispatchedIds(array $businessLines, string $createdBefore, int $limit): array
+    {
+        return $this->newQuery()
+            ->where('status', Order::STATUS_PROCESSING)
+            ->whereIn('business_line', $businessLines)
+            ->where('created_at', '<=', $createdBefore)
+            ->whereNotExists(static function ($query) {
+                $query->selectRaw('1')->from('order_attempts')->whereColumn('order_attempts.order_id', 'orders.id');
+            })
+            ->orderBy('id')
+            ->limit($limit)
+            ->pluck('id')
+            ->map(static fn ($id) => (int) $id)
+            ->all();
+    }
+
+    /**
      * 供应商返佣明细（requirements.md 8.3「返佣管理：供应商返佣明细」）：电影票、快递的**成功**订单，
      * 每笔带上供应商返佣（明细表上的 `supplier_rebate`，null = 供应商还没给）和这笔订单的商户返佣。
      * 已退款的订单不列：供应商那边会收回返佣，跟财务报表的口径一致。

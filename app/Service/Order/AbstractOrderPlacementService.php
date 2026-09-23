@@ -52,7 +52,7 @@ use RuntimeException;
  *
  * 【路由】按优先级选供应商、明确失败换下一家、切换时长、尝试记录都在
  * `App\Service\Order\SupplierRouter`，异步回调失败后的继续切换也走它；本类只负责
- * 下单前预检（没有可用供应商直接拒绝，不冻结）和同步下单时调用一次。卡速售驱动
+ * 下单前预检（没有可用供应商直接拒绝，不冻结），建单冻结后交给 SupplierOrderDispatcher（默认入队异步路由）。卡速售驱动
  * 需要的 `isCardProduct` 由路由按 `orders.business_line` 决定。
  *
  * 【`orderNoPrefix()`】只是为了保留 `RechargeOrderPlacementService` 原有的
@@ -86,6 +86,9 @@ abstract class AbstractOrderPlacementService extends AbstractService
 
     #[Inject]
     protected SupplierRouter $supplierRouter;
+
+    #[Inject]
+    protected SupplierOrderDispatcher $supplierOrderDispatcher;
 
     /**
      * `orders.business_line` 该写哪个值，见类注释。
@@ -232,12 +235,13 @@ abstract class AbstractOrderPlacementService extends AbstractService
     }
 
     /**
-     * 订单已建好、已冻结：交给 SupplierRouter 按固定优先级路由并落结果。
+     * 订单已建好、已冻结：交给 SupplierOrderDispatcher，默认入队由消费者按固定优先级路由
+     * （SupplierRouter），不在商户请求里等供应商；开关关掉时同步路由。
      * `$rechargeAccount` 为 null 表示这次下单没有动态参数要透传给供应商（卡密类卡券）。
      */
     protected function routeAndFinalize(Order $order, Product $product, ?string $rechargeAccount): void
     {
-        $this->supplierRouter->routeNewOrder($order, $product, $rechargeAccount);
+        $this->supplierOrderDispatcher->enqueue($order, $product, $rechargeAccount);
     }
 
     /**

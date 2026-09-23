@@ -64,7 +64,7 @@ const orderExample = {
 }
 
 const placeNotes = [
-  'code = 0 表示订单已受理，结果以回调或订单查询为准；受理时就能确定失败的（如余额不足）会直接返回 status = failed 和 fail_code。',
+  'code = 0 表示订单已受理，接口不等待充值结果，一般返回 status = processing，结果以回调或订单查询为准；受理时就能确定失败的（如余额不足）会直接返回 status = failed 和 fail_code。',
   '同一个 merchant_order_no 重复提交不会重复下单，返回第一次的订单，网络超时可以放心用原单号重试。',
   '需要先在「服务开通」开通对应业务线，否则返回 42007。',
 ]
