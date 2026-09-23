@@ -63,6 +63,7 @@ export const balanceLogTypeLabels: LabelMap = {
   deduct: { label: '扣款', type: 'danger' },
   unfreeze: { label: '解冻', type: 'info' },
   supplement_deduct: { label: '补扣', type: 'danger' },
+  freeze_adjust: { label: '冻结调整', type: 'warning' },
   refund: { label: '退款', type: 'success' },
   adjustment: { label: '调账', type: 'primary' },
   rebate_settle: { label: '返佣到账', type: 'success' },

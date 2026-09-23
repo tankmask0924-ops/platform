@@ -21,6 +21,7 @@ use App\Service\Merchant\BalanceService;
 use App\Service\Merchant\DisputeService;
 use App\Service\Merchant\RateLimitSettingService;
 use App\Service\Order\AbnormalOrderService;
+use App\Service\Order\ExpressOrderSettlementService;
 use App\Service\Order\OrderResultApplier;
 use App\Service\Order\SupplierRouter;
 use App\Service\Supplier\CircuitBreakerService;
@@ -33,7 +34,7 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *
  * 只列出代码里真正在读的参数；key 和默认值直接引用读取方的常量，两边不会对不上。
  * 表里没有这一行时，读取方用代码默认值——所以"恢复默认"就是删掉这一行。
- * 快递完成兜底天数和电影票锁座有效期（三期）等功能上线时再加进来。
+ * 电影票锁座有效期（三期）等功能上线时再加进来。
  * 每次修改记操作日志（requirements.md 9「系统参数相关操作重点审计」）。
  */
 class SystemSettingAdminService extends AbstractService
@@ -99,6 +100,15 @@ class SystemSettingAdminService extends AbstractService
             'max' => 365,
             'default' => OrderResultApplier::DEFAULT_REBATE_DUE_PERIOD_DAYS,
             'description' => '订单完成后多少天返佣到账；只影响之后完成的订单。短于售后争议时限时，到账后才核实未到账的订单要从余额扣回返佣',
+        ],
+        ExpressOrderSettlementService::COMPLETE_FALLBACK_DAYS_SETTING_KEY => [
+            'name' => '快递完成兜底天数',
+            'type' => 'int',
+            'unit' => '天',
+            'min' => 1,
+            'max' => 90,
+            'default' => ExpressOrderSettlementService::DEFAULT_COMPLETE_FALLBACK_DAYS,
+            'description' => '快递扣费后超过这个天数仍未签收（拒收退回、丢件等），自动记为订单完成',
         ],
         CircuitBreakerService::WINDOW_MINUTES_SETTING_KEY => [
             'name' => '熔断统计窗口',

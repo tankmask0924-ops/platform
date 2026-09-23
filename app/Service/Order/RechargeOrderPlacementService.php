@@ -88,7 +88,7 @@ class RechargeOrderPlacementService extends AbstractOrderPlacementService
         $product = $this->validateProduct($productId);
         $this->assertProductHasSupplier($product);
 
-        $order = $this->createOrderRow($merchant, $merchantOrderNo, $product, $callbackUrl);
+        $order = $this->createOrderRow($merchant, $merchantOrderNo, $product->sale_price, $callbackUrl);
         if ($order === null) {
             // 建单时撞上了 (merchant_id, merchant_order_no) 唯一约束：输掉了并发
             // 建单竞态，必须原样返回那笔订单的状态，绝不能再往下走去调用 freeze()。

@@ -76,6 +76,9 @@ use Hyperf\Logger\LoggerFactory;
  * 声明的驱动特定行为（类似 `parseCallback()` 现在这样每个驱动自己实现），本次
  * 任务不为一个尚不存在的第二个驱动预先设计这层抽象。
  *
+ * 【快递（云洋）另走一条】按 `suppliers.driver` 分派给 App\Service\Order\ExpressCallbackService：
+ * 云洋回调没有签名、没有尝试序号、要求回复 JSON，订单成功之后还会因为费用调整和签收继续回调，
+ * 上面这套"验签 → 按 external_orderno 找订单 → 终态直接回 ok"对它都不成立。
  * 【范围外，见任务说明】商品变更通知 webhook（`App\Service\Supplier\
  * ProductSyncService::applyNotification()` 已有原语，路由未建，是另一个更小的
  * 后续任务，不在本类）、IP 白名单/限流、除卡速售外的其它驱动——一律不在本类职责内。
@@ -109,6 +112,9 @@ class SupplierCallbackService extends AbstractService
     #[Inject]
     protected LoggerFactory $loggerFactory;
 
+    #[Inject]
+    protected ExpressCallbackService $expressCallbackService;
+
     /**
      * @param array<string, mixed> $payload
      * @param array<string, string> $headers
@@ -118,6 +124,11 @@ class SupplierCallbackService extends AbstractService
         $supplier = $this->supplierDao->findByCode($supplierCode);
         if ($supplier === null) {
             throw new SupplierNotFoundException('SupplierCallbackService: unknown supplier code "' . $supplierCode . '".');
+        }
+
+        if ($supplier->driver === 'yunyang') {
+            // 快递：没有签名、没有尝试序号、终态之后还有费用调整，跟话费卡券不是一套流程
+            return $this->expressCallbackService->handle($supplier, $payload);
         }
 
         $driver = $this->supplierDriverFactory->build($supplier);

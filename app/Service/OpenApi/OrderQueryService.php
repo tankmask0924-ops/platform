@@ -18,13 +18,14 @@ use App\Dao\OrderRechargeDao;
 use App\Model\Merchant;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
+use App\Service\Order\ExpressOrderPresenter;
+use App\Service\Order\ExpressOrderSettlementService;
 use Hyperf\Di\Annotation\Inject;
 
 /**
  * 开放 API「订单查询」（requirements.md 8.1）：按平台订单号或商户订单号查询，
- * 卡密类订单（recharge/card）返回解密后的明文卡号卡密。快递费用明细是三期功能，
- * 对应的表还没建，这里不做任何 express 专属处理——express 订单没有 order_recharges
- * 行，会自然落到「没查到卡密」分支，只返回基础订单字段，不会报错。
+ * 卡密类订单（recharge/card）返回解密后的明文卡号卡密；快递订单多一个 `express`
+ * 明细（运单号、物流状态、费用明细和费用调整，形状见 App\Service\Order\ExpressOrderPresenter）。
  */
 class OrderQueryService extends AbstractService
 {
@@ -43,6 +44,9 @@ class OrderQueryService extends AbstractService
     #[Inject]
     protected Encryptor $encryptor;
 
+    #[Inject]
+    protected ExpressOrderPresenter $expressOrderPresenter;
+
     /**
      * 调用方（App\Controller\OpenApi\OrderController）已经校验过 $orderNo/
      * $merchantOrderNo 里恰好有一个非空字符串。这里仍做防御性兜底：
@@ -56,7 +60,7 @@ class OrderQueryService extends AbstractService
      * @return null|array{order_no: string, merchant_order_no: string, business_line: string,
      *     status: string, sale_price: string, frozen_amount: string, deducted_amount: null|string,
      *     refunded_amount: string, completed_at: null|string, fail_code: null|int, fail_reason: null|string,
-     *     card_no?: string, card_pwd?: string}
+     *     card_no?: string, card_pwd?: string, express?: null|array<string, mixed>}
      */
     public function find(Merchant $merchant, ?string $orderNo, ?string $merchantOrderNo): ?array
     {
@@ -85,6 +89,9 @@ class OrderQueryService extends AbstractService
 
         if (in_array($order->business_line, self::CARD_BUSINESS_LINES, true)) {
             $this->appendCardSecrets($result, $order->id);
+        }
+        if ($order->business_line === ExpressOrderSettlementService::BUSINESS_LINE) {
+            $result['express'] = $this->expressOrderPresenter->present((int) $order->id);
         }
 
         return $result;

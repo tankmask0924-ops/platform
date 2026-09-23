@@ -29,6 +29,7 @@ use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
+use App\Supplier\Yunyang\YunyangDriver;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\AsyncQueue\JobInterface;
@@ -101,6 +102,25 @@ class SupplierBalanceServiceTest extends TestCase
         $supplier->refresh();
         $this->assertSame('1234.56', $supplier->balance, '多出的小数位截掉，不向上取整');
         $this->assertNotNull($supplier->balance_synced_at);
+    }
+
+    /**
+     * 快递供应商（云洋）按它自己的驱动查余额，不能走卡速售的 build()（会直接抛错、永远查不到）。
+     */
+    public function testYunyangSupplierIsQueriedWithItsOwnDriver()
+    {
+        $supplier = $this->createSupplier(balance: null);
+        $supplier->fill(['business_line' => 'express', 'driver' => 'yunyang'])->save();
+
+        $driver = Mockery::mock(YunyangDriver::class);
+        $driver->shouldReceive('queryBalance')->once()->andReturn('88.80');
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldNotReceive('build');
+        $factory->shouldReceive('buildYunyang')->andReturn($driver);
+        $this->instance(SupplierDriverFactory::class, $factory);
+
+        $this->assertTrue($this->service()->refresh($supplier));
+        $this->assertSame('88.80', $supplier->refresh()->balance);
     }
 
     public function testFailedQueryKeepsPreviousBalance()

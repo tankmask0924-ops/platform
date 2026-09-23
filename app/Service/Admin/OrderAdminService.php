@@ -214,6 +214,11 @@ class OrderAdminService extends AbstractService
         if ($supplierId === null) {
             throw new HttpException(409, '订单没有关联供应商，无法人工处理');
         }
+        if ($result === 'success' && $order->business_line === 'express') {
+            // 快递的成功是云洋按实际费用扣费（requirements.md 7.2），扣多少、补扣还是解冻都要靠
+            // 云洋的费用明细，人工置成功会按预估价扣款。只能人工置失败（云洋确认没有这一单时全额解冻）
+            throw new HttpException(409, '快递订单不能人工置成功，扣费结果请用「查询供应商」同步');
+        }
 
         $driverResult = $result === 'success'
             ? $this->manualSuccessResult($order, $supplierOrderNo)
@@ -251,7 +256,9 @@ class OrderAdminService extends AbstractService
             throw new HttpException(502, '查询供应商失败：' . $e->getMessage(), 0, $e);
         }
         if ($result === null) {
-            throw new HttpException(409, '订单没有供应商尝试记录，无法查询');
+            throw new HttpException(409, $order->business_line === 'express'
+                ? '快递订单还没有云洋单号（下单结果未知），无法查询，请到云洋后台按平台订单号核实'
+                : '订单没有供应商尝试记录，无法查询');
         }
 
         $order->refresh();

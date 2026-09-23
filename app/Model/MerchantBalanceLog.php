@@ -29,10 +29,14 @@ use Carbon\Carbon;
  * 見下面 self::TYPES（给资金流水筛选接口的 `?type=` 参数做白名单校验用，
  * App\Service\Merchant\BalanceLogService、App\Service\Admin\MerchantAdminService
  * 各自的 normalizeTypeFilter() 都引用这个常量，不各自维护一份容易漂移的列表）。
- * 目前 App\Service\Merchant\BalanceService 写 freeze/deduct/unfreeze/recharge/
- * rebate_settle/adjustment 六种（手动调账见 adjust()）；supplement_deduct/refund/
- * rebate_clawback 对应的触发流程（售后补扣/退款、返佣扣回）还是没建的功能，
- * 不在这次任务范围内，但表结构和 Model 需要如实覆盖完整枚举，因为是同一张共用表。
+ * 全部由 App\Service\Merchant\BalanceService 写入（每种 type 对应它的一个方法）。
+ *
+ * `freeze_adjust`（2026-09-23 快递下单时新增）：冻结金额的**事后调整**，只有快递有
+ * （requirements.md 7.2「以供应商返回的冻结运费为准重算预估售价，多退少补冻结金额」）。
+ * **`amount` 带符号**：正数 = 多冻结（可用减、冻结加），负数 = 还回可用余额——其它类型的
+ * 方向都由 type 本身表达，只有这一种两个方向共用一个 type。
+ * 它**不在** `dedupe_order_key` 覆盖的类型里（生成列只认 deduct/unfreeze），
+ * 所以同一笔订单可以有多条。
  *
  * @property int $id
  * @property int $merchant_id
@@ -63,6 +67,7 @@ class MerchantBalanceLog extends Model
         'adjustment',
         'rebate_settle',
         'rebate_clawback',
+        'freeze_adjust',
     ];
 
     public bool $timestamps = false;

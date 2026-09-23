@@ -83,7 +83,7 @@ class CardOrderPlacementService extends AbstractOrderPlacementService
         $this->validateRechargeAccountForCardType($product, $rechargeAccount);
         $this->assertProductHasSupplier($product);
 
-        $order = $this->createOrderRow($merchant, $merchantOrderNo, $product, $callbackUrl);
+        $order = $this->createOrderRow($merchant, $merchantOrderNo, $product->sale_price, $callbackUrl);
         if ($order === null) {
             return $this->resolveReplayAfterCreateRace($merchant, $merchantOrderNo);
         }

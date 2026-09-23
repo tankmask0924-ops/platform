@@ -38,8 +38,8 @@ const commonParams: Field[] = [
 const orderFields: Field[] = [
   { name: 'order_no', type: 'string', desc: '平台订单号' },
   { name: 'merchant_order_no', type: 'string', desc: '你的订单号' },
-  { name: 'business_line', type: 'string', desc: '业务线：recharge 话费，card 卡券' },
-  { name: 'status', type: 'string', desc: '订单状态：processing 处理中，success 成功，failed 失败，refunded 已退款' },
+  { name: 'business_line', type: 'string', desc: '业务线：recharge 话费，card 卡券，express 快递' },
+  { name: 'status', type: 'string', desc: '订单状态：processing 处理中，success 成功，failed 失败，cancelled 已取消（快递），refunded 已退款' },
   { name: 'sale_price', type: 'string', desc: '售价（元）' },
   { name: 'frozen_amount', type: 'string', desc: '下单时冻结的金额（元）' },
   { name: 'deducted_amount', type: 'string|null', desc: '实际扣款（元），订单成功后才有值' },
@@ -67,6 +67,41 @@ const placeNotes = [
   'code = 0 表示订单已受理，结果以回调或订单查询为准；受理时就能确定失败的（如余额不足）会直接返回 status = failed 和 fail_code。',
   '同一个 merchant_order_no 重复提交不会重复下单，返回第一次的订单，网络超时可以放心用原单号重试。',
   '需要先在「服务开通」开通对应业务线，否则返回 42007。',
+]
+
+const expressFields: Field[] = [
+  ...orderFields,
+  { name: 'express.company_code', type: 'string', desc: '下单时传的快递渠道编号' },
+  { name: 'express.company_name', type: 'string', desc: '快递公司名称' },
+  { name: 'express.waybill_no', type: 'string|null', desc: '运单号，个别快递公司下单后稍晚才有' },
+  { name: 'express.logistics_status', type: 'string', desc: '物流状态：pending_pickup 待揽收，in_transit 运输中，signed 已签收，rejected 拒收退回，cancelled 已取消' },
+  { name: 'express.insured_amount', type: 'string|null', desc: '保价金额' },
+  { name: 'express.signed_at', type: 'string|null', desc: '签收时间' },
+  { name: 'express.fees', type: 'object|null', desc: '实际费用明细：freight 运费、insured_fee 保价费、material_fee 耗材费、reverse_fee 逆向费；快递公司扣费（订单成功）前为 null' },
+  { name: 'express.fee_adjustments', type: 'array', desc: '扣费之后的费用调整记录：type（supplement 补扣 / refund 退回）、item（freight/insured/material/reverse）、amount、created_at' },
+]
+
+const expressExample = {
+  ...orderExample,
+  order_no: 'E20260923100000123456',
+  business_line: 'express',
+  sale_price: '14.50',
+  frozen_amount: '14.50',
+  express: {
+    company_code: 'EX8b21d4e05fa7c396',
+    company_name: '顺丰',
+    waybill_no: 'SF1234567890',
+    logistics_status: 'pending_pickup',
+    insured_amount: null,
+    signed_at: null,
+    fees: null,
+    fee_adjustments: [],
+  },
+}
+
+const orderIdentParams: Field[] = [
+  { name: 'order_no', type: 'string', desc: '平台订单号' },
+  { name: 'merchant_order_no', type: 'string', desc: '你的订单号（两者必须传一个）' },
 ]
 
 const endpoints: Endpoint[] = [
@@ -231,6 +266,74 @@ const endpoints: Endpoint[] = [
     ],
   },
   {
+    title: '快递下单',
+    method: 'POST',
+    path: '/express/order',
+    desc: '选定查价返回的快递公司下单，快递员上门取件。下单时会按最新价格重新计算并冻结预估费用，不采用你传的任何金额。',
+    params: [
+      { name: 'merchant_order_no', type: 'string', required: true, desc: '你的订单号，在你的账户下唯一' },
+      { name: 'channel_code', type: 'string', required: true, desc: '查价返回的 channel_code' },
+      { name: 'callback_url', type: 'string', required: true, desc: '结果回调地址，只支持 http/https 公网地址' },
+      { name: 'sender_name', type: 'string', required: true, desc: '寄件人姓名' },
+      { name: 'sender_mobile', type: 'string', required: true, desc: '寄件人手机或座机' },
+      { name: 'sender_province / sender_city / sender_district', type: 'string', required: true, desc: '寄件省、市、区县' },
+      { name: 'sender_address', type: 'string', required: true, desc: '寄件详细地址' },
+      { name: 'receiver_name', type: 'string', required: true, desc: '收件人姓名' },
+      { name: 'receiver_mobile', type: 'string', required: true, desc: '收件人手机或座机' },
+      { name: 'receiver_province / receiver_city / receiver_district', type: 'string', required: true, desc: '收件省、市、区县' },
+      { name: 'receiver_address', type: 'string', required: true, desc: '收件详细地址' },
+      { name: 'item_name', type: 'string', required: true, desc: '物品名称' },
+      { name: 'weight', type: 'int', required: true, desc: '重量（整数公斤），1 ~ 1000' },
+      { name: 'length / width / height', type: 'int', desc: '长宽高（厘米），要么都传要么都不传' },
+      { name: 'insured_amount', type: 'string', desc: '保价金额（元），所选快递公司必须支持保价' },
+      { name: 'appointment_time', type: 'string', desc: '预约取件时间段，必须是查价返回的 appointment_times 之一；部分快递公司必传' },
+    ],
+    response: expressFields,
+    example: expressExample,
+    notes: [
+      'code = 0 表示快递公司已受理，订单状态为处理中；快递公司按实际计费重量扣费后订单变为成功，并回调通知你。',
+      '冻结金额先按预估价，快递公司受理后按它确认的运费重算（多退少补）；扣费时按实际费用结算：比冻结的多就从可用余额补扣，少就解冻差额。',
+      '扣费之后到签收前还可能产生耗材费、保价费、逆向费（拒收退回）或重量核实退回运费，每次都会补扣或退回并回调你，明细见订单查询的 express.fee_adjustments。补扣可能让可用余额变成负数。',
+      '所选快递公司查不到了（渠道下线、地址或重量变了、要保价但不支持）返回 42009，请重新查价。',
+      '同一个 merchant_order_no 重复提交不会重复下单；需要先在「服务开通」开通快递业务线，否则返回 42007。',
+    ],
+  },
+  {
+    title: '快递取消',
+    method: 'POST',
+    path: '/express/cancel',
+    desc: '取消快递订单，全额解冻。只有待揽收的订单能取消。',
+    params: orderIdentParams,
+    response: expressFields,
+    example: { ...expressExample, status: 'cancelled', frozen_amount: '14.50', express: { ...expressExample.express, logistics_status: 'cancelled' } },
+    notes: [
+      '已揽收、已取消或者该快递公司不支持取消时返回 42010。',
+      '个别情况下取消已提交但结果稍后才确认，此时返回 status = processing，确认后会回调你。',
+    ],
+  },
+  {
+    title: '快递轨迹查询',
+    method: 'GET',
+    path: '/express/trace',
+    desc: '查询快递的物流轨迹。',
+    params: orderIdentParams,
+    response: [
+      { name: 'order_no', type: 'string', desc: '平台订单号' },
+      { name: 'waybill_no', type: 'string|null', desc: '运单号' },
+      { name: 'logistics_status', type: 'string', desc: '物流状态，取值同快递下单' },
+      { name: 'traces', type: 'array', desc: '轨迹列表：time 时间、description 描述' },
+    ],
+    example: {
+      order_no: 'E20260923100000123456',
+      waybill_no: 'SF1234567890',
+      logistics_status: 'in_transit',
+      traces: [
+        { time: '2026-09-23 15:02:11', description: '快递员已揽收' },
+        { time: '2026-09-23 21:40:05', description: '已到达深圳转运中心' },
+      ],
+    },
+  },
+  {
     title: '订单查询',
     method: 'GET',
     path: '/order',
@@ -243,6 +346,7 @@ const endpoints: Endpoint[] = [
       ...orderFields,
       { name: 'card_no', type: 'string', desc: '卡号（明文），只有卡密类卡券成功后才返回这个字段' },
       { name: 'card_pwd', type: 'string', desc: '卡密（明文），同上' },
+      { name: 'express', type: 'object', desc: '快递订单的运单号、物流状态和费用明细，字段见「快递下单」' },
     ],
     example: {
       ...orderExample,
@@ -262,10 +366,14 @@ const callbackFields: Field[] = [
   { name: 'order_no', type: 'string', required: true, desc: '平台订单号' },
   { name: 'merchant_order_no', type: 'string', required: true, desc: '你的订单号' },
   { name: 'business_line', type: 'string', required: true, desc: '业务线' },
-  { name: 'status', type: 'string', required: true, desc: 'success 成功，failed 失败，refunded 已退款' },
+  { name: 'status', type: 'string', required: true, desc: 'success 成功，failed 失败，cancelled 已取消（快递），refunded 已退款' },
   { name: 'completed_at', type: 'string', desc: '完成时间，没有时不带这个字段' },
   { name: 'fail_code', type: 'int', desc: '失败原因码，只在失败时带' },
   { name: 'fail_reason', type: 'string', desc: '失败原因，只在失败时带' },
+  { name: 'waybill_no', type: 'string', desc: '快递：运单号' },
+  { name: 'logistics_status', type: 'string', desc: '快递：物流状态' },
+  { name: 'deducted_amount', type: 'string', desc: '快递：目前实际扣款合计（元），扣费后才有' },
+  { name: 'freight / insured_fee / material_fee / reverse_fee', type: 'string', desc: '快递：实际运费、保价费、耗材费、逆向费（元），扣费后才有' },
   { name: 'app_key', type: 'string', required: true, desc: '你的 AppKey' },
   { name: 'timestamp', type: 'int', required: true, desc: '发送时间戳（秒）' },
   { name: 'nonce', type: 'string', required: true, desc: '随机字符串' },
@@ -404,10 +512,10 @@ onMounted(loadErrorCodes)
 
       <el-tab-pane label="结果回调" name="callback">
         <ul class="notes">
-          <li>订单成功、失败、已退款（售后确认未到账）时，平台向下单时传入的 <code>callback_url</code> 发 POST 请求，表单格式（<code>application/x-www-form-urlencoded</code>）。</li>
+          <li>订单成功、失败、已取消、已退款（售后确认未到账），以及快递扣费后的费用调整时，平台向下单时传入的 <code>callback_url</code> 发 POST 请求，表单格式（<code>application/x-www-form-urlencoded</code>）。</li>
           <li>收到后请先验签（规则同请求签名，用你的 AppSecret），再按 <code>merchant_order_no</code> 更新订单；建议同时校验 <code>timestamp</code> 在 5 分钟以内。</li>
           <li>处理完成后响应内容为 <code>success</code>（纯文本）。其它响应或超时（5 秒）视为失败，按 1 分钟、5 分钟、15 分钟、1 小时、2 小时、6 小时重试 6 次，之后可在「订单列表」手动重推。</li>
-          <li>同一订单可能收到多次通知（重试、手动重推、成功后又退款），请按订单状态做幂等处理。</li>
+          <li>同一订单可能收到多次通知（重试、手动重推、成功后又退款、快递费用调整），请按订单状态做幂等处理；快递以最新一次的 <code>deducted_amount</code> 为准。</li>
           <li>回调里不带卡密；卡密类卡券成功后请调订单查询接口获取。</li>
         </ul>
 

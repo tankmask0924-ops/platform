@@ -39,6 +39,13 @@ class Order extends Model
 {
     public const STATUS_PROCESSING = 'processing';
 
+    public const STATUS_SUCCESS = 'success';
+
+    public const STATUS_FAILED = 'failed';
+
+    /** 快递揽收前取消（requirements.md 7.4），已全额解冻 */
+    public const STATUS_CANCELLED = 'cancelled';
+
     /**
      * 超过异常单时长仍没有结果、转人工的订单（requirements.md 7.4），只能人工改成
      * 成功或失败。

@@ -32,11 +32,10 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 编排（选供应商、调驱动、判断订单成败），那是下一个任务（下单流程）的事，这里
  * 只保证「调用了就一定正确、幂等地改余额并记流水」。
  *
- * 实现 freeze/deduct/unfreeze/rebate_settle/recharge/adjustment 六种 type；
- * supplement_deduct/refund/rebate_clawback 对应售后补扣/退款、返佣扣回，
- * 都是各自独立的、还没建的功能，不在这次任务范围内（触发扣回的售后
- * 争议处理、人工改判订单状态都还没建，`merchant_rebates.status` 到
- * `clawed_back` 的转换完全不在本类职责内）。
+ * 实现 freeze/deduct/unfreeze/rebate_settle/recharge/adjustment 六种 type，
+ * 以及售后退款 refund、返佣扣回 rebate_clawback；快递另有补扣 supplement_deduct
+ * 和冻结调整 freeze_adjust（见 supplementDeduct()/adjustFreeze()，调用方是
+ * App\Service\Order\ExpressOrderSettlementService）。
  *
  * `merchants.debt_since` 的维护（4.5「可用余额 < 0 时暂停该商户所有下单，充值
  * 补足到 ≥ 0 后自动恢复」）：六个方法最终都改余额列，统一收口到私有方法
@@ -278,6 +277,100 @@ class BalanceService extends AbstractService
             }
 
             $this->persistBalance($merchant, $availableAfter, $frozenAfter);
+        });
+    }
+
+    /**
+     * 快递冻结调整（requirements.md 7.2「下单成功后以供应商返回的冻结运费重算预估售价，
+     * 多退少补冻结金额；可用余额不足时差额留到结算时补扣」）：`$delta` 为正是多冻结，
+     * 为负是把多冻结的部分还回可用余额。记一条 `freeze_adjust` 流水，`amount` 带符号
+     * （正数 = 冻结余额增加），这是唯一一个方向不能由 type 本身表达的流水类型。
+     *
+     * 多冻结时**能冻多少冻多少**：可用余额不够就只冻结到可用余额归零（已经欠款就一分不冻），
+     * 剩下的差额结算时按补扣处理——不能因为冻结不上就拒掉一笔供应商已经受理的快递单。
+     *
+     * 不做幂等：`freeze_adjust` 不在 `dedupe_order_key` 覆盖范围内（快递一单可能调多次），
+     * 由调用方在锁住 `order_expresses` 行的事务里判断"这次冻结运费是否已经调整过"。
+     *
+     * @return string 实际调整的金额（带符号），调用方据此同步 `orders.frozen_amount`
+     */
+    public function adjustFreeze(int $merchantId, int $orderId, string $delta, ?string $reason = null): string
+    {
+        return Db::transaction(function () use ($merchantId, $orderId, $delta, $reason) {
+            $merchant = $this->merchantDao->lockForUpdate($merchantId);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $frozenBefore = $merchant->frozen_balance;
+
+            $applied = $delta;
+            if (bccomp($delta, '0', self::SCALE) > 0) {
+                $freezable = bccomp($availableBefore, '0', self::SCALE) > 0 ? $availableBefore : '0.00';
+                if (bccomp($freezable, $delta, self::SCALE) < 0) {
+                    $applied = $freezable;
+                }
+            }
+            if (bccomp($applied, '0', self::SCALE) === 0) {
+                return '0.00';
+            }
+
+            $availableAfter = bcsub($availableBefore, $applied, self::SCALE);
+            $frozenAfter = bcadd($frozenBefore, $applied, self::SCALE);
+
+            $this->balanceLogDao->create([
+                'merchant_id' => $merchantId,
+                'type' => 'freeze_adjust',
+                'amount' => bcadd($applied, '0', self::SCALE),
+                'available_before' => $availableBefore,
+                'available_after' => $availableAfter,
+                'frozen_before' => $frozenBefore,
+                'frozen_after' => $frozenAfter,
+                'order_id' => $orderId,
+                'reason' => $reason,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->persistBalance($merchant, $availableAfter, $frozenAfter);
+
+            return bcadd($applied, '0', self::SCALE);
+        });
+    }
+
+    /**
+     * 补扣（requirements.md 7.2 快递「实际比预估贵」「扣费后新增耗材费」、拒收逆向费）：
+     * 直接从可用余额扣，冻结余额不动，可用余额可能因此变负，按 4.5 负余额处理
+     * （persistBalance() 会记下 debt_since）。
+     *
+     * `supplement_deduct` 允许同一订单多条（database-design.md 4.3），没有唯一索引兜底；
+     * 调用方必须在锁住订单明细的事务里决定"这笔差额还没补扣过"再调用，同 refundOrder()。
+     */
+    public function supplementDeduct(int $merchantId, int $orderId, string $amount, ?string $reason = null): void
+    {
+        Db::transaction(function () use ($merchantId, $orderId, $amount, $reason) {
+            $merchant = $this->merchantDao->lockForUpdate($merchantId);
+            if (! $merchant) {
+                throw new HttpException(404, '商户不存在');
+            }
+
+            $availableBefore = $merchant->available_balance;
+            $availableAfter = bcsub($availableBefore, $amount, self::SCALE);
+
+            $this->balanceLogDao->create([
+                'merchant_id' => $merchantId,
+                'type' => 'supplement_deduct',
+                'amount' => $amount,
+                'available_before' => $availableBefore,
+                'available_after' => $availableAfter,
+                'frozen_before' => $merchant->frozen_balance,
+                'frozen_after' => $merchant->frozen_balance,
+                'order_id' => $orderId,
+                'reason' => $reason,
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->persistBalance($merchant, $availableAfter, $merchant->frozen_balance);
         });
     }
 

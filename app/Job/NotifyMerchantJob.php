@@ -16,6 +16,7 @@ use App\Crypto\Encryptor;
 use App\Dao\MerchantDao;
 use App\Dao\MerchantNotifyLogDao;
 use App\Dao\OrderDao;
+use App\Dao\OrderExpressDao;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Notify\CallbackUrlGuard;
@@ -215,6 +216,7 @@ class NotifyMerchantJob extends Job
             'status' => $order->merchantFacingStatus(),
             'completed_at' => $order->completed_at?->toDateTimeString(),
             ...ErrorCode::presentOrderFailure($order->fail_reason),
+            ...$this->expressFields($order),
             'app_key' => $merchant->app_key,
             'timestamp' => (string) time(),
             'nonce' => bin2hex(random_bytes(16)),
@@ -224,5 +226,41 @@ class NotifyMerchantJob extends Job
         $params['sign'] = $signer->sign($params, $secret);
 
         return $params;
+    }
+
+    /**
+     * 快递订单多带运单号、物流状态和费用明细（requirements.md 7.2「回调：已计费 + 费用明细」、
+     * 7.6「快递费用调整时」也要回调）。签名只能拼标量，所以费用明细拍平成几个字段；
+     * 费用调整的逐条记录商户用订单查询接口看。字段含义同订单查询的 `express` 明细
+     * （App\Service\Order\ExpressOrderPresenter）：运费是加价后的售价，不是成本。
+     *
+     * @return array<string, null|string>
+     */
+    private function expressFields(Order $order): array
+    {
+        if ($order->business_line !== 'express') {
+            return [];
+        }
+
+        $express = ApplicationContext::getContainer()->get(OrderExpressDao::class)->findByOrderId((int) $order->id);
+        if ($express === null) {
+            return [];
+        }
+
+        $fields = [
+            'waybill_no' => $express->waybill_no,
+            'logistics_status' => $express->logistics_status,
+            'deducted_amount' => $order->deducted_amount,
+        ];
+        if ($express->fee_over_at !== null) {
+            $fields += [
+                'freight' => $express->freight_sale_price,
+                'insured_fee' => $express->actual_insured_fee,
+                'material_fee' => $express->actual_material_fee,
+                'reverse_fee' => $express->actual_reverse_fee,
+            ];
+        }
+
+        return $fields;
     }
 }

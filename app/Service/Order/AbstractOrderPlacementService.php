@@ -136,14 +136,27 @@ abstract class AbstractOrderPlacementService extends AbstractService
     }
 
     /**
-     * 建订单行，`cost_price` 用 '0.00' 占位（真实成本要等真的调用了供应商才知道）。
-     * 返回 null 表示这次 `Order::create()` 撞上了 `(merchant_id, merchant_order_no)`
-     * 唯一约束——调用方据此判断"输掉了并发建单竞态"，必须调用
-     * `resolveReplayAfterCreateRace()` 去重新查那笔已存在的订单并原样返回，
+     * 建订单行。返回 null 表示这次 `Order::create()` 撞上了
+     * `(merchant_id, merchant_order_no)` 唯一约束——调用方据此判断"输掉了并发建单竞态"，
+     * 必须调用 `resolveReplayAfterCreateRace()` 去重新查那笔已存在的订单并原样返回，
      * 绝不能继续往下调用 `freeze()`。
+     *
+     * **收的是售价而不是 Product**：话费、卡券的售价来自本地商品
+     * （`products.sale_price`），快递的售价是下单时按最新运费成本 + 加价规则现算的
+     * （requirements.md 7.2「下单前重新向供应商检测价格」），根本没有 Product 行。
+     * 幂等重放、订单号冲突重试、竞态收尾这些逻辑对三条业务线是一样的，所以参数收窄到
+     * 它真正需要的那一个值。
+     *
+     * `cost_price` 用 `$costPrice` 传进来的预估值（话费/卡券传 '0.00' 占位——真实成本
+     * 要等真的调用了供应商才知道；快递传查价拿到的成本，下单前它就是已知的）。
      */
-    protected function createOrderRow(Merchant $merchant, string $merchantOrderNo, Product $product, string $callbackUrl): ?Order
-    {
+    protected function createOrderRow(
+        Merchant $merchant,
+        string $merchantOrderNo,
+        string $salePrice,
+        string $callbackUrl,
+        string $costPrice = '0.00'
+    ): ?Order {
         for ($attempt = 0; $attempt < self::MAX_ORDER_NO_RETRIES; ++$attempt) {
             try {
                 return $this->orderDao->create([
@@ -152,9 +165,9 @@ abstract class AbstractOrderPlacementService extends AbstractService
                     'merchant_order_no' => $merchantOrderNo,
                     'business_line' => $this->businessLine(),
                     'status' => 'processing',
-                    'sale_price' => $product->sale_price,
-                    'cost_price' => '0.00',
-                    'frozen_amount' => $product->sale_price,
+                    'sale_price' => $salePrice,
+                    'cost_price' => $costPrice,
+                    'frozen_amount' => $salePrice,
                     'refunded_amount' => '0.00',
                     'callback_url' => $callbackUrl,
                 ]);

@@ -455,6 +455,10 @@ class YunyangDriver
             'freight_insured' => $this->toMoneyString($result['freightInsured'] ?? null),
             'freight_haocai' => $this->toMoneyString($result['freightHaocai'] ?? null),
             'change_bill_freight' => $this->toMoneyString($result['changeBillFreight'] ?? null),
+            // 下单时放进 extendField1 的平台订单号，查询结果（带签名的请求）原样带回来。
+            // 下单结果未知、平台还没拿到 shopbill 的订单，只能靠它把回调认回来——而且必须用
+            // 查询结果里的这个值，不能用回调 payload 里的（回调没签名，谁都能填）
+            'platform_order_no' => $this->toStringOrNull($result['extendField1'] ?? null),
         ];
 
         return new DriverResult(

@@ -71,16 +71,20 @@
 
 | 能力 | Driver 方法 | Service 接入 | 单测 | 状态 |
 |---|---|---|---|---|
-| 查价（检测可用渠道） | ✅ `checkChannels()` | ⬜ | ✅ | 🔨 |
-| 下单 | ✅ `placeOrder()` | ⬜ | ✅ | 🔨 |
-| 查询订单详情 | ✅ `queryOrder()` | ⬜ | ✅ | 🔨 |
-| 解析回调（无签名，触发查询确认） | ✅ `parseCallback()` / `platformOrderNoFromCallback()` | ⬜ | ✅ | 🔨 |
-| 查询余额 | ✅ `queryBalance()` | ⬜ | ✅ | 🔨 |
-| 取消 | ✅ `cancelOrder()` | ⬜ | ✅ | 🔨 |
-| 轨迹查询 | ✅ `queryTrace()` | ⬜ | ✅ | 🔨 |
+| 查价（检测可用渠道） | ✅ `checkChannels()` | ✅ `ExpressQuoteService` | ✅ | ✅ |
+| 下单 | ✅ `placeOrder()` | ✅ `ExpressOrderPlacementService` | ✅ | ✅ |
+| 查询订单详情 | ✅ `queryOrder()` | ✅ `ExpressOrderSettlementService::refreshFromSupplier()`（定时查询、后台手动查询、取消确认） | ✅ | ✅ |
+| 解析回调（无签名，触发查询确认） | ✅ `parseCallback()` / `platformOrderNoFromCallback()` | ✅ `ExpressCallbackService` | ✅ | ✅ |
+| 查询余额 | ✅ `queryBalance()` | ✅ `SupplierBalanceService`（按驱动选工厂方法） | ✅ | ✅ |
+| 取消 | ✅ `cancelOrder()` | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅ |
+| 轨迹查询 | ✅ `queryTrace()` | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅ |
 | 提交售后工单 / 接收工单回调 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 错误码映射表 | ✅ 见下方说明 | ➖ | ✅ | ✅ |
 
+> **Service 接入（2026-09-23，快递下单流程）**：驱动层之外的全部接上了，业务规则见第 6 节脚注 ⑦。驱动本身只改了一处：
+> 订单详情的 `expressFees` 多带一个 `platform_order_no`（查询结果里原样带回的 `extendField1`），回调认领订单只信它、
+> 不信回调 payload 里的同名字段（回调没签名）。下面这段是驱动层落地时的说明，其中"Service 接入留空"已不再成立。
+>
 > 本次新增（2026-09-21，驱动层）：`App\Supplier\Yunyang\YunyangSigner`（`md5(appid + requestId + timeStamp + secretKey)`，
 > `requestId` 每次新生成）、`App\Supplier\Yunyang\YunyangStatusMapper`、`App\Supplier\Yunyang\YunyangDriver`，
 > 以及 `App\Supplier\DriverResult` 上新增的可选字段 `expressFees`（快递的结算依据是一组字段：
@@ -214,9 +218,9 @@
 | 电影票确认出票（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 电影票释放座位（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
 | 快递查价（三期） | ✅ `App\Controller\OpenApi\ExpressController` | ✅ `App\Service\OpenApi\ExpressQuoteService` | ✅ | ✅<sup>⑥</sup> |
-| 快递下单（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 快递取消（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 快递轨迹查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 快递下单（三期） | ✅ `App\Controller\OpenApi\ExpressController` | ✅ `App\Service\Order\ExpressOrderPlacementService` + `ExpressOrderSettlementService` | ✅ | ✅<sup>⑦</sup> |
+| 快递取消（三期） | ✅ 同上 | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅<sup>⑦</sup> |
+| 快递轨迹查询（三期） | ✅ 同上 | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅<sup>⑦</sup> |
 
 ① `订单查询`目前只覆盖一期业务线（`recharge`/`card`）：`App\Model\Order`/`OrderRecharge`、
 `App\Dao\OrderDao`（`findByOrderNoForMerchant`/`findByMerchantOrderNoForMerchant` 都带
@@ -224,9 +228,8 @@
 `App\Dao\OrderRechargeDao`、`App\Service\OpenApi\OrderQueryService`（卡密类订单查
 `order_recharges` 并用 `Encryptor` 解密返回明文卡号卡密）、
 `App\Controller\OpenApi\OrderController`（`GET /open-api/order`）。
-`requirements.md 8.1` 提到的"快递订单返回费用明细"是三期功能，对应的费用明细表还没建，
-这里**没有做任何 express 专属处理**——express 订单目前只会返回订单基础字段，不含快递费用
-明细，等三期快递相关表（云洋驱动，见第 3 节）建好后再补。同时新增了
+`requirements.md 8.1` 的"快递订单返回费用明细"2026-09-23 随快递下单补上：快递订单多一个 `express`
+明细（见脚注 ⑦）。同时新增了
 `App\Controller\OpenApi\AbstractOpenApiController::fail()`（业务失败信封，HTTP 状态码
 统一保持 200，用 `code` 非 0 表达失败，跟中间件鉴权失败用 4xx 状态码是两套不同约定，
 详见该类的注释）。
@@ -379,12 +382,53 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
   "除 sign 外按 key 排序拼 k=v" （8.1），嵌套数组没法参与拼接。用 POST 不用 GET：地址是个人信息，
   不该进 URL 和访问日志。
 - 商户接口文档页（`web/merchant` 的「接口文档」）已同步加上这个接口。
-- **快递业务线暂时还不对商户开放申请**（`SubscriptionService::OPEN_BUSINESS_LINES` 仍是
-  recharge/card）：下单流程还没建，只开查价没有意义。下单接口落地时一起把 express 放进去。
+- ~~快递业务线暂时还不对商户开放申请~~：2026-09-23 随下单接口开放（见 ⑦）。
 - 测试 `test/Cases/OpenApi/ExpressQuoteControllerTest.php`（9 个：加价只加运费 + 其余按成本 +
   编号不泄露渠道 ID、按总价排序、保价过滤、空列表 vs 42008、单家供应商失败不影响整体、
   未开通 42007、各类参数 41001、没配加价规则不按成本卖）、
   `test/Cases/Express/ExpressChannelCodecTest.php`（4 个：编号稳定、不同渠道不同编号、不泄露、乱码不匹配）。
+
+⑦ `快递下单 / 取消 / 轨迹`（requirements.md 7.2、8.1，2026-09-23）：`POST /open-api/express/order`、
+`POST /open-api/express/cancel`、`GET /open-api/express/trace`。快递的资金流程跟话费完全不同，
+所有供应商结果（同步下单、回调、定时查询）都交给同一个 `App\Service\Order\ExpressOrderSettlementService::apply()`：
+- **下单重新查价**：商户只传查价拿到的 `channel_code`，`ExpressQuoteService::resolveChannel()` 用同样的参数
+  重新查一遍、把编号换回云洋渠道；售价 = 运费成本加价 + 保价费 + 耗材费（按成本），冻结金额 = 售价。
+  编号对不上（渠道下线、地址/重量变了、要保价但不支持）新增错误码 `42009 ExpressChannelNotFound`，不建单不冻结。
+  下单参数比查价多寄收件人姓名/电话、详细地址、`item_name`，可选 `appointment_time`（必须是查价返回的时间段之一，
+  传给云洋的字段名 `appointmentTime` 是推断）。
+- **只下一次，不重试**：云洋没有防重复单号，超时是结果未知、保持处理中；下单前先把 `supplier_id` 记到订单上。
+  这种订单没有云洋单号查不了，定时查询把它们排除在外（`OrderAttemptDao::listDueForQuery()`），只能等回调认领或异常单转人工。
+- **冻结调整**：云洋受理后按它返回的冻结运费重算预估售价，多退少补冻结金额，新增流水类型 `freeze_adjust`
+  （`amount` 带符号）。可用余额不够就能冻多少冻多少，差额留到结算补扣。只调一次（以 `order_expresses.frozen_freight` 为准）。
+- **结算点 `feeOver=1`**：按实际费用算应收（运费加价，其余按成本），冻结的先扣，多了解冻、少了补扣（`supplement_deduct`，
+  可以扣成负余额）；订单 `success`，`sale_price`/`deducted_amount` 改成实际应收、`cost_price` 改成实际成本（财务报表毛利
+  直接用这两列）。商户实际被收的运费存 `order_expresses.freight_sale_price`（新增列，加价规则改了之后也能对上当时收的钱）。
+- **结算后的费用调整**：逐项比上次处理过的实际费用，差额记 `order_express_fee_adjustments` 并补扣（`supplement_deduct`）
+  或退回（`refund`），回调商户；运费按售价差额，其余按成本。回调重推、定时查询重复到达不会重复处理——所有比较和动钱
+  都在锁住 `order_expresses` 行的事务里（`OrderExpressDao::lockForUpdate()`）。
+- **取消**：只有待揽收、已有云洋单号的能取消；云洋说取消成功后再查一次订单详情，以"已取消且未扣费"为准全额解冻、
+  订单 `cancelled`（跟云洋主动取消后回调走同一段代码）。云洋拒绝取消统一返回新增的 `42010 OrderNotCancellable`，
+  不透传云洋文案。查询说"查无此单"不当取消处理，只记日志。
+- **回调**（`SupplierCallbackService` 按 `suppliers.driver` 分派到 `ExpressCallbackService`）：只用带签名查询的权威结果推进；
+  认领订单先按云洋单号，没有云洋单号的按**查询结果里**带回的 `extendField1`，不信 payload 里的（有专门的伪造回调用例）。
+  成功回复 `{"code":1,"message":"推送成功"}`；查询本身失败就不回成功，让云洋重推（结算后的费用调整只有回调能知道）。
+- **完成时间**：签收时间；拒收/不签收的由新增的 `App\Crontab\ExpressCompletionCrontab` 在扣费后超过兜底天数补上
+  （系统参数 `express_complete_fallback_days`，默认 15，已加进后台「系统设置」）。快递暂无返佣，不生成返佣记录。
+- **异常单**：快递待揽收可能超过异常单时长被标成异常单，之后云洋查询说已扣费照常结算。后台「人工处理」对快递只允许
+  置失败（云洋确认没有这一单时全额解冻），不能置成功（会按预估价扣款），扣费结果用「查询供应商」同步。
+- **对商户的展示**：下单/取消/订单查询多一个 `express` 明细（`App\Service\Order\ExpressOrderPresenter`：运单号、物流状态、
+  费用明细和费用调整记录，运费给的是加价后的售价，不给成本）；商户回调多带 `waybill_no`/`logistics_status`/`deducted_amount`
+  和四项费用（签名只能拼标量，调整记录商户用订单查询看）。云洋渠道 ID 和云洋单号都不外泄。
+- **快递业务线对商户开放申请**（`SubscriptionService::OPEN_BUSINESS_LINES` 加上 express）；商户后台「接口文档」已加上三个接口、
+  回调字段和 `freeze_adjust` 流水类型的中文名。
+- **没做的**：两个后台的订单详情页还没有快递明细（寄收件信息、费用明细、调整记录），第 7、8 节订单相关行的页面待补；
+  快递工单（第 3 节最后一行、第 8 节售后处理）仍未开始。
+- 测试：`test/Cases/OpenApi/ExpressOrderControllerTest.php`（11 个：重新查价冻结 + 冻结调整 + 参数透传 + 不泄露、拒单解冻、
+  超时不重试、幂等、42009、参数校验、取消解冻 / 已揽收不能取消 / 云洋拒绝不透传文案、轨迹 + 跨商户隔离、订单查询带明细）、
+  `test/Cases/Service/Order/ExpressOrderSettlementServiceTest.php`（14 个：冻结调整只一次 / 调低 / 余额不足封顶、7.2 结算举例两种、
+  结算后费用调整 + 重复推送不重复处理、逆向费扣成负余额、取消解冻、查无此单不解冻、签收完成时间、兜底完成、
+  回调按权威单号认领、伪造回调认领不了、定时查询按云洋单号查且排除没有单号的）、
+  `SupplierBalanceServiceTest::testYunyangSupplierIsQueriedWithItsOwnDriver`。
 
 ---
 
@@ -816,6 +860,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
 | 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
+| 快递完成兜底（三期） | Crontab | ✅ `App\Crontab\ExpressCompletionCrontab` → `ExpressOrderSettlementService::completeOverdue()`，每小时一次，见第 6 节脚注 ⑦ |
 
 **供应商结果查询轮询**（requirements.md 6.2 / 7.1）：每分钟一次（`onOneServer` + `singleton`），
 取"订单处理中、最新一次尝试仍是处理中/未知、距上次更新超过 60 秒"的尝试，每批最多 100 条、
@@ -878,14 +923,14 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
 | 卡速售 2.0 驱动 | 8 | 6 | 0 | 2 |
-| 云洋驱动 | 9 | 1 | 7 | 1 |
+| 云洋驱动 | 9 | 8 | 0 | 1 |
 | 芒果驱动 | 11 | 0 | 0 | 11 |
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
-| 开放 API 接口 | 15 | 8 | 0 | 7 |
+| 开放 API 接口 | 15 | 11 | 0 | 4 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 15 | 4 | 0 |
-| 异步任务与定时任务 | 11 | 8 | 0 | 3 |
-| **合计** | **107** | **71** | **11** | **25** |
+| 异步任务与定时任务 | 12 | 9 | 0 | 3 |
+| **合计** | **108** | **82** | **4** | **22** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -916,4 +961,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
-5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ 快递下单流程（三期建表 + 冻结/结算）（三期建表 + 第 6/7/8 节快递相关行）→ 第 4 节芒果驱动与电影票流程 → 沙箱环境
+5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ 第 4 节芒果驱动与电影票流程 → 沙箱环境

@@ -109,7 +109,11 @@ class SupplierBalanceService extends AbstractService
     public function refresh(Supplier $supplier): bool
     {
         try {
-            $balance = $this->normalize($this->supplierDriverFactory->build($supplier)->queryBalance());
+            // 两家驱动都有 queryBalance()，按驱动选工厂方法（快递是云洋，取可用余额 keyong）
+            $driver = $supplier->driver === 'yunyang'
+                ? $this->supplierDriverFactory->buildYunyang($supplier)
+                : $this->supplierDriverFactory->build($supplier);
+            $balance = $this->normalize($driver->queryBalance());
         } catch (Throwable $e) {
             $this->logger()->error('supplier balance query failed', [
                 'supplier_id' => $supplier->id,

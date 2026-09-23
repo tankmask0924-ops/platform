@@ -382,7 +382,7 @@ erDiagram
 |---|---|---|---|
 | id | bigint unsigned | 是 | 主键 |
 | merchant_id | bigint unsigned | 是 | 外键 `merchants.id` |
-| type | varchar(24) | 是 | `recharge` 充值 / `freeze` 冻结 / `deduct` 扣款 / `unfreeze` 解冻 / `supplement_deduct` 补扣 / `refund` 退款 / `adjustment` 调账 / `rebate_settle` 返佣入账 / `rebate_clawback` 返佣扣回 |
+| type | varchar(24) | 是 | `recharge` 充值 / `freeze` 冻结 / `deduct` 扣款 / `unfreeze` 解冻 / `supplement_deduct` 补扣 / `refund` 退款 / `adjustment` 调账 / `rebate_settle` 返佣入账 / `rebate_clawback` 返佣扣回 / `freeze_adjust` 冻结调整（快递，2026-09-23 补：`amount` 带符号，正数为多冻结、负数为还回可用余额） |
 | amount | decimal(10,2) | 是 | 本次变动金额，正数为增加对应余额，负数为减少（含义按 `type` 解释，见 [4.4 账户余额](requirements.md#44-账户余额)） |
 | available_before | decimal(10,2) | 是 | 变动前可用余额 |
 | available_after | decimal(10,2) | 是 | 变动后可用余额 |
@@ -542,7 +542,7 @@ erDiagram
 | merchant_order_no | varchar(64) | 是 | 商户订单号 |
 | business_line | varchar(16) | 是 | `recharge`/`card`/`movie`/`express` |
 | status | varchar(16) | 是 | `processing` 处理中 / `success` 成功 / `failed` 失败 / `cancelled` 已取消 / `abnormal` 异常 / `refunded` 已退款 |
-| sale_price | decimal(10,2) | 是 | 售价快照（快递为预估售价，结算后可能不等于最终扣款） |
+| sale_price | decimal(10,2) | 是 | 售价快照。快递：下单时为预估售价，冻结调整时按供应商冻结运费重算，**结算时改为实际应收**、之后随费用调整同步（财务报表毛利直接用这一列，2026-09-23 定） |
 | cost_price | decimal(10,2) | 是 | 成本快照：话费/卡券在下单时按所选供应商商品的成本价写入；电影票在锁座时按实时查询到的场次成本写入（锁座成功后成本已锁定，不会再变）；快递下单时先写入**预估**运费成本，供应商完成扣费后更新为**实际**成本 |
 | supplier_id | bigint unsigned | 否 | 最终成交/最后尝试的供应商，外键 `suppliers.id` |
 | supplier_order_no | varchar(128) | 否 | 供应商侧订单号 |
@@ -630,6 +630,7 @@ erDiagram
 | actual_insured_fee | decimal(10,2) | 否 | 实际保价费 |
 | actual_material_fee | decimal(10,2) | 否 | 实际耗材费 |
 | actual_reverse_fee | decimal(10,2) | 否 | 实际逆向费 |
+| freight_sale_price | decimal(10,2) | 否 | 商户实际被收的运费（实际运费按当时的加价规则加价后），结算时写入、运费调整时同步（2026-09-23 补：加价规则改过之后现算会对不上当时收的钱） |
 | logistics_status | varchar(16) | 是 | `pending_pickup` 待揽收 / `in_transit` 运输中 / `signed` 已签收 / `rejected` 拒收退回 / `cancelled` 已取消 |
 | fee_over_at | datetime | 否 | 供应商完成扣费时间（订单"成功"时刻） |
 | signed_at | datetime | 否 | 签收时间（订单完成时间来源） |

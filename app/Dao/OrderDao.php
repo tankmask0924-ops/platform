@@ -69,6 +69,18 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 按供应商 + 供应商单号找订单（快递回调用：云洋回调带的是它自己的商家单号 `shopbill`）。
+     * 同 findByOrderNo()，不限定商户，不能暴露给开放 API。
+     */
+    public function findBySupplierOrderNo(int $supplierId, string $supplierOrderNo): ?Order
+    {
+        return $this->newQuery()
+            ->where('supplier_id', $supplierId)
+            ->where('supplier_order_no', $supplierOrderNo)
+            ->first();
+    }
+
+    /**
      * 把一笔 `processing` 订单推进到终态，见 finishIfStatus()。
      *
      * @param array<string, mixed> $attributes

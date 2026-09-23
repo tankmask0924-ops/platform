@@ -46,7 +46,7 @@ final class DriverResult
      * @param null|array<int, array{card_no?: string, card_password?: string}> $cardList 见类注释——6.2 字面字段列表之外的必要扩展
      * @param null|array{fee_over?: null|int, type_code?: null|int, waybill?: null|string, weight?: null|string,
      *     total_freight?: null|string, freight?: null|string, freight_insured?: null|string,
-     *     freight_haocai?: null|string, change_bill_freight?: null|string} $expressFees 见类注释
+     *     freight_haocai?: null|string, change_bill_freight?: null|string, platform_order_no?: null|string} $expressFees 见类注释
      * @param array<string, mixed> $rawRequest
      * @param array<string, mixed> $rawResponse
      */
