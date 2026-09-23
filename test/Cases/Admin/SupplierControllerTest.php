@@ -114,14 +114,47 @@ class SupplierControllerTest extends HttpTestCase
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
         $response = $this->jsonRequest('POST', '/admin/suppliers', $token, [
-            'name' => '云洋',
-            'code' => 'yunyang_' . uniqid('', true),
-            'driver' => 'yunyang',
+            'name' => '未开发的供应商',
+            'code' => 'unknown_' . uniqid(),
+            'driver' => 'not_a_real_driver',
             'business_line' => 'recharge',
             'config' => ['foo' => 'bar'],
         ]);
 
         $this->assertSame(422, $response->getStatusCode());
+    }
+
+    /**
+     * 驱动和业务线要对得上：云洋挂在话费下会被路由当成卡速售去调。
+     */
+    public function testDriverMustFitBusinessLine()
+    {
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+
+        $mismatch = $this->jsonRequest('POST', '/admin/suppliers', $token, [
+            'name' => '云洋',
+            'code' => 'yunyang_' . uniqid(),
+            'driver' => 'yunyang',
+            'business_line' => 'recharge',
+            'config' => ['base_url' => 'https://example.invalid'],
+        ]);
+        $this->assertSame(422, $mismatch->getStatusCode());
+        $this->assertStringContainsString('express', (string) $mismatch->getBody());
+
+        $code = 'yunyang_' . uniqid();
+        $ok = $this->jsonRequest('POST', '/admin/suppliers', $token, [
+            'name' => '云洋',
+            'code' => $code,
+            'driver' => 'yunyang',
+            'business_line' => 'express',
+            'config' => ['base_url' => 'https://example.invalid', 'app_id' => 'a', 'secret_key' => 's'],
+        ]);
+        $this->assertSame(200, $ok->getStatusCode(), (string) $ok->getBody());
+        $supplier = Supplier::where('code', $code)->first();
+        $this->supplierIds[] = $supplier->id;
+
+        $switch = $this->jsonRequest('PUT', '/admin/suppliers/' . $supplier->id, $token, ['business_line' => 'movie']);
+        $this->assertSame(422, $switch->getStatusCode(), '只改业务线也要校验');
     }
 
     public function testCreateWithInvalidBusinessLineReturns422()

@@ -41,12 +41,15 @@ use Throwable;
 class SupplierAdminService extends AbstractService
 {
     /**
-     * 已开发的驱动白名单（requirements.md 6.3「对接驱动：从已开发的驱动中选择」）。
-     * 截至本任务，代码库里只有 App\Supplier\Kasushou\KasushouDriver 一个驱动实现
-     * （云洋/芒果尚未开工，见 docs/modules.md 第 3/4 节），所以这里只有一项。
-     * ————新驱动落地后，把驱动标识加进这个数组即可，不需要改别的校验逻辑。————.
+     * 已开发的驱动及其适用业务线（requirements.md 6.3「对接驱动：从已开发的驱动中选择」）。
+     * 驱动和业务线必须对得上：路由、回调、余额监控都按业务线/驱动选工厂方法，
+     * 云洋供应商挂在话费下就会被当成卡速售去调。新驱动落地后加一行即可。
      */
-    private const KNOWN_DRIVERS = ['kasushou'];
+    private const DRIVER_BUSINESS_LINES = [
+        'kasushou' => ['recharge', 'card'],
+        'yunyang' => ['express'],
+        'mango' => ['movie'],
+    ];
 
     /**
      * 所属业务线（requirements.md 6.3：话费 / 卡券 / 电影票 / 快递单选），
@@ -149,6 +152,7 @@ class SupplierAdminService extends AbstractService
         $code = $this->requiredString($data, 'code', 'code 不能为空');
         $driver = $this->validateDriver($data);
         $businessLine = $this->validateBusinessLine($data);
+        $this->assertDriverFitsBusinessLine($driver, $businessLine);
         $status = $this->validateStatus($data['status'] ?? self::DEFAULT_STATUS);
         $encryptedConfig = $this->encryptConfig($this->validateConfig($data));
 
@@ -209,6 +213,13 @@ class SupplierAdminService extends AbstractService
 
         if (array_key_exists('business_line', $data)) {
             $attributes['business_line'] = $this->validateBusinessLine($data);
+        }
+
+        if (isset($attributes['driver']) || isset($attributes['business_line'])) {
+            $this->assertDriverFitsBusinessLine(
+                $attributes['driver'] ?? $supplier->driver,
+                $attributes['business_line'] ?? $supplier->business_line
+            );
         }
 
         if (array_key_exists('status', $data)) {
@@ -431,11 +442,19 @@ class SupplierAdminService extends AbstractService
     private function validateDriver(array $data): string
     {
         $driver = $data['driver'] ?? null;
-        if (! is_string($driver) || ! in_array($driver, self::KNOWN_DRIVERS, true)) {
-            throw new HttpException(422, 'driver 必须是已开发的驱动之一：' . implode('/', self::KNOWN_DRIVERS));
+        if (! is_string($driver) || ! isset(self::DRIVER_BUSINESS_LINES[$driver])) {
+            throw new HttpException(422, 'driver 必须是已开发的驱动之一：' . implode('/', array_keys(self::DRIVER_BUSINESS_LINES)));
         }
 
         return $driver;
+    }
+
+    private function assertDriverFitsBusinessLine(string $driver, string $businessLine): void
+    {
+        $lines = self::DRIVER_BUSINESS_LINES[$driver] ?? [];
+        if (! in_array($businessLine, $lines, true)) {
+            throw new HttpException(422, 'driver ' . $driver . ' 只能用于业务线：' . implode('/', $lines));
+        }
     }
 
     /**

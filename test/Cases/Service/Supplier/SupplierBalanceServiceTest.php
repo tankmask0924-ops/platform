@@ -27,6 +27,7 @@ use App\Service\Order\RechargeOrderPlacementService;
 use App\Service\Supplier\SupplierBalanceService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Mango\MangoDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use App\Supplier\Yunyang\YunyangDriver;
@@ -121,6 +122,22 @@ class SupplierBalanceServiceTest extends TestCase
 
         $this->assertTrue($this->service()->refresh($supplier));
         $this->assertSame('88.80', $supplier->refresh()->balance);
+    }
+
+    public function testMangoSupplierIsQueriedWithItsOwnDriver()
+    {
+        $supplier = $this->createSupplier(balance: null);
+        $supplier->fill(['business_line' => 'movie', 'driver' => 'mango'])->save();
+
+        $driver = Mockery::mock(MangoDriver::class);
+        $driver->shouldReceive('queryBalance')->once()->andReturn('500.00');
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldNotReceive('build');
+        $factory->shouldReceive('buildMango')->andReturn($driver);
+        $this->instance(SupplierDriverFactory::class, $factory);
+
+        $this->assertTrue($this->service()->refresh($supplier));
+        $this->assertSame('500.00', $supplier->refresh()->balance);
     }
 
     public function testFailedQueryKeepsPreviousBalance()

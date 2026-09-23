@@ -27,14 +27,26 @@ use Throwable;
  * 供应商调用日志（requirements.md 6.8「每次调用供应商都记录请求、响应、耗时，卡密打码」）。
  *
  * 写入：驱动每发一次 HTTP 请求回调 record()（由 App\Supplier\SupplierDriverFactory 接上）。
- * 关联订单靠请求里的 `external_orderno`（平台单号-第几次尝试），不需要调用方另外传订单。
+ * 关联订单靠请求里带的平台订单号：卡速售的 `external_orderno`（平台单号-第几次尝试）、云洋 `content`
+ * 里的 `extendField1`、芒果的 `attach`，不需要调用方另外传订单。只有下单那一次请求带平台单号，
+ * 之后按供应商单号的查询关联不上订单。
  * 写日志失败只记 error 日志，不影响下单和查询本身。
  *
  * 收到的供应商回调不在这里记（`supplier_notify_logs` 还没接）。
  */
 class SupplierCallLogService extends AbstractService
 {
-    public const ACTIONS = ['place_order', 'query', 'query_balance', 'goods_detail', 'goods_list'];
+    /**
+     * 三家驱动记日志用的动作名（各驱动的 ACTIONS 常量），后台按动作筛选时以这里为白名单。
+     */
+    public const ACTIONS = [
+        'place_order', 'query', 'query_balance', 'goods_detail', 'goods_list',
+        // 云洋
+        'check_channel', 'cancel', 'query_trace',
+        // 芒果
+        'confirm_order', 'query_cities', 'query_regions', 'query_cinemas', 'sync_cinemas',
+        'query_films', 'query_shows', 'sync_shows', 'query_seats',
+    ];
 
     private const MAX_PER_PAGE = 100;
 
@@ -59,7 +71,7 @@ class SupplierCallLogService extends AbstractService
         try {
             $this->callLogDao->create([
                 'supplier_id' => $supplierId,
-                'order_id' => $this->resolveOrderId($request['body']['external_orderno'] ?? null),
+                'order_id' => $this->resolveOrderId($request['body'] ?? []),
                 'action' => $action,
                 'request' => CardSecretMasker::mask($request),
                 'response' => CardSecretMasker::mask($response),
@@ -147,13 +159,30 @@ class SupplierCallLogService extends AbstractService
     /**
      * external_orderno 是「平台单号-第几次尝试」（App\Service\Order\SupplierRouter::callSupplier()）。
      */
-    private function resolveOrderId(mixed $externalOrderNo): ?int
+    /**
+     * @param mixed $body 驱动记下的请求体
+     */
+    private function resolveOrderId(mixed $body): ?int
     {
-        if (! is_string($externalOrderNo) || preg_match('/^(.+)-\d+$/', $externalOrderNo, $m) !== 1) {
+        if (! is_array($body)) {
             return null;
         }
 
-        $order = $this->orderDao->findByOrderNo($m[1]);
+        $orderNo = null;
+        $externalOrderNo = $body['external_orderno'] ?? null;
+        if (is_string($externalOrderNo) && preg_match('/^(.+)-\d+$/', $externalOrderNo, $m) === 1) {
+            $orderNo = $m[1];
+        } elseif (is_string($body['attach'] ?? null)) {
+            $orderNo = $body['attach'];
+        } elseif (is_string($body['content'] ?? null)) {
+            $content = json_decode($body['content'], true);
+            $orderNo = is_array($content) && is_string($content['extendField1'] ?? null) ? $content['extendField1'] : null;
+        }
+        if ($orderNo === null || $orderNo === '') {
+            return null;
+        }
+
+        $order = $this->orderDao->findByOrderNo($orderNo);
 
         return $order !== null ? (int) $order->id : null;
     }

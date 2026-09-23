@@ -16,6 +16,7 @@ use App\Crypto\Encryptor;
 use App\Model\Supplier;
 use App\Service\Supplier\SupplierCallLogService;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Mango\MangoDriver;
 use App\Supplier\Yunyang\YunyangDriver;
 use Hyperf\Di\Annotation\Inject;
 use RuntimeException;
@@ -87,6 +88,35 @@ class SupplierDriverFactory
             (string) ($config['base_url'] ?? ''),
             (string) ($config['app_id'] ?? ''),
             (string) ($config['secret_key'] ?? ''),
+            fn (string $action, array $request, array $response, int $durationMs) => $this->callLogService->record(
+                (int) $supplier->id,
+                $action,
+                $request,
+                $response,
+                $durationMs
+            ),
+        );
+    }
+
+    /**
+     * 电影票（芒果）驱动。`suppliers.config` 密文解密后的 JSON 形状约定：
+     * `{"base_url": "...", "agent_id": "...", "app_id": "...", "token": "...", "tel": "账户手机号"}`，
+     * `tel` 只有查余额用（mango.md 第 1 节"余额"按 tel 查）。
+     */
+    public function buildMango(Supplier $supplier): MangoDriver
+    {
+        if ($supplier->driver !== 'mango') {
+            throw new RuntimeException('SupplierDriverFactory: supplier #' . $supplier->id . ' is not a mango supplier (driver "' . $supplier->driver . '").');
+        }
+
+        $config = $this->decodeConfig($supplier);
+
+        return new MangoDriver(
+            (string) ($config['base_url'] ?? ''),
+            (string) ($config['agent_id'] ?? ''),
+            (string) ($config['app_id'] ?? ''),
+            (string) ($config['token'] ?? ''),
+            (string) ($config['tel'] ?? ''),
             fn (string $action, array $request, array $response, int $durationMs) => $this->callLogService->record(
                 (int) $supplier->id,
                 $action,

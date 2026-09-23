@@ -39,6 +39,10 @@ namespace App\Supplier;
  * 耗材费/逆向费的拆分（requirements.md 7.2 要求快递费用明细和调整记录分别展示、
  * 加价只加在运费上）。这些数据只有驱动能拿到，不给它一个落点就传不出来。
  * 话费/卡券的驱动此字段恒为 null。
+ *
+ * `movieDetails`：电影票订单的状态与出票信息（芒果，见 App\Supplier\Mango\MangoDriver），
+ * 同 expressFees 的理由：`handle_step`（订单走到哪一步）、取票码、实际座位、锁座时的结算价、
+ * 是否"订单溢价"，6.2 的统一结果里都装不下。供应商返佣仍然放 `supplierRebate`。
  */
 final class DriverResult
 {
@@ -47,6 +51,7 @@ final class DriverResult
      * @param null|array{fee_over?: null|int, type_code?: null|int, waybill?: null|string, weight?: null|string,
      *     total_freight?: null|string, freight?: null|string, freight_insured?: null|string,
      *     freight_haocai?: null|string, change_bill_freight?: null|string, platform_order_no?: null|string} $expressFees 见类注释
+     * @param null|array<string, mixed> $movieDetails 见类注释
      * @param array<string, mixed> $rawRequest
      * @param array<string, mixed> $rawResponse
      */
@@ -62,6 +67,7 @@ final class DriverResult
         public readonly ?array $cardList = null,
         public readonly bool $supplierBalanceInsufficient = false,
         public readonly ?array $expressFees = null,
+        public readonly ?array $movieDetails = null,
     ) {
     }
 }

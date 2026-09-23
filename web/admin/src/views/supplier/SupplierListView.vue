@@ -2,9 +2,9 @@
 import { businessLineLabels, labelOf, money, StatusTag, toOptions, usePagedList } from '@platform/shared'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { type Supplier, supplierApi, type SupplierDetail, type SupplierForm } from '@/api/admin'
-import { driverConfigFields, driverLabels, supplierStatusLabels } from '@/labels'
+import { driverBusinessLines, driverConfigFields, driverLabels, supplierStatusLabels } from '@/labels'
 
 const list = usePagedList<Supplier, object>(supplierApi.list, {})
 const { rows, total, page, perPage, loading } = list
@@ -46,6 +46,18 @@ const form = reactive({
 const editConfig = ref(true)
 const config = reactive<Record<string, string>>({})
 const configFields = computed(() => driverConfigFields[form.driver] ?? [])
+/** 只列出能用于当前业务线的驱动（后端同样会校验） */
+const driverOptions = computed(() =>
+  toOptions(driverLabels).filter((o) => driverBusinessLines[o.value]?.includes(form.business_line)),
+)
+watch(
+  () => form.business_line,
+  () => {
+    if (!driverBusinessLines[form.driver]?.includes(form.business_line)) {
+      form.driver = driverOptions.value[0]?.value ?? ''
+    }
+  },
+)
 
 const rules: FormRules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -201,7 +213,7 @@ onMounted(list.load)
       </el-form-item>
       <el-form-item label="驱动">
         <el-select v-model="form.driver">
-          <el-option v-for="o in toOptions(driverLabels)" :key="o.value" :value="o.value" :label="o.label" />
+          <el-option v-for="o in driverOptions" :key="o.value" :value="o.value" :label="o.label" />
         </el-select>
       </el-form-item>
 

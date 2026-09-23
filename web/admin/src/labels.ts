@@ -23,6 +23,18 @@ export const supplierCallActionLabels: LabelMap = {
   query_balance: { label: '查余额' },
   goods_detail: { label: '查商品' },
   goods_list: { label: '商品列表' },
+  check_channel: { label: '查价' },
+  cancel: { label: '取消 / 释放座位' },
+  query_trace: { label: '查轨迹' },
+  confirm_order: { label: '确认出票' },
+  query_cities: { label: '查城市' },
+  query_regions: { label: '查区县' },
+  query_cinemas: { label: '查影院' },
+  sync_cinemas: { label: '批量拉影院' },
+  query_films: { label: '查影片' },
+  query_shows: { label: '查场次' },
+  sync_shows: { label: '批量拉场次' },
+  query_seats: { label: '查座位' },
 }
 
 export const supplierStatusLabels: LabelMap = {
@@ -43,10 +55,31 @@ export const driverConfigFields: Record<string, { key: string; label: string; se
     { key: 'user_id', label: '商户编号 user_id' },
     { key: 'api_key', label: '密钥 api_key', secret: true },
   ],
+  yunyang: [
+    { key: 'base_url', label: '接口地址（必须 https）' },
+    { key: 'app_id', label: 'appid' },
+    { key: 'secret_key', label: '密钥 secretKey', secret: true },
+  ],
+  mango: [
+    { key: 'base_url', label: '接口地址' },
+    { key: 'agent_id', label: 'agent_id' },
+    { key: 'app_id', label: 'app_id' },
+    { key: 'token', label: '签名 token', secret: true },
+    { key: 'tel', label: '账户手机号 tel（查余额用）' },
+  ],
 }
 
 export const driverLabels: LabelMap = {
   kasushou: { label: '卡速售 2.0' },
+  yunyang: { label: '云洋快递' },
+  mango: { label: '芒果电影' },
+}
+
+/** 驱动能用于哪些业务线，跟后端 SupplierAdminService::DRIVER_BUSINESS_LINES 一致 */
+export const driverBusinessLines: Record<string, string[]> = {
+  kasushou: ['recharge', 'card'],
+  yunyang: ['express'],
+  mango: ['movie'],
 }
 
 /**

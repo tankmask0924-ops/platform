@@ -183,6 +183,26 @@ class SupplierMonitorControllerTest extends HttpTestCase
         $this->assertSame(422, $bad->getStatusCode());
     }
 
+    /**
+     * 云洋把平台单号放在 content（JSON 字符串）的 extendField1，芒果放在 attach，下单日志都要能关联到订单；
+     * 两家新增的动作名也能筛选。
+     */
+    public function testCallLogsLinkOrdersForYunyangAndMango()
+    {
+        $supplier = $this->createSupplier();
+        $order = $this->createOrder($supplier);
+        $service = make(SupplierCallLogService::class);
+
+        $service->record($supplier->id, 'place_order', ['path' => '/api/wuliu/openService', 'body' => ['content' => json_encode(['extendField1' => $order->order_no])]], ['http_status' => 200], 50);
+        $service->record($supplier->id, 'place_order', ['path' => '/api/order/lock', 'body' => ['attach' => $order->order_no]], ['http_status' => 200], 50);
+        $service->record($supplier->id, 'query_seats', ['path' => '/api/show/seats', 'body' => ['showid' => 'S1']], ['http_status' => 200], 50);
+
+        $this->assertSame(2, SupplierCallLog::where('supplier_id', $supplier->id)->where('order_id', $order->id)->count());
+
+        $token = $this->loginWith(['supplier.view']);
+        $this->assertSame(1, $this->getJson('/admin/suppliers/' . $supplier->id . '/call-logs?action=query_seats', $token)['total']);
+    }
+
     public function testHistoricalSnapshotWithJsonStringBodyIsMaskedOnDisplay()
     {
         $supplier = $this->createSupplier();
