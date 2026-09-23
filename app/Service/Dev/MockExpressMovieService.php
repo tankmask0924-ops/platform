@@ -103,6 +103,8 @@ class MockExpressMovieService extends AbstractService
             'order_id' => $e2->id, 'type' => 'supplement', 'item' => 'material', 'amount' => '1.00',
             'reason' => '快递费用调整：耗材费补扣', 'created_at' => $this->ago(20),
         ]);
+        // 费用调整后订单的售价、实扣、成本跟着变（同 ExpressOrderSettlementService）
+        Order::query()->whereKey($e2->id)->update(['sale_price' => '15.50', 'deducted_amount' => '15.50', 'cost_price' => '13.50']);
         $this->workorder($e2, $yunyang, 'weight_verify', '商户反馈实际 1kg，按 3kg 计费，请核实重量', 'processing', [
             'supplier_reply' => '[已处理] 核实实际重量 1kg，退回运费 3 元（模拟回调）',
             'supplier_amount' => '3.00',

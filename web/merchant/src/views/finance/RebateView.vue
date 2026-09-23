@@ -94,6 +94,10 @@ onMounted(list.load)
     </el-col>
   </el-row>
 
+  <el-alert type="info" :closable="false" class="rule">
+    返佣比例是你所在等级的比例：话费、卡券按商品的返佣金额计算，电影票、快递按平台从供应商获得的返佣计算，都不是按订单金额计算。
+  </el-alert>
+
   <el-card shadow="never">
     <el-form inline @submit.prevent="list.search">
       <el-form-item label="平台单号">
@@ -168,6 +172,10 @@ onMounted(list.load)
 </template>
 
 <style scoped>
+.rule {
+  margin-bottom: 16px;
+}
+
 .summary {
   margin-bottom: 16px;
 }
