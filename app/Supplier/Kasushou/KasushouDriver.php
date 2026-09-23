@@ -97,6 +97,20 @@ class KasushouDriver
     /** 撤单（kasushou.md 第 1 节"撤单"）。路径是推断，同本类其它路径 */
     private const PATH_ORDER_BACK = '/api/v1/order/back';
 
+    /**
+     * 售后申请（kasushou.md 第 1 节「售后」：内容、截图、结果回调地址）。【推断】路径、请求字段
+     * （`content`/`images`/`url`）、响应里的售后单号字段名文档都没给样例，集中在 submitAftersale() 和
+     * parseAftersaleCallback() 里，联调时对不上只改这两处。
+     */
+    private const PATH_AFTERSALE_APPLY = '/api/v1/order/after_sale';
+
+    /** 售后处理回调的状态（处理中 / 处理完成 / 终止），数字和中文都认 */
+    private const AFTERSALE_STATUS_MAP = [
+        '1' => 'processing', '处理中' => 'processing',
+        '2' => 'completed', '处理完成' => 'completed',
+        '3' => 'terminated', '终止' => 'terminated',
+    ];
+
     private const PATH_GOODS_DETAIL = '/api/v1/goods/detail';
 
     private const PATH_GOODS_LIST = '/api/v1/goods/list';
@@ -109,6 +123,7 @@ class KasushouDriver
         self::PATH_ORDER_QUERY => 'query',
         self::PATH_USER_INFO => 'query_balance',
         self::PATH_ORDER_BACK => 'cancel',
+        self::PATH_AFTERSALE_APPLY => 'submit_aftersale',
         self::PATH_GOODS_DETAIL => 'goods_detail',
         self::PATH_GOODS_LIST => 'goods_list',
     ];
@@ -252,6 +267,77 @@ class KasushouDriver
         return [
             'accepted' => $response['httpStatus'] === 200,
             'message' => $message !== '' ? $message : ('http ' . $response['httpStatus']),
+        ];
+    }
+
+    /**
+     * 提交售后申请（requirements.md 7.7「供应商支持售后接口时，客服可直接通过接口提交给供应商」）。
+     * 按 `external_orderno`（平台尝试单号）指定订单，处理结果推到 `$notifyUrl`。
+     *
+     * `unknown = true`：网络失败或响应解析不了，卡速售可能已经受理，调用方要提示客服先去卡速售后台确认，
+     * 不能当"提交失败"马上重提。
+     *
+     * @param list<string> $images 截图链接
+     * @return array{accepted: bool, unknown: bool, aftersale_no: null|string, message: string}
+     */
+    public function submitAftersale(string $externalOrderNo, string $content, array $images, string $notifyUrl): array
+    {
+        $body = ['external_orderno' => $externalOrderNo, 'content' => $content, 'url' => $notifyUrl];
+        if ($images !== []) {
+            $body['images'] = implode(',', $images);
+        }
+
+        $response = $this->sendSigned(self::PATH_AFTERSALE_APPLY, $body);
+        $decoded = json_decode((string) ($response['raw']['body'] ?? ''), true);
+        if ($response['httpStatus'] === null || ! is_array($decoded)) {
+            return ['accepted' => false, 'unknown' => true, 'aftersale_no' => null, 'message' => 'kasushou: network error, timeout or unparseable response'];
+        }
+
+        $code = $decoded['code'] ?? null;
+        $message = (string) ($decoded['msg'] ?? '');
+        if ((string) $code === '500') {
+            // 文档：500 是未知错误，不能当拒绝
+            return ['accepted' => false, 'unknown' => true, 'aftersale_no' => null, 'message' => $message !== '' ? $message : 'kasushou: unknown error'];
+        }
+        if ($response['httpStatus'] !== 200 || (string) $code !== '200') {
+            return ['accepted' => false, 'unknown' => false, 'aftersale_no' => null, 'message' => $message !== '' ? $message : ('http ' . $response['httpStatus'])];
+        }
+
+        $data = $response['data'] ?? [];
+        $aftersaleNo = null;
+        foreach (['id', 'after_sale_id', 'aftersale_id', 'sn'] as $key) {
+            if (isset($data[$key]) && (is_string($data[$key]) || is_int($data[$key])) && (string) $data[$key] !== '') {
+                $aftersaleNo = (string) $data[$key];
+
+                break;
+            }
+        }
+
+        return ['accepted' => true, 'unknown' => false, 'aftersale_no' => $aftersaleNo, 'message' => $message];
+    }
+
+    /**
+     * 售后处理回调。**跟订单回调同一套签名**（`sha1(time + JSON + apikey)`），验签失败返回 null，
+     * 调用方回 403。签名通过的状态和说明可以信；但"处理完成"不等于"确认未到账"——结论由客服看说明后在
+     * 争议里驳回或确认，这里只返回卡速售说了什么。
+     *
+     * @param array<string, mixed> $payload
+     * @return null|array{aftersale_no: null|string, external_orderno: null|string, status: null|string, reply: null|string}
+     */
+    public function parseAftersaleCallback(array $payload): ?array
+    {
+        if (! $this->signer->verifyCallback($payload, $this->apiKey)) {
+            return null;
+        }
+
+        $string = static fn (mixed $value): ?string => (is_string($value) || is_int($value)) && (string) $value !== '' ? (string) $value : null;
+        $status = $string($payload['status'] ?? null);
+
+        return [
+            'aftersale_no' => $string($payload['id'] ?? $payload['after_sale_id'] ?? $payload['aftersale_id'] ?? null),
+            'external_orderno' => $string($payload['external_orderno'] ?? null),
+            'status' => $status === null ? null : (self::AFTERSALE_STATUS_MAP[$status] ?? null),
+            'reply' => $string($payload['result'] ?? $payload['remark'] ?? $payload['msg'] ?? $payload['content'] ?? null),
         ];
     }
 

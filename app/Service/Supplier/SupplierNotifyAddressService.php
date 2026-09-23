@@ -54,9 +54,6 @@ class SupplierNotifyAddressService extends AbstractService
     }
 
     /**
-     * 按编码和令牌找供应商；编码不存在和令牌不对都当成找不到，不区分，免得被用来探测编码。
-     */
-    /**
      * 芒果影院更新回调地址（mango.md：影院数据变化时推送，只发一次），同样带令牌。
      */
     public function cinemaNotifyUrl(Supplier $supplier): string
@@ -64,6 +61,17 @@ class SupplierNotifyAddressService extends AbstractService
         return $this->orderNotifyUrl($supplier) . '/cinema';
     }
 
+    /**
+     * 卡速售售后处理结果回调地址（提交售后申请时逐单传给卡速售），同样带令牌。
+     */
+    public function aftersaleNotifyUrl(Supplier $supplier): string
+    {
+        return $this->orderNotifyUrl($supplier) . '/aftersale';
+    }
+
+    /**
+     * 按编码和令牌找供应商；编码不存在和令牌不对都当成找不到，不区分，免得被用来探测编码。
+     */
     public function resolve(string $code, string $token): Supplier
     {
         $supplier = $this->supplierDao->findByCode($code);

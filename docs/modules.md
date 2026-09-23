@@ -56,7 +56,7 @@
 | 查询余额 | ✅ `KasushouDriver::queryBalance()` | ✅ `App\Service\Supplier\SupplierBalanceService`（余额监控，见第 9 节） | ✅ `KasushouDriverTest` + `SupplierBalanceServiceTest` | ✅ |
 | 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | ✅ `App\Service\Supplier\ProductSyncService`：商品变更通知 `POST /notify/{code}/goods`（`handleNotification()`）+ 每日全量校准（`App\Crontab\SupplierProductSyncCrontab` → `syncAllSuppliers()`），见第 9 节 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测）、`NotifySupplierControllerTest`（通知路由 200/403/404） | ✅ |
 | 撤单（异常单处理用，可选） | ✅ `cancelOrder()`（路径 `/api/v1/order/back` 是推断） | ✅ `OrderAdminService::cancelAtSupplier()` | ✅ | ✅ |
-| 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 提交售后 / 接收售后结果 | ✅ `submitAftersale()` / `parseAftersaleCallback()`（路径 `/api/v1/order/after_sale` 和字段名是推断） | ✅ `App\Service\Admin\DisputeSupplierAftersaleService`（争议里提交，回调 `POST /notify/{code}/{token}/aftersale`） | ✅ `KasushouDriverTest` + `DisputeControllerTest` | ✅ 2026-09-23，见第 8 节「售后处理」说明 |
 | 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
 
 > 本次新增（下单/查询订单/解析回调/查询余额）：`App\Supplier\UnifiedResult`（4 态枚举）、`App\Supplier\DriverResult`（统一结果 DTO，含超出 6.2 字面字段列表的 `cardList` 扩展字段，见类注释）、`App\Supplier\Kasushou\KasushouSigner`（sha1 签名/验签）、`App\Supplier\Kasushou\KasushouStatusMapper`、`App\Supplier\Kasushou\KasushouDriver`。未引入 `DriverInterface`：目前只有卡速售一个驱动实现，云洋/芒果尚未开工，接口形状还没被第二个实现验证过，判断属于过早抽象，留了代码注释提醒等第二个驱动落地后再抽取。Service 接入留空：订单处理/路由 Service 调用这个驱动尚未建立（依赖第 5 节路由与第 6 节话费下单 API，均未开工），且供应商配置从哪里读取（`suppliers.config`）本身也是单独一期的 ⬜ 行，本次驱动构造函数直接接收 baseUrl/userId/apiKey，跟配置来源解耦。
@@ -789,7 +789,16 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - **争议期间返佣暂停到账**：`MerchantRebateDao::findDuePending()` 排除有处理中争议的订单，驳回后恢复。
 >   `BalanceService::settleRebate()` 改成锁住返佣行后重新确认仍是 pending 才入账（锁顺序：商户 → 返佣，跟退款/扣回一致），
 >   避免结算任务手上的旧数据把已作废的返佣发出去——此前只靠流水去重，拦不住这种情况。
-> - 未做：通过卡速售售后接口提交给供应商并接收结果（驱动未实现售后接口，第 2 节）。
+> - **提交卡速售售后**（2026-09-23，requirements.md 7.7「供应商支持售后接口时，客服可直接通过接口提交给供应商并接收处理结果」）：
+>   `POST /admin/disputes/{id}/supplier-aftersale`（`content` ≤ 500 字 + 可选 `images` 最多 5 个 http(s) 链接，`aftersale.handle`），
+>   争议详情抽屉里「提交卡速售售后」。按订单最新一次尝试的 `订单号-尝试序号` 提交给那家卡速售站点，结果回调地址
+>   `/notify/{code}/{token}/aftersale`（逐单传给卡速售，需要配了 `SUPPLIER_NOTIFY_BASE_URL`）。只对处理中的争议；供应商售后处理中时
+>   不能重复提交，终止/处理完成后可以补材料再提。卡速售拒绝 422、结果未知（超时、500）502，都不记为已提交。
+>   `aftersale_disputes` 加了 `supplier_id`、`supplier_aftersale_no/status/reply/submitted_at/updated_at` 六列，争议列表/详情多一个
+>   `supplier_aftersale` 对象。**回调有签名**（同订单回调），验签通过的状态（处理中/处理完成/终止）和说明直接记到争议上，
+>   按售后单号认领，没有单号时按 `external_orderno` 反查订单再找提交给这家供应商的争议；验签失败 403、认不出 404。
+>   **不自动结案**："处理完成"不说明到账与否，客服看说明后仍在争议里驳回或确认未到账，退款只有 `confirm()` 一个出口；
+>   卡速售若因售后把订单退款，走"成功后被供应商退款"链路自动处理。调用日志动作 `submit_aftersale`。
 > - 测试：`test/Cases/Admin/DisputeControllerTest.php`、`test/Cases/Service/Order/OrderRefundServiceTest.php`。
 
 > 「快递工单」（requirements.md 7.2、8.3，yunyang.md 第 1、5 节，2026-09-23）：快递售后不对商户开放，客服在后台代提交云洋工单。
@@ -1066,7 +1075,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
-| 卡速售 2.0 驱动 | 8 | 7 | 0 | 1 |
+| 卡速售 2.0 驱动 | 8 | 8 | 0 | 0 |
 | 云洋驱动 | 9 | 9 | 0 | 0 |
 | 芒果驱动 | 11 | 11 | 0 | 0 |
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
@@ -1074,7 +1083,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 19 | 0 | 0 |
 | 异步任务与定时任务 | 13 | 11 | 0 | 2 |
-| **合计** | **109** | **105** | **0** | **4** |
+| **合计** | **109** | **106** | **0** | **3** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 

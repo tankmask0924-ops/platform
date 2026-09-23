@@ -692,6 +692,11 @@ erDiagram
 | id | bigint unsigned | 是 | 主键 |
 | order_id | bigint unsigned | 是 | 外键 `orders.id` |
 | merchant_id | bigint unsigned | 是 | 外键 `merchants.id` |
+| supplier_id | bigint unsigned | 否 | 提交给哪家供应商售后（卡速售售后接口） |
+| supplier_aftersale_no | varchar(64) | 否 | 供应商售后单号 |
+| supplier_aftersale_status | varchar(16) | 否 | 供应商售后状态：`processing` 处理中 / `completed` 处理完成 / `terminated` 终止 |
+| supplier_aftersale_reply | varchar(500) | 否 | 供应商处理说明（售后回调，有签名） |
+| supplier_aftersale_submitted_at / supplier_aftersale_updated_at | datetime | 否 | 提交时间 / 最近一次回调时间 |
 | status | varchar(16) | 是 | `processing` 处理中 / `rejected` 已驳回 / `confirmed` 已确认未到账 |
 | evidence | json | 否 | 客服核实凭证（供应商查询结果截图/文本） |
 | handler_id | bigint unsigned | 否 | 外键 `admin_users.id`，处理客服 |

@@ -40,7 +40,7 @@ class SupplierCallLogService extends AbstractService
      * 三家驱动记日志用的动作名（各驱动的 ACTIONS 常量），后台按动作筛选时以这里为白名单。
      */
     public const ACTIONS = [
-        'place_order', 'query', 'query_balance', 'goods_detail', 'goods_list',
+        'place_order', 'query', 'query_balance', 'goods_detail', 'goods_list', 'submit_aftersale',
         // 云洋
         'check_channel', 'cancel', 'query_trace', 'submit_workorder',
         // 芒果

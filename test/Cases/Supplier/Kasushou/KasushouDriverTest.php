@@ -614,6 +614,60 @@ class KasushouDriverTest extends TestCase
         $this->assertArrayNotHasKey('url', $sent[1][1]);
     }
 
+    public function testSubmitAftersaleOutcomes()
+    {
+        $sent = [];
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')->times(3)->andReturnUsing(function (string $method, string $url, array $options) use (&$sent) {
+            $sent[] = [$url, $options['json']];
+
+            return match (count($sent)) {
+                1 => new Response(200, [], json_encode(['code' => 200, 'msg' => '提交成功', 'data' => ['id' => 88]])),
+                2 => new Response(400, [], json_encode(['code' => 400, 'msg' => '订单已超过售后期'])),
+                default => new Response(500, [], json_encode(['code' => 500, 'msg' => '系统繁忙'])),
+            };
+        });
+        $driver = $this->makeDriver($client);
+
+        $this->assertSame(
+            ['accepted' => true, 'unknown' => false, 'aftersale_no' => '88', 'message' => '提交成功'],
+            $driver->submitAftersale('R1-1', '用户称未到账', ['https://img.example/1.png'], 'https://platform.example/notify/k/t/aftersale')
+        );
+        $this->assertStringEndsWith('/api/v1/order/after_sale', $sent[0][0]);
+        $this->assertSame([
+            'external_orderno' => 'R1-1', 'content' => '用户称未到账', 'url' => 'https://platform.example/notify/k/t/aftersale', 'images' => 'https://img.example/1.png',
+        ], $sent[0][1]);
+
+        $refused = $driver->submitAftersale('R1-1', 'x', [], 'https://platform.example/notify/k/t/aftersale');
+        $this->assertFalse($refused['accepted']);
+        $this->assertFalse($refused['unknown']);
+        $this->assertSame('订单已超过售后期', $refused['message']);
+        $this->assertArrayNotHasKey('images', $sent[1][1]);
+
+        $this->assertTrue($driver->submitAftersale('R1-1', 'x', [], 'https://platform.example/notify/k/t/aftersale')['unknown'], '500 是未知错误，不当拒绝');
+
+        $timeout = Mockery::mock(ClientInterface::class);
+        $timeout->shouldReceive('request')->once()->andThrow(new ConnectException('timeout', new Request('POST', self::BASE_URL)));
+        $this->assertTrue($this->makeDriver($timeout)->submitAftersale('R1-1', 'x', [], 'https://p.example/a')['unknown']);
+    }
+
+    public function testParseAftersaleCallbackVerifiesSignature()
+    {
+        $time = '1700000000';
+        $signed = ['id' => 88, 'external_orderno' => 'R1-1', 'status' => 2, 'result' => '已核实，号码已到账', 'time' => $time];
+        ksort($signed);
+        $payload = $signed + ['sign' => sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . self::API_KEY)];
+        $driver = $this->makeDriver(Mockery::mock(ClientInterface::class));
+
+        $this->assertSame(
+            ['aftersale_no' => '88', 'external_orderno' => 'R1-1', 'status' => 'completed', 'reply' => '已核实，号码已到账'],
+            $driver->parseAftersaleCallback($payload)
+        );
+
+        $payload['result'] = '伪造：未到账';
+        $this->assertNull($driver->parseAftersaleCallback($payload), '内容被改过，验签失败');
+    }
+
     private function placeOrderWithOrderResponse(int $httpStatus, array $orderData, bool $isCardProduct = false): DriverResult
     {
         $client = Mockery::mock(ClientInterface::class);

@@ -27,6 +27,7 @@ export const supplierCallActionLabels: LabelMap = {
   cancel: { label: '取消 / 释放座位' },
   query_trace: { label: '查轨迹' },
   submit_workorder: { label: '提交工单' },
+  submit_aftersale: { label: '提交售后' },
   confirm_order: { label: '确认出票' },
   query_cities: { label: '查城市' },
   query_regions: { label: '查区县' },
@@ -256,4 +257,11 @@ export const workorderStatusLabels: LabelMap = {
   processing: { label: '处理中', type: 'warning' },
   completed: { label: '已完成', type: 'success' },
   rejected: { label: '已驳回', type: 'info' },
+}
+
+/** 卡速售售后处理状态（售后处理回调） */
+export const supplierAftersaleStatusLabels: LabelMap = {
+  processing: { label: '供应商处理中', type: 'warning' },
+  completed: { label: '供应商处理完成', type: 'success' },
+  terminated: { label: '供应商已终止', type: 'info' },
 }

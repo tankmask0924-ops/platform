@@ -15,6 +15,7 @@ namespace App\Controller;
 use App\Exception\CallbackOrderNotFoundException;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
+use App\Service\Admin\DisputeSupplierAftersaleService;
 use App\Service\Order\MovieCallbackService;
 use App\Service\Order\SupplierCallbackService;
 use App\Service\Supplier\ProductSyncService;
@@ -81,6 +82,9 @@ class NotifySupplierController extends AbstractController
     #[Inject]
     protected MovieCallbackService $movieCallbackService;
 
+    #[Inject]
+    protected DisputeSupplierAftersaleService $aftersaleService;
+
     /**
      * 地址里的令牌不对跟供应商不存在一样返回 404（见 SupplierNotifyAddressService::resolve()）。
      */
@@ -115,12 +119,6 @@ class NotifySupplierController extends AbstractController
     }
 
     /**
-     * 供应商商品变更通知（kasushou.md 第 4 节"商品同步"）：`POST /notify/{code}/{token}/goods`，
-     * 需要在供应商后台把商品变更通知地址配成这个。状态码约定同 handle()：供应商不存在
-     * 404、验签失败 403，其余（含商品没配映射）200 回 `ok`；查询商品详情失败走全局
-     * 异常处理返回 500，供应商视为失败，漏掉的由每日全量校准补上。
-     */
-    /**
      * 芒果影院更新回调（mango.md：只发一次、不补发、接入方无需响应）：`POST /notify/{code}/{token}/cinema`。
      * 同步失败只记日志，照样回 200，漏掉的由每日全量同步兜底。
      */
@@ -139,6 +137,12 @@ class NotifySupplierController extends AbstractController
         return $this->response->raw(self::PRODUCT_NOTIFICATION_REPLY)->withStatus(200);
     }
 
+    /**
+     * 供应商商品变更通知（kasushou.md 第 4 节"商品同步"）：`POST /notify/{code}/{token}/goods`，
+     * 需要在供应商后台把商品变更通知地址配成这个。状态码约定同 handle()：供应商不存在
+     * 404、验签失败 403，其余（含商品没配映射）200 回 `ok`；查询商品详情失败走全局
+     * 异常处理返回 500，供应商视为失败，漏掉的由每日全量校准补上。
+     */
     #[PostMapping(path: '{code}/{token}/goods')]
     public function productChanged(string $code, string $token): PsrResponseInterface
     {
@@ -146,6 +150,25 @@ class NotifySupplierController extends AbstractController
             $this->notifyAddressService->resolve($code, $token);
             $this->productSyncService->handleNotification($code, $this->request->all());
         } catch (SupplierNotFoundException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(404);
+        } catch (InvalidSupplierCallbackSignatureException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(403);
+        }
+
+        return $this->response->raw(self::PRODUCT_NOTIFICATION_REPLY)->withStatus(200);
+    }
+
+    /**
+     * 卡速售售后处理回调（kasushou.md 第 1 节「售后」）：`POST /notify/{code}/{token}/aftersale`，
+     * 提交售后时逐单传给卡速售。状态码约定同 handle()：验签失败 403、认不出售后单 404，成功回 `ok`。
+     */
+    #[PostMapping(path: '{code}/{token}/aftersale')]
+    public function aftersale(string $code, string $token): PsrResponseInterface
+    {
+        try {
+            $supplier = $this->notifyAddressService->resolve($code, $token);
+            $this->aftersaleService->handleCallback($supplier, $this->request->all());
+        } catch (CallbackOrderNotFoundException|SupplierNotFoundException $e) {
             return $this->response->raw($e->getMessage())->withStatus(404);
         } catch (InvalidSupplierCallbackSignatureException $e) {
             return $this->response->raw($e->getMessage())->withStatus(403);

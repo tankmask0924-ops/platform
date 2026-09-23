@@ -430,6 +430,16 @@ export interface Dispute {
   handler_id: number | null
   submitted_at: string | null
   resolved_at: string | null
+  /** 提交给卡速售售后的进展，没提交过是 null */
+  supplier_aftersale: {
+    supplier_id: number | null
+    aftersale_no: string | null
+    /** processing / completed / terminated */
+    status: string | null
+    reply: string | null
+    submitted_at: string
+    updated_at: string | null
+  } | null
 }
 
 export interface DisputeDetail extends Dispute {
@@ -443,6 +453,8 @@ export const disputeApi = {
     http.post<Dispute>(`/admin/disputes/${id}/reject`, { remark, evidence }),
   confirm: (id: number, remark: string, evidence: string[]) =>
     http.post<Dispute>(`/admin/disputes/${id}/confirm`, { remark, evidence }),
+  submitSupplierAftersale: (id: number, content: string, images: string[]) =>
+    http.post<DisputeDetail>(`/admin/disputes/${id}/supplier-aftersale`, { content, images }),
 }
 
 /** 商户返佣明细：App\Controller\Admin\RebateController */

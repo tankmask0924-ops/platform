@@ -23,6 +23,11 @@ use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantRebate;
 use App\Model\Order;
+use App\Model\OrderAttempt;
+use App\Model\Supplier;
+use App\Service\Supplier\SupplierNotifyAddressService;
+use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\SupplierDriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
@@ -58,6 +63,8 @@ class DisputeControllerTest extends HttpTestCase
 
     private array $orderIds = [];
 
+    private array $supplierIds = [];
+
     protected function setUp(): void
     {
         ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
@@ -75,11 +82,14 @@ class DisputeControllerTest extends HttpTestCase
             }
             MerchantBalanceLog::where('order_id', $id)->delete();
             MerchantRebate::where('order_id', $id)->delete();
+            OrderAttempt::where('order_id', $id)->delete();
             Order::destroy($id);
         }
         foreach ($this->merchantIds as $id) {
             Merchant::destroy($id);
         }
+        Supplier::destroy($this->supplierIds);
+        $this->supplierIds = [];
         foreach ($this->adminUserIds as $id) {
             AdminUser::destroy($id);
         }
@@ -192,6 +202,80 @@ class DisputeControllerTest extends HttpTestCase
         $body = json_decode((string) $this->request('GET', '/admin/disputes?status=processing&merchant_id=' . $processing->merchant_id, $token)->getBody(), true);
         $this->assertSame([$processing->id], array_column($body['data'], 'id'));
         $this->assertSame(422, $this->request('GET', '/admin/disputes?status=bogus', $token)->getStatusCode());
+    }
+
+    /**
+     * 提交卡速售售后 → 详情看到进展 → 处理中不能重复提交 → 卡速售回调（验签在驱动里，这里 mock）记下状态和说明，
+     * 但不自动结案：争议仍是处理中，钱不动。
+     */
+    public function testSubmitToSupplierAftersaleAndReceiveCallback()
+    {
+        $dispute = $this->createDispute();
+        $order = Order::find($dispute->order_id);
+        $supplier = $this->createKasushouSupplier();
+        OrderAttempt::create(['order_id' => $order->id, 'supplier_id' => $supplier->id, 'attempt_no' => 2, 'result' => 'success']);
+        $token = $this->loginAs($this->createAdminWithPermissions(['aftersale.view', 'aftersale.handle']));
+        $this->expectNotify(0);
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('submitAftersale')->once()
+            ->with($order->order_no . '-2', '商户称未到账，请核实', ['https://img.example/1.png'], Mockery::pattern('#/notify/.+/aftersale$#'))
+            ->andReturn(['accepted' => true, 'unknown' => false, 'aftersale_no' => 'AS-' . $dispute->id, 'message' => '提交成功']);
+        $driver->shouldReceive('parseAftersaleCallback')->once()->andReturn([
+            'aftersale_no' => 'AS-' . $dispute->id, 'external_orderno' => $order->order_no . '-2', 'status' => 'completed', 'reply' => '运营商确认已到账',
+        ]);
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldReceive('build')->andReturn($driver);
+        ApplicationContext::getContainer()->set(SupplierDriverFactory::class, $factory);
+
+        $backup = getenv(SupplierNotifyAddressService::BASE_URL_ENV);
+        putenv(SupplierNotifyAddressService::BASE_URL_ENV . '=https://platform.example');
+        try {
+            $this->assertSame(422, $this->request('POST', '/admin/disputes/' . $dispute->id . '/supplier-aftersale', $token, ['content' => ''])->getStatusCode());
+            $this->assertSame(422, $this->request('POST', '/admin/disputes/' . $dispute->id . '/supplier-aftersale', $token, ['content' => 'x', 'images' => ['javascript:alert(1)']])->getStatusCode());
+
+            $response = $this->request('POST', '/admin/disputes/' . $dispute->id . '/supplier-aftersale', $token, [
+                'content' => '商户称未到账，请核实', 'images' => ['https://img.example/1.png'],
+            ]);
+            $this->assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+            $body = json_decode((string) $response->getBody(), true);
+            $this->assertSame('processing', $body['supplier_aftersale']['status']);
+            $this->assertSame('AS-' . $dispute->id, $body['supplier_aftersale']['aftersale_no']);
+
+            $this->assertSame(409, $this->request('POST', '/admin/disputes/' . $dispute->id . '/supplier-aftersale', $token, ['content' => '再提一次'])->getStatusCode());
+        } finally {
+            putenv($backup === false ? SupplierNotifyAddressService::BASE_URL_ENV : SupplierNotifyAddressService::BASE_URL_ENV . '=' . $backup);
+        }
+
+        $callback = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token . '/aftersale', [
+            'form_params' => ['id' => 'AS-' . $dispute->id, 'status' => 2, 'time' => '1', 'sign' => 'mocked'],
+        ]);
+        $this->assertSame(200, $callback->getStatusCode());
+        $this->assertSame('ok', (string) $callback->getBody());
+
+        $dispute->refresh();
+        $this->assertSame('completed', $dispute->supplier_aftersale_status);
+        $this->assertSame('运营商确认已到账', $dispute->supplier_aftersale_reply);
+        $this->assertSame('processing', $dispute->status, '不自动结案，客服看说明后驳回或确认');
+        $this->assertSame('success', $order->refresh()->status);
+
+        $this->assertSame(404, $this->client->request('POST', '/notify/' . $supplier->code . '/wrong-token/aftersale', ['form_params' => []])->getStatusCode());
+    }
+
+    private function createKasushouSupplier(): Supplier
+    {
+        $unique = uniqid('dispute_aftersale_', true);
+        $supplier = Supplier::create([
+            'name' => $unique,
+            'code' => substr(md5($unique), 0, 24),
+            'business_line' => 'recharge',
+            'driver' => 'kasushou',
+            'config' => 'unused-in-test-driver-factory-is-overridden',
+            'status' => 'active',
+        ]);
+        $this->supplierIds[] = $supplier->id;
+
+        return $supplier->refresh();
     }
 
     private function createDispute(): AftersaleDispute

@@ -32,7 +32,7 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *   通知商户），争议状态跟退款在同一个事务里提交。
  * - 只能处理"处理中"的争议；两个客服同时处理时后到的返回 409。
  * - 都写操作日志（module = aftersale）。
- * - 不含：通过供应商售后接口提交核实（卡速售驱动还没实现售后接口）。
+ * - 提交给卡速售售后接口核实见 App\Service\Admin\DisputeSupplierAftersaleService。
  */
 class DisputeAdminService extends AbstractService
 {
@@ -281,6 +281,15 @@ class DisputeAdminService extends AbstractService
             'handler_id' => $dispute->handler_id,
             'submitted_at' => $dispute->submitted_at?->toDateTimeString(),
             'resolved_at' => $dispute->resolved_at?->toDateTimeString(),
+            // 提交给卡速售售后的进展（DisputeSupplierAftersaleService），没提交过都是 null
+            'supplier_aftersale' => $dispute->supplier_aftersale_submitted_at === null ? null : [
+                'supplier_id' => $dispute->supplier_id,
+                'aftersale_no' => $dispute->supplier_aftersale_no,
+                'status' => $dispute->supplier_aftersale_status,
+                'reply' => $dispute->supplier_aftersale_reply,
+                'submitted_at' => $dispute->supplier_aftersale_submitted_at->toDateTimeString(),
+                'updated_at' => $dispute->supplier_aftersale_updated_at?->toDateTimeString(),
+            ],
         ];
     }
 }

@@ -14,6 +14,7 @@ import {
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { onMounted, reactive, ref } from 'vue'
 import { type Dispute, disputeApi, type DisputeDetail } from '@/api/admin'
+import { supplierAftersaleStatusLabels } from '@/labels'
 
 const list = usePagedList<Dispute, { status: string; merchant_id: string }>(disputeApi.list, {
   status: 'processing',
@@ -92,6 +93,41 @@ async function submitHandle() {
   }
 }
 
+// 提交卡速售售后：卡速售处理完会回调，结论仍由客服在下面驳回或确认
+const aftersaleOpen = ref(false)
+const aftersaleSubmitting = ref(false)
+const aftersaleForm = reactive({ content: '', images: '' })
+
+function openAftersale() {
+  aftersaleForm.content = ''
+  aftersaleForm.images = ''
+  aftersaleOpen.value = true
+}
+
+async function submitAftersale() {
+  if (!detail.value) {
+    return
+  }
+  const content = aftersaleForm.content.trim()
+  const images = splitLines(aftersaleForm.images)
+  if (content === '') {
+    ElMessage.warning('请填写售后说明')
+    return
+  }
+  if (images.length > 5) {
+    ElMessage.warning('截图最多 5 个链接')
+    return
+  }
+  aftersaleSubmitting.value = true
+  try {
+    detail.value = await disputeApi.submitSupplierAftersale(detail.value.id, content, images)
+    ElMessage.success('已提交给卡速售，处理结果会自动回传')
+    aftersaleOpen.value = false
+  } finally {
+    aftersaleSubmitting.value = false
+  }
+}
+
 onMounted(list.load)
 </script>
 
@@ -148,7 +184,7 @@ onMounted(list.load)
     />
   </el-card>
 
-  <el-drawer v-model="detailVisible" title="售后争议" size="600px" @closed="action = null">
+  <el-drawer v-model="detailVisible" title="售后争议" size="600px" @closed="(action = null), (aftersaleOpen = false)">
     <div v-loading="detailLoading">
       <template v-if="detail">
         <el-descriptions :column="2" border>
@@ -175,6 +211,20 @@ onMounted(list.load)
           <el-descriptions-item label="处理时间">{{ detail.resolved_at ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="处理人">{{ detail.handler_id ? `#${detail.handler_id}` : '-' }}</el-descriptions-item>
           <el-descriptions-item label="处理说明">{{ detail.result_remark ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="卡速售售后" :span="2">
+            <template v-if="detail.supplier_aftersale">
+              <StatusTag :map="supplierAftersaleStatusLabels" :value="detail.supplier_aftersale.status" />
+              <span class="muted">
+                {{ detail.supplier_aftersale.aftersale_no ? `单号 ${detail.supplier_aftersale.aftersale_no}，` : '' }}提交于
+                {{ detail.supplier_aftersale.submitted_at }}
+              </span>
+              <div v-if="detail.supplier_aftersale.reply" class="reply">
+                {{ detail.supplier_aftersale.reply }}
+                <span class="muted">{{ detail.supplier_aftersale.updated_at }}</span>
+              </div>
+            </template>
+            <span v-else>未提交</span>
+          </el-descriptions-item>
           <el-descriptions-item label="凭证" :span="2">
             <ul v-if="detail.evidence?.length" class="evidence">
               <li v-for="(item, i) in detail.evidence" :key="i">{{ item }}</li>
@@ -185,10 +235,21 @@ onMounted(list.load)
 
         <template v-if="detail.status === 'processing'">
           <el-alert type="info" :closable="false" class="block" title="先向供应商核实到账情况：已到账则驳回并附凭证；未到账则确认退款。" />
-          <div v-if="!action" class="actions">
+          <div v-if="!action && !aftersaleOpen" class="actions">
+            <el-button v-if="detail.supplier_aftersale?.status !== 'processing'" @click="openAftersale">提交卡速售售后</el-button>
             <el-button @click="openHandle('reject')">确认已到账（驳回）</el-button>
             <el-button type="danger" @click="openHandle('confirm')">确认未到账（退款）</el-button>
           </div>
+          <el-form v-else-if="aftersaleOpen" label-position="top" class="block">
+            <el-form-item label="售后说明（提交给卡速售）" required>
+              <el-input v-model="aftersaleForm.content" type="textarea" :rows="3" maxlength="500" show-word-limit />
+            </el-form-item>
+            <el-form-item label="截图链接（选填，每行一个，最多 5 个）">
+              <el-input v-model="aftersaleForm.images" type="textarea" :rows="2" />
+            </el-form-item>
+            <el-button @click="aftersaleOpen = false">取消</el-button>
+            <el-button type="primary" :loading="aftersaleSubmitting" @click="submitAftersale">提交</el-button>
+          </el-form>
           <el-form v-else label-position="top" class="block">
             <el-form-item :label="action === 'reject' ? '驳回：处理说明（商户可见）' : '退款：处理说明（商户可见）'" required>
               <el-input v-model="handleForm.remark" type="textarea" :rows="2" maxlength="255" show-word-limit />
@@ -233,6 +294,11 @@ onMounted(list.load)
   margin-left: 8px;
   color: #909399;
   font-size: 12px;
+}
+
+.reply {
+  margin-top: 4px;
+  word-break: break-all;
 }
 
 .evidence {

@@ -19,6 +19,7 @@ use App\Middleware\AdminPermissionMiddleware;
 use App\Model\AdminUser;
 use App\Network\ClientIpResolver;
 use App\Service\Admin\DisputeAdminService;
+use App\Service\Admin\DisputeSupplierAftersaleService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
 use Hyperf\HttpServer\Annotation\GetMapping;
@@ -38,6 +39,9 @@ class DisputeController extends AbstractController
 
     #[Inject]
     protected ClientIpResolver $clientIpResolver;
+
+    #[Inject]
+    protected DisputeSupplierAftersaleService $supplierAftersaleService;
 
     #[Middleware(AdminAuthMiddleware::class)]
     #[Middleware(AdminPermissionMiddleware::class)]
@@ -85,6 +89,20 @@ class DisputeController extends AbstractController
             $this->adminId(),
             $this->clientIpResolver->resolve($this->request),
         );
+    }
+
+    /**
+     * 提交给卡速售售后接口核实（requirements.md 7.7），`content` + 可选 `images`（截图链接）。返回争议详情。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('aftersale.handle')]
+    #[PostMapping(path: '{id:\d+}/supplier-aftersale')]
+    public function submitSupplierAftersale(int $id): array
+    {
+        $this->supplierAftersaleService->submit($id, $this->request->all(), $this->adminId(), $this->clientIpResolver->resolve($this->request));
+
+        return $this->disputeAdminService->detail($id);
     }
 
     private function adminId(): int
