@@ -60,6 +60,12 @@ const router = createRouter({
           meta: { title: '返佣明细' },
         },
         {
+          path: 'supplier-rebates',
+          name: 'supplier-rebates',
+          component: () => import('@/views/merchant/SupplierRebateListView.vue'),
+          meta: { title: '供应商返佣明细' },
+        },
+        {
           path: 'products',
           name: 'products',
           component: () => import('@/views/product/ProductListView.vue'),

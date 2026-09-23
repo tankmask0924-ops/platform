@@ -577,11 +577,11 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商管理：商品同步接入 / 余额监控 / 熔断状态 / 调用日志 / 统计 | 一期（熔断二期，均已完成） | ✅ `App\Controller\Admin\SupplierController` | ✅ `App\Service\Supplier\SupplierCallLogService` / `SupplierNotifyAddressService`、`App\Service\Admin\SupplierAdminService` / `SupplierStatsService` | `views/supplier/SupplierDetailView.vue`（列表点名称进入）✅ 已在浏览器点过刷新余额、同步商品、调用日志；统计卡片已联调（2026-09-21，按天/按商品都用真实 order_attempts 数据核对过） | ✅ 回调地址、余额监控、商品同步、调用日志、统计、熔断状态都已完成。熔断见第 5 节「熔断」说明，其余见下方说明 |
 | 商户等级：CRUD / 各业务线比例设置 | 一期 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | `views/merchant/MerchantLevelView.vue` ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。商品单独覆盖某等级比例（`product_level_rebates`）已在「本地商品库」行完成 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ✅ `App\Controller\Admin\PricingRuleController` | ✅ `App\Service\Product\PricingRuleService` | `views/product/PricingRuleView.vue`（菜单在商品与供应商下）✅ 已联调（2026-09-21） | ✅ 见下方「价格设置」说明 |
-| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
+| 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` / `App\Service\Admin\SupplierRebateAdminService` | `views/merchant/RebateListView.vue`（菜单「商户返佣」，商户详情可跳转按商户筛选）✅ 已联调（2026-09-18）；`views/merchant/SupplierRebateListView.vue`（菜单「供应商返佣」，2026-09-23，只过了类型检查） | ✅ 供应商返佣明细 2026-09-23 补齐，见下方「供应商返佣」说明。固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。测试 `test/Cases/Admin/RebateControllerTest.php` |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18；2026-09-23 详情加快递/电影票明细卡片、撤单和部分退款按钮，只过了类型检查） | ✅ 全部完成，见下方说明（部分退款、发起供应商撤单 2026-09-23 补齐）。2026-09-23：详情接口多 `express`（寄收件人、预估/冻结/实际运费成本和向商户收的运费、其它三项实际费用、费用调整含原因）和 `movie`（场次、座位、每张售价和成本、供应商返佣、取票码）两段；两个后台共用 `web/shared` 的 `ExpressDetailInfo` / `MovieDetailInfo` 组件（后台版多出的成本字段有就显示）。快递、电影票异常单只能人工置失败（测试 `testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess`） |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
-| 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | 🔨 订单对账 + 差异标记处理已完成；返佣对账三期随电影票/快递业务线一起做，见下方「对账」说明 |
+| 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | ✅ 订单对账 + 差异标记处理（2026-09-21）；返佣对账 2026-09-23 随电影票补齐（快递暂不对账），见下方「对账」和「供应商返佣」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
 
@@ -627,8 +627,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - **按等级分组用商户当前等级**：`orders` 没有等级快照（只有 `merchant_rebates` 有）。两边都用当前
 >   等级，行能对上但历史订单会跟着调级走；各用各的，同一行的两半就不是同一批订单。选了前者，
 >   单笔订单当时按哪个等级返的佣在返佣明细页查得到。这个取舍写在 `OrderDao::applyReportGrouping()`。
-> - **供应商返佣恒为 `0.00`**：话费、卡券没有供应商返佣，电影票/快递是三期（同
->   `SupplierStatsService`），字段按最终形状先返回，三期在 Dao 里补 SUM 即可。
+> - **供应商返佣**（2026-09-23 接上）：电影票、快递成功订单明细上的 `supplier_rebate` 之和，已退款的不算；
+>   话费、卡券没有供应商返佣。
 > - 接口：`GET /admin/reports/profit`（`group_by` = day / merchant / level / business_line / supplier，
 >   `from`/`to` 默认最近 30 天、最多跨 92 天，可选 `merchant_id`；按天分组补齐空日期；分组键带可读名称，
 >   商户用手机号/邮箱——商户表没有名称列，跟返佣明细页一致）、`GET /admin/reports/balance-flows`
@@ -659,9 +659,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - 比两项：`status`（平台终态 vs 供应商状态，成功后被全额退款就落在这里）和 `cost_price`
 >   （只在两边都成功时比，差额 = 平台 − 供应商，用 `bcsub` 不转 float）。一边失败时供应商返回的金额要么是 0、
 >   要么是退款前的原值，比了只会把 `status` 那条差异重复说一遍。
-> - **`rebate` 类型暂时没有对账器**：供应商返佣只有电影票、快递才有（5.4），这两条业务线是三期，
->   平台侧现在没有任何供应商返佣记录可对。常量先定义齐全（同 `Alert` 的 7 个 type），三期加一个 `runRebate()`
->   即可，不用改表结构和前端。
+> - **`rebate` 类型**（2026-09-23）：电影票订单并进同一次对账，一次查询同时出订单差异和返佣差异，见下方「供应商返佣」说明。
 > - 接口：`GET /admin/reconciliations`（type / status / field / supplier_id / order_no / date_from / date_to
 >   筛选，待处理在前、其次批次倒序，带出订单号和供应商名，额外返回不受筛选影响的 `open_count`）、
 >   `POST /admin/reconciliations/run`（`date` 批次日期，默认今天，只允许最近 90 天，**同步执行**，跟供应商商品
@@ -677,6 +675,31 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   配置坏了不影响别家、重跑整体替换、只对窗口内的终态订单）+ `test/Cases/Admin/ReconciliationControllerTest.php`
 >   （重跑后能按订单号查到、备注与处理人、忽略与重复标记 409、非法筛选和批次日期 422、查不到的订单号返回空列表、
 >   只读权限不能标记也不能重跑）。
+
+> 「供应商返佣」（requirements.md 5.4、8.3，2026-09-23）：电影票上线后把"供应商返佣"这条账接完整。
+> - **明细**：`GET /admin/rebates/supplier`（权限同商户返佣明细 `rebate.view`），一行一笔电影票/快递的**成功**订单：
+>   供应商返佣（`null` = 供应商还没给）、这笔订单的商户返佣及比例和状态、返佣收支（供应商返佣 − 商户返佣，作废/已扣回的
+>   商户返佣不减）。筛选 business_line（movie/express）、rebate（returned 已返回 / missing 未返回）、supplier_id、merchant_id、
+>   order_no、completed_from/completed_to；汇总按同一筛选给笔数、已返回/未返回笔数、两边金额和返佣收支。已退款订单不列，
+>   跟财务报表同一口径（供应商会收回返佣）。快递行目前都是"未返回"：云洋没有返佣字段。实现
+>   `App\Service\Admin\SupplierRebateAdminService` + `OrderDao::paginateSupplierRebates()/summarizeSupplierRebates()`。
+> - **财务报表、供应商统计**原来固定返回 0.00 的供应商返佣改成真实汇总（口径见上面两段）。
+> - **返佣对账**：`ReconciliationService::runOrderReconciliation()` 的取数范围从"所有终态订单"改成话费、卡券、电影票
+>   （`BUSINESS_LINES`）。电影票按芒果单号查芒果订单详情，比状态、成本；两边都成功且芒果给了返佣时再比
+>   `order_movies.supplier_rebate`（平台没记按 0.00）和芒果 `total_rebate`，对不上写一条 `type=rebate, field=rebate_amount`，
+>   差额 = 平台 − 芒果。供应商返佣没有单独的账单接口，查询订单详情给的就是芒果认定的最终值。订单差异和返佣差异两个批次在
+>   同一个事务里整体替换；汇总多返回 `rebate_checked` / `rebate_diff_count`，后台重跑的提示里一起显示。
+>   芒果的"结果未知"一律算没拿到记录（芒果驱动传输失败也带回单号，卡速售那套"看结构"的判断对它不成立）。
+>   **快递不参与对账**：云洋"成功"是扣费完成、之后还有费用调整，平台成本是四项实际费用之和，云洋查询给的是总运费，口径没跟
+>   云洋核对过，硬比只会天天报假差异；云洋也没有返佣。**顺带修掉**：原来快递、电影票订单也会进对账，按卡速售驱动去建
+>   云洋/芒果供应商的驱动必然失败，每天在日志里报错并计进"没拿到供应商记录"。
+> - **补晚到的返佣**：后台订单详情「查询供应商」对电影票成功订单开放（原来只有话费卡券的成功订单能查），查到返佣就写进
+>   `order_movies.supplier_rebate` 并按 5.3 生成商户返佣（已生成过的不重复），取票码变了再回调商户；不重复扣款。
+>   返佣对账报出"平台 0.00、芒果 x.xx"时客服在这里处理。
+> - 测试：`ReconciliationServiceTest::testMovieOrdersReconcileSupplierRebate`（返佣一致不报、没接住晚到返佣报一条、芒果查询
+>   失败不算差异、快递不查、重跑不重复）、`RebateControllerTest::testSupplierRebateListShowsMovieRebatesAndBalance`、
+>   `ReportControllerTest::testMovieSupplierRebateIsCountedInRebateBalance`（5.3 例 2：3.00 − 2.40 = 0.60）、
+>   `OrderControllerTest::testQuerySupplierOnSuccessMovieOrderPicksUpLateRebate`。
 
 > 「告警」（requirements.md 8.3，database-design.md 4.14，2026-09-21）：新建 `alerts` 表 + `App\Model\Alert`
 > / `App\Dao\AlertDao`。产生全部走 `App\Service\Alert\AlertService::raise()`（全平台唯一写这张表的地方），
@@ -745,8 +768,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   成功率虚高，而成功率正是这份统计要用来调优先级的核心指标；成功率分母只算已出结果的（success + failed），处理中/结果未知不计入；
 >   平均到账时长 = 该次尝试从占号到写下最终结果的秒数，只算成功的尝试（同步就成功的是 0 秒，秒级精度）；成本总额只累计成功的尝试，
 >   用 `orders.cost_price` 快照（成功时写的就是这家的成本）。按商品分组联 `order_recharges`（话费、卡券的商品在这张表），
->   没有商品行的订单归到"未知商品"。**供应商返佣总额固定 `0.00`**：话费、卡券本来就没有供应商返佣，带 `supplier_rebate`
->   列的 `order_movies`/`order_expresses` 是三期才建的表，字段先按最终形状返回，三期在 Dao 里补 SUM 即可，接口和页面形状不用再改。
+>   没有商品行的订单归到"未知商品"。**供应商返佣总额**（2026-09-23 接上）：成功的尝试、且订单现在仍成功时，累计电影票/快递明细上的
+>   `supplier_rebate`；话费、卡券没有供应商返佣。
 >   测试 `test/Cases/Admin/SupplierStatsControllerTest.php`。
 > - **卡密打码**：新增 `App\Supplier\CardSecretMasker`，JSON 字符串形式的响应体也会解开打码。之前 `order_attempts` 快照里的原始响应体是 JSON 字符串，
 >   后台原来的打码只认数组键，卡号卡密实际是明文落库、明文展示的；现在落库前打码，后台展示时对历史数据再打一次（库里已有的旧快照没有回刷）。
@@ -1026,9 +1049,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 16 | 3 | 0 |
+| 系统管理后台 | 19 | 18 | 1 | 0 |
 | 异步任务与定时任务 | 13 | 11 | 0 | 2 |
-| **合计** | **109** | **101** | **3** | **5** |
+| **合计** | **109** | **103** | **1** | **5** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1053,10 +1076,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - 系统后台：商户列表/审核/详情/流水/启停/等级/限流、充值审核与调账、商品库（含等级比例覆盖）、供应商配置、商品映射、商户等级、订单与异常单、争议处理
 3. **边做页面边补一期还缺的接口**，接口和页面一起完成：
    - 商户后台：~~找回密码、修改密码、资质提交与审核状态~~（已完成）、~~首页统计、服务开通、商品价格展示~~（已完成）、~~返佣明细~~（已完成）、~~接口文档~~（已完成）
-   - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成，供应商返佣明细三期）、~~商品同步接入与余额监控、调用日志~~（已完成）、~~供应商统计~~（已完成）
+   - 系统后台：~~服务开通审核~~（已完成）、~~系统设置~~（已完成，页面待联调）、~~返佣管理（商户返佣明细）~~（已完成；供应商返佣明细 2026-09-23 已完成）、~~商品同步接入与余额监控、调用日志~~（已完成）、~~供应商统计~~（已完成）
    - ~~商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算~~（已完成，前端计算）
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - ~~一期只剩：后台订单的部分退款与发起供应商撤单~~（2026-09-23 已完成，**一期到此全部完成**）
-4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
-5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ 沙箱环境
+4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账；返佣对账 2026-09-23 随电影票完成）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
+5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ ~~供应商返佣明细 + 返佣对账~~（2026-09-23 已完成）→ 快递工单 → 沙箱环境

@@ -35,7 +35,7 @@ async function load() {
 /** 话费、卡券：成功订单也能查（看是不是被供应商退款了），异常单能撤单，成功订单能部分退款 */
 const isRechargeOrCard = computed(() => ['recharge', 'card'].includes(order.value?.business_line ?? ''))
 const canQuery = computed(
-  () => ['processing', 'abnormal'].includes(order.value?.status ?? '') || (order.value?.status === 'success' && isRechargeOrCard.value),
+  () => ['processing', 'abnormal'].includes(order.value?.status ?? '') || (order.value?.status === 'success' && (isRechargeOrCard.value || order.value?.business_line === 'movie')),
 )
 const canCancelAtSupplier = computed(() => order.value?.status === 'abnormal' && isRechargeOrCard.value)
 const canPartialRefund = computed(() => order.value?.status === 'success' && isRechargeOrCard.value)

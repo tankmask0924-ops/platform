@@ -20,12 +20,9 @@ use Carbon\Carbon;
  * App\Service\Reconciliation\ReconciliationService，后台查看与标记处理在
  * App\Service\Admin\ReconciliationAdminService。
  *
- * **两个 type 都在这里定义，`rebate` 暂时没有产生方**：跟 App\Model\Alert 的 7 个 type
- * 一样，取值范围由需求给定（8.3「订单对账与返佣对账分开进行」），不由"现在写了几个
- * 对账器"决定。供应商返佣只有电影票、快递才有（requirements.md 5.4），这两条业务线
- * 和对应的驱动都是三期，平台侧现在根本没有供应商返佣记录可对，所以 `rebate` 的对账器
- * 等三期跟业务线一起做，届时只需要在 ReconciliationService 里加一个 runRebate()，
- * 不用回头改枚举、迁移注释和前端中文名三处。
+ * 两个 type 分开记（8.3「订单对账与返佣对账分开进行」）：`order` 比状态和成本，`rebate` 比供应商返佣，
+ * 目前只有电影票有供应商返佣可对（requirements.md 5.4，快递的云洋没有返佣）。两者由 ReconciliationService
+ * 的同一次查询产生，各自按 `(type, reconciliation_date)` 整批替换。
  *
  * 没有 updated_at：按 database-design.md 4.15 的字段表建表，标记处理写的是
  * resolved_at/resolved_by/remark，$timestamps 关掉、created_at 写入时自己传。
@@ -59,7 +56,7 @@ class ReconciliationDiff extends Model
     /** 成本金额不一致：平台订单成本快照 vs 供应商订单金额 */
     public const FIELD_COST_PRICE = 'cost_price';
 
-    /** 返佣金额不一致：平台记录的供应商返佣 vs 供应商返佣账单（三期） */
+    /** 返佣金额不一致：平台记录的供应商返佣 vs 供应商查询订单详情给的返佣 */
     public const FIELD_REBATE_AMOUNT = 'rebate_amount';
 
     public const FIELDS = [self::FIELD_STATUS, self::FIELD_COST_PRICE, self::FIELD_REBATE_AMOUNT];

@@ -14,6 +14,7 @@ namespace App\Service\Reconciliation;
 
 use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
+use App\Dao\OrderMovieDao;
 use App\Dao\ReconciliationDiffDao;
 use App\Dao\SupplierDao;
 use App\Model\Order;
@@ -21,9 +22,11 @@ use App\Model\ReconciliationDiff;
 use App\Service\AbstractService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Mango\MangoDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Coroutine\Parallel;
+use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
@@ -52,10 +55,16 @@ use Throwable;
  * supplierOrderNo / actualCost 至少有一个有值（见 KasushouDriver::mapOrderData），
  * 传输层失败时两者都是 null。判断的是结构，不是 failReason 的文案。
  *
- * **返佣对账（`type=rebate`）暂时没有对账器**：供应商返佣只有电影票、快递才有
- * （requirements.md 5.4），这两条业务线是三期，平台侧现在没有任何供应商返佣记录可对。
- * 等三期做业务线时在这里加一个 runRebate()，写入的行沿用同一张表和同一套
- * 后台列表/标记处理，不需要动表结构和前端。见 App\Model\ReconciliationDiff 类注释。
+ * **电影票一起对，快递暂不对**（2026-09-23）。电影票按芒果单号查芒果订单详情，比状态、成本，
+ * 另外比**供应商返佣**（`type=rebate`，平台 `order_movies.supplier_rebate` vs 芒果 `total_rebate`）：
+ * 供应商返佣没有单独的账单接口，查询订单详情给的就是芒果认定的最终值（mango.md 第 3 节），
+ * 同一次查询同时产出订单差异和返佣差异，两个批次一起替换。返佣只在两边都成功时比，
+ * 芒果没给返佣（`supplierRebate` 为 null）不比；平台没记到而芒果有，就是返佣晚到没接住，
+ * 客服在订单详情「查询供应商」即可补上（会顺带生成商户返佣）。
+ * 芒果的结果未知一律算没拿到记录：芒果驱动在传输失败时也会带回单号，上面那套"看结构"
+ * 的判断对它不成立；芒果也没有"部分退款"这种答了但不确定的状态。
+ * 快递不参与：云洋"成功"是扣费完成、之后还有费用调整，`orders.cost_price` 是四项实际费用之和，
+ * 而云洋查询给的是总运费，口径还没跟云洋核对过；云洋也没有返佣。硬比只会每天报一批假差异。
  */
 class ReconciliationService extends AbstractService
 {
@@ -63,6 +72,11 @@ class ReconciliationService extends AbstractService
      * 参与对账的订单终态。处理中、异常单不参与，理由见 OrderDao::listFinishedBetween。
      */
     public const TERMINAL_STATUSES = ['success', 'failed', 'cancelled', 'refunded'];
+
+    /**
+     * 参与对账的业务线，快递为什么不在里面见类注释。
+     */
+    public const BUSINESS_LINES = ['recharge', 'card', 'movie'];
 
     private const BATCH_SIZE = 100;
 
@@ -79,6 +93,9 @@ class ReconciliationService extends AbstractService
     protected OrderAttemptDao $orderAttemptDao;
 
     #[Inject]
+    protected OrderMovieDao $orderMovieDao;
+
+    #[Inject]
     protected SupplierDao $supplierDao;
 
     #[Inject]
@@ -91,12 +108,12 @@ class ReconciliationService extends AbstractService
     protected LoggerFactory $loggerFactory;
 
     /**
-     * 跑一个批次的订单对账。整批算完之后一次性替换掉该批次的旧记录，
+     * 跑一个批次的订单对账和返佣对账。整批算完之后一次性替换掉该批次的旧记录（两种类型在同一个事务里），
      * 中途失败不会留下"删了旧的还没写新的"的空批次。
      *
      * @param null|string $batchDate 批次日期 Y-m-d，默认今天；覆盖的是它前一天完成的订单
      * @return array{type: string, reconciliation_date: string, order_date: string,
-     *     checked: int, unreachable: int, diff_count: int}
+     *     checked: int, unreachable: int, diff_count: int, rebate_checked: int, rebate_diff_count: int}
      */
     public function runOrderReconciliation(?string $batchDate = null): array
     {
@@ -107,7 +124,9 @@ class ReconciliationService extends AbstractService
         $drivers = [];
         $checked = 0;
         $unreachable = 0;
+        $rebateChecked = 0;
         $rows = [];
+        $rebateRows = [];
         $afterId = 0;
 
         while (true) {
@@ -116,17 +135,19 @@ class ReconciliationService extends AbstractService
                 $orderDate . ' 00:00:00',
                 $orderDate . ' 23:59:59',
                 $afterId,
-                self::BATCH_SIZE
+                self::BATCH_SIZE,
+                self::BUSINESS_LINES
             );
             if ($orders->isEmpty()) {
                 break;
             }
             $afterId = (int) $orders->last()->id;
             $this->ensureDrivers($orders->pluck('supplier_id')->unique()->all(), $drivers);
+            $platformRebates = $this->platformMovieRebates($orders);
 
             $parallel = new Parallel(self::CONCURRENCY);
             foreach ($orders as $order) {
-                $parallel->add(fn () => $this->compareOne($order, $drivers, $batchDate, $now));
+                $parallel->add(fn () => $this->compareOne($order, $drivers, $batchDate, $now, $platformRebates));
             }
 
             foreach ($parallel->wait(false) as $outcome) {
@@ -139,10 +160,19 @@ class ReconciliationService extends AbstractService
                 foreach ($outcome['rows'] as $row) {
                     $rows[] = $row;
                 }
+                if ($outcome['rebate_checked'] ?? false) {
+                    ++$rebateChecked;
+                }
+                foreach ($outcome['rebate_rows'] ?? [] as $row) {
+                    $rebateRows[] = $row;
+                }
             }
         }
 
-        $this->reconciliationDiffDao->replaceBatch(ReconciliationDiff::TYPE_ORDER, $batchDate, $rows);
+        Db::transaction(function () use ($batchDate, $rows, $rebateRows) {
+            $this->reconciliationDiffDao->replaceBatch(ReconciliationDiff::TYPE_ORDER, $batchDate, $rows);
+            $this->reconciliationDiffDao->replaceBatch(ReconciliationDiff::TYPE_REBATE, $batchDate, $rebateRows);
+        });
 
         $summary = [
             'type' => ReconciliationDiff::TYPE_ORDER,
@@ -151,6 +181,8 @@ class ReconciliationService extends AbstractService
             'checked' => $checked,
             'unreachable' => $unreachable,
             'diff_count' => count($rows),
+            'rebate_checked' => $rebateChecked,
+            'rebate_diff_count' => count($rebateRows),
         ];
         $this->logger()->info('order reconciliation finished', $summary);
 
@@ -160,26 +192,17 @@ class ReconciliationService extends AbstractService
     /**
      * 比一笔订单。返回 `reachable=false` 表示这笔没能拿到供应商记录（不产生差异行）。
      *
-     * @param array<int, null|KasushouDriver> $drivers 供应商 id => 驱动（建不起来的是 null）
-     * @return array{reachable: bool, rows: list<array<string, mixed>>}
+     * @param array<int, null|KasushouDriver|MangoDriver> $drivers 供应商 id => 驱动（建不起来的是 null）
+     * @param array<int, null|string> $platformRebates 电影票订单 id => 平台记录的供应商返佣
+     * @return array{reachable: bool, rows: list<array<string, mixed>>, rebate_checked?: bool,
+     *     rebate_rows?: list<array<string, mixed>>}
      */
-    private function compareOne(Order $order, array $drivers, string $batchDate, string $now): array
+    private function compareOne(Order $order, array $drivers, string $batchDate, string $now, array $platformRebates): array
     {
         $unreachable = ['reachable' => false, 'rows' => []];
 
         try {
-            $driver = $drivers[(int) $order->supplier_id] ?? null;
-            $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
-            if ($driver === null || $attempt === null) {
-                // 供应商被删/配置坏了（ensureDrivers 已记过日志），或者订单上挂了
-                // supplier_id 却没有尝试记录——都没有可比对的供应商单号
-                return $unreachable;
-            }
-
-            $result = $driver->queryOrder(
-                $order->order_no . '-' . $attempt->attempt_no,
-                $order->business_line === 'card'
-            );
+            $result = $this->querySupplier($order, $drivers[(int) $order->supplier_id] ?? null);
         } catch (Throwable $e) {
             $this->logger()->error('order reconciliation query failed', [
                 'order_id' => $order->id,
@@ -189,8 +212,11 @@ class ReconciliationService extends AbstractService
 
             return $unreachable;
         }
+        if ($result === null) {
+            return $unreachable;
+        }
 
-        $supplierStatus = $this->describeSupplierStatus($result);
+        $supplierStatus = $this->describeSupplierStatus($order, $result);
         if ($supplierStatus === null) {
             return $unreachable;
         }
@@ -213,15 +239,94 @@ class ReconciliationService extends AbstractService
             );
         }
 
-        return ['reachable' => true, 'rows' => $rows];
+        $outcome = ['reachable' => true, 'rows' => $rows, 'rebate_checked' => false, 'rebate_rows' => []];
+        if ($order->business_line === 'movie' && $order->status === 'success' && $supplierStatus === 'success'
+            && $result->supplierRebate !== null && is_numeric($result->supplierRebate)) {
+            $outcome['rebate_checked'] = true;
+            $platformRebate = $this->money($platformRebates[(int) $order->id] ?? null);
+            $rebateDiff = bcsub($platformRebate, $result->supplierRebate, 2);
+            if (bccomp($rebateDiff, '0', 2) !== 0) {
+                $outcome['rebate_rows'][] = $this->row(
+                    $order,
+                    $batchDate,
+                    $now,
+                    ReconciliationDiff::FIELD_REBATE_AMOUNT,
+                    $platformRebate,
+                    $this->money($result->supplierRebate),
+                    $rebateDiff,
+                    ReconciliationDiff::TYPE_REBATE
+                );
+            }
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * 按业务线查供应商侧的这笔订单。话费、卡券按 `平台订单号-尝试序号` 查卡速售，电影票按芒果单号查芒果。
+     * 返回 null 表示没有可以拿去查的单号（驱动建不起来、没有尝试记录、没拿到芒果单号）。
+     *
+     * @param null|KasushouDriver|MangoDriver $driver
+     */
+    private function querySupplier(Order $order, mixed $driver): ?DriverResult
+    {
+        if ($order->business_line === 'movie') {
+            if (! $driver instanceof MangoDriver || $order->supplier_order_no === null || $order->supplier_order_no === '') {
+                return null;
+            }
+
+            return $driver->queryOrder($order->supplier_order_no);
+        }
+
+        $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
+        if (! $driver instanceof KasushouDriver || $attempt === null) {
+            // 供应商被删/配置坏了（ensureDrivers 已记过日志），或者订单上挂了
+            // supplier_id 却没有尝试记录——都没有可比对的供应商单号
+            return null;
+        }
+
+        return $driver->queryOrder($order->order_no . '-' . $attempt->attempt_no, $order->business_line === 'card');
+    }
+
+    /**
+     * 这一页里电影票订单平台记下的供应商返佣，一次查完，不在并发的每笔比对里各查一次。
+     *
+     * @param iterable<Order> $orders
+     * @return array<int, null|string>
+     */
+    private function platformMovieRebates(iterable $orders): array
+    {
+        $ids = [];
+        foreach ($orders as $order) {
+            if ($order->business_line === 'movie' && $order->status === 'success') {
+                $ids[] = (int) $order->id;
+            }
+        }
+        if ($ids === []) {
+            return [];
+        }
+
+        return $this->orderMovieDao->newQuery()->whereIn('order_id', $ids)->pluck('supplier_rebate', 'order_id')
+            ->map(static fn ($value) => $value === null ? null : (string) $value)
+            ->all();
+    }
+
+    private function money(mixed $value): string
+    {
+        return bcadd($value === null || ! is_numeric($value) ? '0' : (string) $value, '0', 2);
     }
 
     /**
      * 供应商侧这笔订单算什么状态，用订单表的同一套词（success/failed/processing/unknown）
      * 表达，方便后台直接把两个值并排显示。返回 null 表示根本没拿到供应商记录。
      */
-    private function describeSupplierStatus(DriverResult $result): ?string
+    private function describeSupplierStatus(Order $order, DriverResult $result): ?string
     {
+        if ($order->business_line === 'movie' && $result->result === UnifiedResult::Unknown) {
+            // 芒果传输失败也带回单号，不能按结构判断；芒果也没有"答了但不确定"的状态，见类注释
+            return null;
+        }
+
         return match ($result->result) {
             UnifiedResult::Success => 'success',
             UnifiedResult::DefiniteFailure => 'failed',
@@ -270,10 +375,11 @@ class ReconciliationService extends AbstractService
         string $field,
         string $platformValue,
         string $supplierValue,
-        ?string $diffAmount = null
+        ?string $diffAmount = null,
+        string $type = ReconciliationDiff::TYPE_ORDER
     ): array {
         return [
-            'type' => ReconciliationDiff::TYPE_ORDER,
+            'type' => $type,
             'order_id' => (int) $order->id,
             'supplier_id' => (int) $order->supplier_id,
             'reconciliation_date' => $batchDate,
@@ -297,8 +403,10 @@ class ReconciliationService extends AbstractService
      * 它名下的订单这次对不了（计入 unreachable），不影响别的供应商。在并发查询**之前**
      * 串行建好，两个协程不会同时去建同一个驱动。
      *
+     * 按供应商的驱动类型建：卡速售（话费、卡券）、芒果（电影票）。
+     *
      * @param list<int> $supplierIds
-     * @param array<int, null|KasushouDriver> $drivers
+     * @param array<int, null|KasushouDriver|MangoDriver> $drivers
      */
     private function ensureDrivers(array $supplierIds, array &$drivers): void
     {
@@ -315,7 +423,9 @@ class ReconciliationService extends AbstractService
             }
 
             try {
-                $drivers[$supplierId] = $this->supplierDriverFactory->build($supplier);
+                $drivers[$supplierId] = $supplier->driver === 'mango'
+                    ? $this->supplierDriverFactory->buildMango($supplier)
+                    : $this->supplierDriverFactory->build($supplier);
             } catch (Throwable $e) {
                 $this->logger()->error('order reconciliation cannot build supplier driver', [
                     'supplier_id' => $supplierId,

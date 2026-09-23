@@ -281,8 +281,10 @@ class OrderAdminService extends AbstractService
     {
         $order = $this->findOrderOrFail($orderId);
         $checkingRefund = $order->status === Order::STATUS_SUCCESS && in_array($order->business_line, ['recharge', 'card'], true);
-        if (! $checkingRefund && ! in_array($order->status, self::QUERYABLE_STATUSES, true)) {
-            throw new HttpException(409, '只有处理中、异常的订单，或者话费卡券的成功订单（查是否被供应商退款）可以查询供应商');
+        // 电影票成功订单：补晚到的供应商返佣、同步改签后的取票码（返佣对账报出差异后在这里补）
+        $refreshingMovie = $order->status === Order::STATUS_SUCCESS && $order->business_line === 'movie';
+        if (! $checkingRefund && ! $refreshingMovie && ! in_array($order->status, self::QUERYABLE_STATUSES, true)) {
+            throw new HttpException(409, '只有处理中、异常的订单，或者话费卡券、电影票的成功订单可以查询供应商');
         }
         $before = $this->formatOrder($order);
 
@@ -333,9 +335,6 @@ class OrderAdminService extends AbstractService
         ], $ip);
     }
 
-    /**
-     * @return null|array<string, mixed>
-     */
     /**
      * 异常单发起供应商撤单（requirements.md 7.1「供应商支持撤单时，客服可发起撤单」，kasushou.md 第 1 节）。
      * 只对话费、卡券（卡速售）的异常单开放；按最新一次尝试的 `external_orderno` 撤。

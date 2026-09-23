@@ -15,11 +15,13 @@ namespace HyperfTest\Cases\Service\Reconciliation;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Model\OrderAttempt;
+use App\Model\OrderMovie;
 use App\Model\ReconciliationDiff;
 use App\Model\Supplier;
 use App\Service\Reconciliation\ReconciliationService;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Mango\MangoDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Database\Model\Collection;
@@ -56,6 +58,7 @@ class ReconciliationServiceTest extends TestCase
     {
         ReconciliationDiff::whereIn('order_id', $this->orderIds ?: [0])->delete();
         OrderAttempt::whereIn('order_id', $this->orderIds ?: [0])->delete();
+        OrderMovie::whereIn('order_id', $this->orderIds ?: [0])->delete();
         Order::destroy($this->orderIds);
         Supplier::destroy($this->supplierIds);
         Merchant::destroy($this->merchantIds);
@@ -280,6 +283,70 @@ class ReconciliationServiceTest extends TestCase
         $this->assertSame([(int) $inWindow->id], $this->diffs()->pluck('order_id')->all());
     }
 
+    /**
+     * 电影票按芒果单号查芒果：状态、成本一致不报；供应商返佣对不上报一条 `type=rebate`
+     * （平台没接住晚到的返佣）；芒果查询失败算没拿到记录；快递不参与对账，根本不去查。
+     */
+    public function testMovieOrdersReconcileSupplierRebate()
+    {
+        $supplier = $this->createSupplier('mango', 'movie');
+        $matching = $this->createMovieOrder($supplier, 'MG-1', '3.00');
+        $missedRebate = $this->createMovieOrder($supplier, 'MG-2', null);
+        $this->createMovieOrder($supplier, 'MG-3', '3.00');
+        $express = $this->createOrder($supplier, 'success', '12.00');
+        $express->fill(['business_line' => 'express'])->save();
+
+        $results = [
+            'MG-1' => new DriverResult(result: UnifiedResult::Success, supplierOrderNo: 'MG-1', actualCost: '38.00', supplierRebate: '3.00'),
+            'MG-2' => new DriverResult(result: UnifiedResult::Success, supplierOrderNo: 'MG-2', actualCost: '38.00', supplierRebate: '2.50'),
+            // 芒果传输失败也带回单号，不能当成"答了但不确定"
+            'MG-3' => new DriverResult(result: UnifiedResult::Unknown, supplierOrderNo: 'MG-3', failReason: 'mango: http 502'),
+        ];
+        $driver = Mockery::mock(MangoDriver::class);
+        $driver->shouldReceive('queryOrder')->andReturnUsing(
+            static fn (string $no) => $results[$no] ?? throw new RuntimeException('unexpected mango order ' . $no)
+        );
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldReceive('buildMango')->andReturn($driver);
+        $factory->shouldNotReceive('build');
+        $this->instance(SupplierDriverFactory::class, $factory);
+
+        $summary = $this->service()->runOrderReconciliation(self::BATCH_DATE);
+
+        $this->assertSame(2, $summary['checked']);
+        $this->assertSame(1, $summary['unreachable']);
+        $this->assertSame(0, $summary['diff_count']);
+        $this->assertSame(2, $summary['rebate_checked']);
+        $this->assertSame(1, $summary['rebate_diff_count']);
+
+        $diffs = $this->diffs();
+        $this->assertCount(1, $diffs);
+        $diff = $diffs->first();
+        $this->assertSame(ReconciliationDiff::TYPE_REBATE, $diff->type);
+        $this->assertSame((int) $missedRebate->id, (int) $diff->order_id);
+        $this->assertSame(ReconciliationDiff::FIELD_REBATE_AMOUNT, $diff->field);
+        $this->assertSame(['0.00', '2.50', '-2.50'], [$diff->platform_value, $diff->supplier_value, (string) $diff->diff_amount]);
+        $this->assertNotContains((int) $matching->id, $diffs->pluck('order_id')->all());
+
+        // 重跑整批替换，返佣批次同样不会重复
+        $this->service()->runOrderReconciliation(self::BATCH_DATE);
+        $this->assertCount(1, $this->diffs());
+    }
+
+    private function createMovieOrder(Supplier $supplier, string $mangoOrderNo, ?string $platformRebate): Order
+    {
+        $order = $this->createOrder($supplier, 'success', '38.00');
+        $order->fill(['business_line' => 'movie', 'supplier_order_no' => $mangoOrderNo])->save();
+        OrderMovie::create([
+            'order_id' => $order->id, 'cinema_id' => 'C1', 'film_id' => 'F1', 'show_id' => 'S1',
+            'show_time' => '2019-06-01 19:30:00', 'seats' => [['seat_code' => '1-3']], 'seat_count' => 1,
+            'unit_price' => '40.00', 'unit_cost' => '38.00', 'mobile' => '13800000000',
+            'lock_expire_at' => '2019-06-01 12:00:00', 'supplier_rebate' => $platformRebate,
+        ]);
+
+        return $order;
+    }
+
     private function service(): ReconciliationService
     {
         return make(ReconciliationService::class);
@@ -320,15 +387,15 @@ class ReconciliationServiceTest extends TestCase
         $this->instance(SupplierDriverFactory::class, $factory);
     }
 
-    private function createSupplier(): Supplier
+    private function createSupplier(string $driver = 'kasushou', string $businessLine = 'recharge'): Supplier
     {
         $unique = uniqid('reconciliation_test_supplier_', true);
 
         $supplier = Supplier::create([
             'name' => $unique,
             'code' => substr(md5($unique), 0, 24),
-            'business_line' => 'recharge',
-            'driver' => 'kasushou',
+            'business_line' => $businessLine,
+            'driver' => $driver,
             'config' => 'unused-in-test-driver-factory-is-overridden',
             'status' => 'active',
         ]);

@@ -21,6 +21,7 @@ use App\Model\MerchantBalanceLog;
 use App\Model\MerchantLevel;
 use App\Model\MerchantRebate;
 use App\Model\Order;
+use App\Model\OrderMovie;
 use App\Model\Supplier;
 use HyperfTest\HttpTestCase;
 
@@ -59,6 +60,7 @@ class ReportControllerTest extends HttpTestCase
     protected function tearDown(): void
     {
         MerchantRebate::whereIn('order_id', $this->orderIds ?: [0])->delete();
+        OrderMovie::whereIn('order_id', $this->orderIds ?: [0])->delete();
         MerchantBalanceLog::whereIn('merchant_id', $this->merchantIds ?: [0])->delete();
         Order::destroy($this->orderIds);
         Supplier::destroy($this->supplierIds);
@@ -104,6 +106,32 @@ class ReportControllerTest extends HttpTestCase
         $this->assertSame(self::FROM, $day['key']);
         $this->assertSame('0.70', $day['gross_profit']);
         $this->assertSame('0.00', $report['data'][1]['gross_profit'], '空日期补 0');
+    }
+
+    /**
+     * 电影票的供应商返佣计入返佣收支（requirements.md 5.3 例 2：供应商返佣 3.00、商户返佣 2.40
+     * → 返佣收支 0.60）；已退款的电影票订单，供应商返佣不算。
+     */
+    public function testMovieSupplierRebateIsCountedInRebateBalance()
+    {
+        $token = $this->loginWith(['report.view']);
+        $merchant = $this->createMerchant();
+        $supplier = $this->createSupplier();
+        $order = $this->createOrder($merchant, $supplier, 'success', '40.00', '38.00', self::FROM . ' 10:00:00', 'movie');
+        $this->createMovie($order, '3.00');
+        $this->createRebate($order, $merchant, '2.40', 'pending');
+        $refunded = $this->createOrder($merchant, $supplier, 'refunded', '40.00', '38.00', self::FROM . ' 11:00:00', 'movie');
+        $this->createMovie($refunded, '3.00');
+
+        $report = $this->getJson('/admin/reports/profit?group_by=business_line&from=' . self::FROM . '&to=' . self::TO . '&merchant_id=' . $merchant->id, $token);
+
+        $summary = $report['summary'];
+        $this->assertSame('3.00', $summary['supplier_rebate']);
+        $this->assertSame('2.40', $summary['merchant_rebate']);
+        $this->assertSame('0.60', $summary['rebate_balance']);
+        $this->assertSame('2.60', $summary['total_profit'], '毛利 2.00 + 返佣收支 0.60');
+        $this->assertSame('movie', $report['data'][0]['key']);
+        $this->assertSame('3.00', $report['data'][0]['supplier_rebate']);
     }
 
     /**
@@ -298,6 +326,16 @@ class ReportControllerTest extends HttpTestCase
         $this->orderIds[] = $order->id;
 
         return $order;
+    }
+
+    private function createMovie(Order $order, ?string $supplierRebate): void
+    {
+        OrderMovie::create([
+            'order_id' => $order->id, 'cinema_id' => 'C1', 'film_id' => 'F1', 'show_id' => 'S1',
+            'show_time' => '2026-09-30 19:30:00', 'seats' => [['seat_code' => '1-3']], 'seat_count' => 1,
+            'unit_price' => '40.00', 'unit_cost' => '38.00', 'mobile' => '13800000000',
+            'lock_expire_at' => date('Y-m-d H:i:s'), 'supplier_rebate' => $supplierRebate,
+        ]);
     }
 
     private function createRebate(Order $order, Merchant $merchant, string $amount, string $status): void

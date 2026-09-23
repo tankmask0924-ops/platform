@@ -33,10 +33,8 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * `gross_profit`（售价合计 − 成本合计）、`rebate_balance`（供应商返佣 − 商户返佣）
  * 和 `total_profit`（两者之和）三个数。
  *
- * **供应商返佣恒为 0.00**：话费、卡券没有供应商返佣（5.4），电影票、快递是三期，
- * 那两张带 `supplier_rebate` 列的表还没建。字段按最终形状先返回，三期在
- * Dao 里补 SUM 即可，接口和前端不用再改一次——跟
- * App\Service\Admin\SupplierStatsService 同一个处理方式。
+ * **供应商返佣**取电影票、快递成功订单明细上的 `supplier_rebate`（话费、卡券没有，5.4），
+ * 跟毛利用同一条时间轴（订单完成时间）；已退款的订单不算。
  *
  * 口径细节（为什么按完成时间取数、为什么已退款单独成列、返佣为什么只算
  * pending+settled、按等级分组为什么用当前等级）全部写在两个 Dao 方法的注释里：
@@ -61,11 +59,6 @@ class FinanceReportService extends AbstractService
      * 单次查询的最大跨度，跟供应商统计一致（按天分组时返回的数组长度就是天数）。
      */
     private const MAX_DAYS = 92;
-
-    /**
-     * 话费、卡券没有供应商返佣，见类注释。
-     */
-    private const SUPPLIER_REBATE_TOTAL = '0.00';
 
     #[Inject]
     protected OrderDao $orderDao;
@@ -176,6 +169,7 @@ class FinanceReportService extends AbstractService
                 'cost_total' => '0.00',
                 'refunded_count' => 0,
                 'refunded_amount' => '0.00',
+                'supplier_rebate' => '0.00',
                 'merchant_rebate' => $amount,
             ];
         }
@@ -198,12 +192,13 @@ class FinanceReportService extends AbstractService
             'cost_total' => '0.00',
             'refunded_count' => 0,
             'refunded_amount' => '0.00',
+            'supplier_rebate' => '0.00',
             'merchant_rebate' => '0.00',
         ];
         foreach ($rows as $row) {
             $total['orders'] += $row['orders'];
             $total['refunded_count'] += $row['refunded_count'];
-            foreach (['sale_total', 'cost_total', 'refunded_amount', 'merchant_rebate'] as $column) {
+            foreach (['sale_total', 'cost_total', 'refunded_amount', 'supplier_rebate', 'merchant_rebate'] as $column) {
                 $total[$column] = bcadd($total[$column], $row[$column], 2);
             }
         }
@@ -223,8 +218,9 @@ class FinanceReportService extends AbstractService
         $saleTotal = $this->money($row['sale_total']);
         $costTotal = $this->money($row['cost_total']);
         $merchantRebate = $this->money($row['merchant_rebate']);
+        $supplierRebate = $this->money($row['supplier_rebate'] ?? '0');
         $grossProfit = bcsub($saleTotal, $costTotal, 2);
-        $rebateBalance = bcsub(self::SUPPLIER_REBATE_TOTAL, $merchantRebate, 2);
+        $rebateBalance = bcsub($supplierRebate, $merchantRebate, 2);
 
         return [
             'key' => $key,
@@ -234,7 +230,7 @@ class FinanceReportService extends AbstractService
             'cost_total' => $costTotal,
             'gross_profit' => $grossProfit,
             'merchant_rebate' => $merchantRebate,
-            'supplier_rebate' => self::SUPPLIER_REBATE_TOTAL,
+            'supplier_rebate' => $supplierRebate,
             // 返佣收支 = 供应商返佣 − 商户返佣，话费/卡券只有支出，所以是负数
             'rebate_balance' => $rebateBalance,
             'total_profit' => bcadd($grossProfit, $rebateBalance, 2),
@@ -271,6 +267,7 @@ class FinanceReportService extends AbstractService
                 'cost_total' => '0.00',
                 'refunded_count' => 0,
                 'refunded_amount' => '0.00',
+                'supplier_rebate' => '0.00',
                 'merchant_rebate' => '0.00',
             ];
         }

@@ -475,8 +475,41 @@ export interface RebateList extends Paged<Rebate> {
   due_period_days: number
 }
 
+/** 供应商返佣明细（电影票、快递的成功订单）：App\Service\Admin\SupplierRebateAdminService */
+export interface SupplierRebate {
+  order_id: number
+  order_no: string
+  business_line: string
+  merchant_id: number
+  merchant_contact: string | null
+  supplier_id: number | null
+  supplier_name: string | null
+  sale_price: string
+  cost_price: string
+  completed_at: string | null
+  /** null = 供应商还没给 */
+  supplier_rebate: string | null
+  merchant_rebate: string | null
+  merchant_rebate_status: string | null
+  merchant_rebate_rate: string | null
+  /** 供应商返佣 − 商户返佣（作废、已扣回的商户返佣不减） */
+  rebate_balance: string
+}
+
+export interface SupplierRebateList extends Paged<SupplierRebate> {
+  summary: {
+    count: number
+    returned_count: number
+    missing_count: number
+    supplier_rebate: string
+    merchant_rebate: string
+    rebate_balance: string
+  }
+}
+
 export const rebateApi = {
   list: (params: Query) => http.get<RebateList>('/admin/rebates', params),
+  supplierList: (params: Query) => http.get<SupplierRebateList>('/admin/rebates/supplier', params),
 }
 
 /** 服务开通审核：App\Controller\Admin\SubscriptionController */
@@ -532,7 +565,7 @@ export const alertApi = {
 /** 对账差异：App\Controller\Admin\ReconciliationController（requirements.md 8.3） */
 export interface ReconciliationDiff {
   id: number
-  /** order 订单对账 / rebate 返佣对账（返佣对账三期才有产生方） */
+  /** order 订单对账 / rebate 返佣对账（电影票的供应商返佣） */
   type: string
   order_id: number
   order_no: string | null
@@ -566,6 +599,9 @@ export interface ReconciliationRunSummary {
   /** 没能拿到供应商记录、这次没对成的订单数 */
   unreachable: number
   diff_count: number
+  /** 比对了供应商返佣的电影票订单数 / 返佣差异条数 */
+  rebate_checked: number
+  rebate_diff_count: number
 }
 
 export const reconciliationApi = {

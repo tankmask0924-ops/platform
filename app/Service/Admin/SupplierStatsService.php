@@ -27,11 +27,8 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 而不是按订单归属供应商、成功率分母算哪些、到账时长从哪算到哪），这里只负责参数校验、
  * 补齐没有订单的日期、算百分比和汇总。
  *
- * **供应商返佣总额固定是 0.00**：话费、卡券没有供应商返佣（requirements.md 5.3
- * 「话费、卡券的返佣基数是商品返佣金额」、5.4「电影票、快递才有供应商返佣」），
- * 而电影票、快递是三期，`order_movies`/`order_expresses` 两张带 `supplier_rebate`
- * 列的表还没建。字段先按最终形状返回，等三期建表后在 Dao 里补上 SUM 即可，
- * 前端和接口形状不用再改一次。
+ * **供应商返佣总额**来自电影票、快递订单明细上的 `supplier_rebate`（话费、卡券没有供应商返佣，
+ * requirements.md 5.4），口径见 Dao 注释。
  *
  * 权限用 `supplier.view`：统计是只读的运营观察数据，跟看列表/详情/调用日志同一档，
  * 不单独开权限。
@@ -52,11 +49,6 @@ class SupplierStatsService extends AbstractService
      * 前端一不小心传个 2020 年把三千多个空日期塞进响应里。
      */
     private const MAX_DAYS = 92;
-
-    /**
-     * 话费、卡券没有供应商返佣，见类注释。
-     */
-    private const SUPPLIER_REBATE_TOTAL = '0.00';
 
     #[Inject]
     protected OrderAttemptDao $orderAttemptDao;
@@ -104,13 +96,14 @@ class SupplierStatsService extends AbstractService
      */
     private function summarize(array $rows): array
     {
-        $total = ['count' => 0, 'success' => 0, 'failed' => 0, 'cost_total' => '0.00'];
+        $total = ['count' => 0, 'success' => 0, 'failed' => 0, 'cost_total' => '0.00', 'rebate_total' => '0.00'];
         $secondsSum = 0.0;
         foreach ($rows as $row) {
             $total['count'] += $row['count'];
             $total['success'] += $row['success'];
             $total['failed'] += $row['failed'];
             $total['cost_total'] = bcadd($total['cost_total'], $row['cost_total'], 2);
+            $total['rebate_total'] = bcadd($total['rebate_total'], $row['rebate_total'], 2);
             if ($row['avg_seconds'] !== null) {
                 $secondsSum += $row['avg_seconds'] * $row['success'];
             }
@@ -136,7 +129,7 @@ class SupplierStatsService extends AbstractService
         $data = [];
         for ($day = $fromDate; $day <= $toDate; $day = date('Y-m-d', strtotime($day . ' +1 day'))) {
             $data[] = $this->formatRow($day, $byDay[$day] ?? [
-                'count' => 0, 'success' => 0, 'failed' => 0, 'cost_total' => '0.00', 'avg_seconds' => null,
+                'count' => 0, 'success' => 0, 'failed' => 0, 'cost_total' => '0.00', 'rebate_total' => '0.00', 'avg_seconds' => null,
             ]);
         }
 
@@ -165,7 +158,7 @@ class SupplierStatsService extends AbstractService
             // 平均到账时长，秒，保留一位小数；没有成功的尝试时为 null
             'avg_delivery_seconds' => $row['avg_seconds'] === null ? null : round($row['avg_seconds'], 1),
             'cost_total' => number_format((float) $row['cost_total'], 2, '.', ''),
-            'supplier_rebate_total' => self::SUPPLIER_REBATE_TOTAL,
+            'supplier_rebate_total' => bcadd((string) $row['rebate_total'], '0', 2),
         ];
     }
 

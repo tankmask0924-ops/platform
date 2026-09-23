@@ -16,6 +16,7 @@ use App\Model\Merchant;
 use App\Model\MerchantLevel;
 use App\Model\MerchantRebate;
 use App\Model\Order;
+use App\Model\OrderMovie;
 use App\Model\SystemSetting;
 use HyperfTest\HttpTestCase;
 
@@ -41,6 +42,7 @@ class RebateControllerTest extends HttpTestCase
     protected function tearDown(): void
     {
         MerchantRebate::whereIn('order_id', $this->orderIds)->delete();
+        OrderMovie::whereIn('order_id', $this->orderIds ?: [0])->delete();
         Order::destroy($this->orderIds);
         Merchant::destroy($this->merchantIds);
         MerchantLevel::destroy($this->levelIds);
@@ -86,6 +88,47 @@ class RebateControllerTest extends HttpTestCase
         $this->assertSame(422, $this->jsonRequest('GET', '/admin/rebates?merchant_id=abc', $token)->getStatusCode());
     }
 
+    /**
+     * 供应商返佣明细：只列电影票、快递的成功订单，供应商返佣没给的显示 null，
+     * 汇总里返佣收支 = 供应商返佣 − 商户返佣（作废的商户返佣不减）。
+     */
+    public function testSupplierRebateListShowsMovieRebatesAndBalance()
+    {
+        $level = MerchantLevel::create(['name' => 'rebate_test_' . uniqid()]);
+        $this->levelIds[] = $level->id;
+        $merchant = $this->createMerchant();
+        $withRebate = $this->createMovieOrder($merchant, '3.00', 'success');
+        $this->createRebate($merchant, $level->id, 'pending', '2.40', $withRebate);
+        $voided = $this->createMovieOrder($merchant, '1.00', 'success');
+        $this->createRebate($merchant, $level->id, 'voided', '0.80', $voided);
+        $missing = $this->createMovieOrder($merchant, null, 'success');
+        $this->createMovieOrder($merchant, '5.00', 'refunded');
+        $this->createRebate($merchant, $level->id, 'pending', '1.00');
+        $token = $this->loginAs($this->createAdminWithPermissions(['rebate.view']));
+
+        $body = $this->body($this->jsonRequest('GET', '/admin/rebates/supplier?merchant_id=' . $merchant->id, $token));
+
+        $this->assertSame(3, $body['total'], '话费订单、已退款的电影票订单不列');
+        $this->assertSame([
+            'count' => 3, 'returned_count' => 2, 'missing_count' => 1,
+            'supplier_rebate' => '4.00', 'merchant_rebate' => '2.40', 'rebate_balance' => '1.60',
+        ], $body['summary']);
+        $rows = array_column($body['data'], null, 'order_id');
+        $this->assertSame('3.00', $rows[$withRebate->id]['supplier_rebate']);
+        $this->assertSame('2.40', $rows[$withRebate->id]['merchant_rebate']);
+        $this->assertSame('0.60', $rows[$withRebate->id]['rebate_balance']);
+        $this->assertSame('1.00', $rows[$voided->id]['rebate_balance'], '作废的商户返佣不从供应商返佣里减');
+        $this->assertNull($rows[$missing->id]['supplier_rebate']);
+        $this->assertSame($merchant->phone, $rows[$missing->id]['merchant_contact']);
+
+        $onlyMissing = $this->body($this->jsonRequest('GET', '/admin/rebates/supplier?rebate=missing&merchant_id=' . $merchant->id, $token));
+        $this->assertSame([$missing->id], array_column($onlyMissing['data'], 'order_id'));
+
+        $this->assertSame(422, $this->jsonRequest('GET', '/admin/rebates/supplier?business_line=recharge', $token)->getStatusCode());
+        $this->assertSame(422, $this->jsonRequest('GET', '/admin/rebates/supplier?completed_from=yesterday', $token)->getStatusCode());
+        $this->assertSame(403, $this->jsonRequest('GET', '/admin/rebates/supplier', $this->loginAs($this->createAdminWithPermissions(['order.view'])))->getStatusCode());
+    }
+
     public function testDuePeriodReflectsSystemSetting()
     {
         $backup = SystemSetting::find('rebate_due_period_days')?->getAttributes();
@@ -101,10 +144,39 @@ class RebateControllerTest extends HttpTestCase
         }
     }
 
-    private function createRebate(Merchant $merchant, int $levelId, string $status, string $amount): MerchantRebate
+    private function createMovieOrder(Merchant $merchant, ?string $supplierRebate, string $status): Order
     {
         $completedAt = date('Y-m-d H:i:s', time() - 3600);
         $order = Order::create([
+            'order_no' => 'M' . date('YmdHis') . random_int(100000, 999999),
+            'merchant_id' => $merchant->id,
+            'merchant_order_no' => 'MO-' . uniqid('', true),
+            'business_line' => 'movie',
+            'status' => $status,
+            'sale_price' => '40.00',
+            'cost_price' => '38.00',
+            'frozen_amount' => '40.00',
+            'deducted_amount' => '40.00',
+            'refunded_amount' => '0.00',
+            'callback_url' => 'https://merchant.example.com/notify',
+            'completed_at' => $completedAt,
+            'finished_at' => $completedAt,
+        ]);
+        $this->orderIds[] = $order->id;
+        OrderMovie::create([
+            'order_id' => $order->id, 'cinema_id' => 'C1', 'film_id' => 'F1', 'show_id' => 'S1',
+            'show_time' => '2026-09-30 19:30:00', 'seats' => [['seat_code' => '1-3']], 'seat_count' => 1,
+            'unit_price' => '40.00', 'unit_cost' => '38.00', 'mobile' => '13800000000',
+            'lock_expire_at' => date('Y-m-d H:i:s'), 'supplier_rebate' => $supplierRebate,
+        ]);
+
+        return $order;
+    }
+
+    private function createRebate(Merchant $merchant, int $levelId, string $status, string $amount, ?Order $order = null): MerchantRebate
+    {
+        $completedAt = date('Y-m-d H:i:s', time() - 3600);
+        $order ??= Order::create([
             'order_no' => 'R' . date('YmdHis') . random_int(100000, 999999),
             'merchant_id' => $merchant->id,
             'merchant_order_no' => 'MO-' . uniqid('', true),
@@ -124,7 +196,7 @@ class RebateControllerTest extends HttpTestCase
         return MerchantRebate::create([
             'order_id' => $order->id,
             'merchant_id' => $merchant->id,
-            'business_line' => 'recharge',
+            'business_line' => $order->business_line,
             'level_id' => $levelId,
             'rebate_base' => '1.60',
             'rebate_base_source' => 'product',

@@ -76,11 +76,14 @@ class OrderAttemptDao extends AbstractDao
      * - 成本总额只累计成功的尝试，用订单上的成本快照（`orders.cost_price` 在成功时
      *   写的就是这家的成本，见 App\Service\Order\OrderResultApplier::applySuccess()）。
      *
+     * - 供应商返佣总额只累计成功的尝试、且订单现在仍是成功的（退款后返佣会被供应商收回），
+     *   取电影票、快递明细上的 `supplier_rebate`；话费、卡券没有供应商返佣。
+     *
      * 按商品分组时联 `order_recharges`（话费、卡券的商品在这张表上），电影票、快递
      * 没有本地商品也没有这张表的行，`product_id` 为 null 归成一组。
      *
      * @return list<array{group: null|string, product_id: null|int, count: int, success: int,
-     *     failed: int, cost_total: string, avg_seconds: null|float}>
+     *     failed: int, cost_total: string, rebate_total: string, avg_seconds: null|float}>
      */
     public function statsForSupplier(int $supplierId, string $from, string $to, bool $byProduct): array
     {
@@ -93,7 +96,10 @@ class OrderAttemptDao extends AbstractDao
             ->selectRaw("SUM(CASE WHEN order_attempts.result = 'success' THEN 1 ELSE 0 END) as success_n")
             ->selectRaw("SUM(CASE WHEN order_attempts.result = 'failed' THEN 1 ELSE 0 END) as failed_n")
             ->selectRaw("COALESCE(SUM(CASE WHEN order_attempts.result = 'success' THEN orders.cost_price ELSE 0 END), 0) as cost_total")
-            ->selectRaw("AVG(CASE WHEN order_attempts.result = 'success' THEN TIMESTAMPDIFF(SECOND, order_attempts.created_at, order_attempts.updated_at) END) as avg_seconds");
+            ->selectRaw("AVG(CASE WHEN order_attempts.result = 'success' THEN TIMESTAMPDIFF(SECOND, order_attempts.created_at, order_attempts.updated_at) END) as avg_seconds")
+            ->leftJoin('order_movies', 'order_movies.order_id', '=', 'order_attempts.order_id')
+            ->leftJoin('order_expresses', 'order_expresses.order_id', '=', 'order_attempts.order_id')
+            ->selectRaw("COALESCE(SUM(CASE WHEN order_attempts.result = 'success' AND orders.status = 'success' THEN COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate, 0) ELSE 0 END), 0) as rebate_total");
 
         if ($byProduct) {
             $query->leftJoin('order_recharges', 'order_recharges.order_id', '=', 'order_attempts.order_id')
@@ -116,6 +122,7 @@ class OrderAttemptDao extends AbstractDao
                 'success' => (int) $row->success_n,
                 'failed' => (int) $row->failed_n,
                 'cost_total' => (string) $row->cost_total,
+                'rebate_total' => (string) $row->rebate_total,
                 'avg_seconds' => $row->avg_seconds === null ? null : (float) $row->avg_seconds,
             ])
             ->values()

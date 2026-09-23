@@ -58,6 +58,7 @@ async function run() {
     const summary = await reconciliationApi.run(runDate.value)
     ElMessage.success(
       `已对账 ${summary.order_date} 完成的订单：比对 ${summary.checked} 笔，差异 ${summary.diff_count} 条` +
+        (summary.rebate_checked > 0 ? `；比对供应商返佣 ${summary.rebate_checked} 笔，差异 ${summary.rebate_diff_count} 条` : '') +
         (summary.unreachable > 0 ? `，${summary.unreachable} 笔没拿到供应商记录` : ''),
     )
     list.load()

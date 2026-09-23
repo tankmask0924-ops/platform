@@ -207,12 +207,14 @@ class OrderDao extends AbstractDao
      * （requirements.md 7.4），对账再报一遍只是把同一件事说两次。
      *
      * @param list<string> $statuses 参与对账的终态
+     * @param null|list<string> $businessLines 参与对账的业务线，null 不限
      * @return Collection<int, Order>
      */
-    public function listFinishedBetween(array $statuses, string $from, string $to, int $afterId, int $limit): Collection
+    public function listFinishedBetween(array $statuses, string $from, string $to, int $afterId, int $limit, ?array $businessLines = null): Collection
     {
         return $this->newQuery()
             ->whereIn('status', $statuses)
+            ->when($businessLines !== null, static fn ($query) => $query->whereIn('business_line', $businessLines))
             ->whereNotNull('supplier_id')
             ->whereBetween('finished_at', [$from, $to])
             ->where('id', '>', $afterId)
@@ -249,7 +251,12 @@ class OrderDao extends AbstractDao
             ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' THEN orders.sale_price ELSE 0 END), 0) as sale_total")
             ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' THEN orders.cost_price ELSE 0 END), 0) as cost_total")
             ->selectRaw("SUM(CASE WHEN orders.status = 'refunded' THEN 1 ELSE 0 END) as refunded_n")
-            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'refunded' THEN orders.refunded_amount ELSE 0 END), 0) as refunded_total");
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'refunded' THEN orders.refunded_amount ELSE 0 END), 0) as refunded_total")
+            // 供应商返佣只有电影票、快递有（明细表各一行，left join 不会放大行数），只算成功的订单：
+            // 已退款的订单供应商那边也会收回返佣，跟毛利同一个口径
+            ->leftJoin('order_movies', 'order_movies.order_id', '=', 'orders.id')
+            ->leftJoin('order_expresses', 'order_expresses.order_id', '=', 'orders.id')
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' THEN COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate, 0) ELSE 0 END), 0) as supplier_rebate_total");
 
         if ($merchantId !== null) {
             $query->where('orders.merchant_id', $merchantId);
@@ -264,9 +271,93 @@ class OrderDao extends AbstractDao
                 'cost_total' => (string) $row->cost_total,
                 'refunded_count' => (int) $row->refunded_n,
                 'refunded_amount' => (string) $row->refunded_total,
+                'supplier_rebate' => (string) $row->supplier_rebate_total,
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * 供应商返佣明细（requirements.md 8.3「返佣管理：供应商返佣明细」）：电影票、快递的**成功**订单，
+     * 每笔带上供应商返佣（明细表上的 `supplier_rebate`，null = 供应商还没给）和这笔订单的商户返佣。
+     * 已退款的订单不列：供应商那边会收回返佣，跟财务报表的口径一致。
+     *
+     * @param array{business_line?: string, supplier_id?: int, merchant_id?: int, order_no?: string,
+     *     completed_from?: string, completed_to?: string, rebate?: string} $filters
+     * @return Collection<int, Order>
+     */
+    public function paginateSupplierRebates(array $filters, int $page, int $perPage): Collection
+    {
+        return $this->supplierRebateQuery($filters)
+            ->select([
+                'orders.id', 'orders.order_no', 'orders.business_line', 'orders.merchant_id', 'orders.supplier_id',
+                'orders.sale_price', 'orders.cost_price', 'orders.completed_at',
+                'merchant_rebates.amount as merchant_rebate_amount',
+                'merchant_rebates.status as merchant_rebate_status',
+                'merchant_rebates.rebate_rate as merchant_rebate_rate',
+            ])
+            ->selectRaw('COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate) as supplier_rebate')
+            ->orderByDesc('orders.completed_at')
+            ->orderByDesc('orders.id')
+            ->forPage($page, $perPage)
+            ->get();
+    }
+
+    /**
+     * 同一套筛选下的笔数和金额汇总。商户返佣只算 pending + settled（作废、已扣回等于没付出去，
+     * 同财务报表），返佣收支 = 供应商返佣 − 商户返佣由调用方算。
+     *
+     * @param array<string, mixed> $filters
+     * @return array{count: int, returned_count: int, supplier_rebate: string, merchant_rebate: string}
+     */
+    public function summarizeSupplierRebates(array $filters): array
+    {
+        $row = $this->supplierRebateQuery($filters)
+            ->selectRaw('count(*) as n')
+            ->selectRaw('SUM(CASE WHEN COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate) IS NULL THEN 0 ELSE 1 END) as returned_n')
+            ->selectRaw('COALESCE(SUM(COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate, 0)), 0) as supplier_total')
+            ->selectRaw("COALESCE(SUM(CASE WHEN merchant_rebates.status IN ('pending', 'settled') THEN merchant_rebates.amount ELSE 0 END), 0) as merchant_total")
+            ->toBase()
+            ->first();
+
+        return [
+            'count' => (int) ($row->n ?? 0),
+            'returned_count' => (int) ($row->returned_n ?? 0),
+            'supplier_rebate' => (string) ($row->supplier_total ?? '0'),
+            'merchant_rebate' => (string) ($row->merchant_total ?? '0'),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     */
+    private function supplierRebateQuery(array $filters): Builder
+    {
+        $query = $this->newQuery()
+            ->leftJoin('order_movies', 'order_movies.order_id', '=', 'orders.id')
+            ->leftJoin('order_expresses', 'order_expresses.order_id', '=', 'orders.id')
+            ->leftJoin('merchant_rebates', 'merchant_rebates.order_id', '=', 'orders.id')
+            ->where('orders.status', Order::STATUS_SUCCESS)
+            ->whereIn('orders.business_line', ['movie', 'express']);
+
+        foreach (['business_line', 'supplier_id', 'merchant_id', 'order_no'] as $column) {
+            if (isset($filters[$column])) {
+                $query->where('orders.' . $column, $filters[$column]);
+            }
+        }
+        if (isset($filters['completed_from'])) {
+            $query->where('orders.completed_at', '>=', $filters['completed_from']);
+        }
+        if (isset($filters['completed_to'])) {
+            $query->where('orders.completed_at', '<=', $filters['completed_to']);
+        }
+        match ($filters['rebate'] ?? null) {
+            'returned' => $query->whereRaw('COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate) IS NOT NULL'),
+            'missing' => $query->whereRaw('COALESCE(order_movies.supplier_rebate, order_expresses.supplier_rebate) IS NULL'),
+            default => null,
+        };
+
+        return $query;
     }
 
     /**

@@ -33,6 +33,7 @@ use App\Model\Product;
 use App\Model\Supplier;
 use App\Supplier\DriverResult;
 use App\Supplier\Kasushou\KasushouDriver;
+use App\Supplier\Mango\MangoDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
@@ -336,6 +337,43 @@ class OrderControllerTest extends HttpTestCase
         foreach ([$full, $partial] as $order) {
             $this->assertSame(1, Alert::where('type', Alert::TYPE_SUPPLIER_REFUND_AFTER_SUCCESS)->where('related_type', 'order')->where('related_id', $order->id)->count());
         }
+    }
+
+    /**
+     * 成功的电影票订单也能查询供应商：补上晚到的供应商返佣（返佣对账报出差异后在这里处理），
+     * 不重复扣款、取票码没变就不再回调商户。
+     */
+    public function testQuerySupplierOnSuccessMovieOrderPicksUpLateRebate()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $order = $this->createOrderOfLine($merchant, $supplier, 'movie', 'success');
+        $order->fill(['supplier_order_no' => 'MG-LATE-1', 'deducted_amount' => '10.00', 'completed_at' => date('Y-m-d H:i:s'), 'finished_at' => date('Y-m-d H:i:s')])->save();
+        OrderMovie::create([
+            'order_id' => $order->id, 'cinema_id' => 'C1', 'film_id' => 'F1', 'show_id' => 'S1',
+            'show_time' => '2026-09-30 19:30:00', 'seats' => [['seat_code' => '1-3']], 'seat_count' => 1,
+            'unit_price' => '10.00', 'unit_cost' => '8.00', 'mobile' => '13800000000',
+            'lock_expire_at' => date('Y-m-d H:i:s'), 'ticket_codes' => [['code' => 'T-1']], 'supplier_rebate' => null,
+        ]);
+
+        $driver = Mockery::mock(MangoDriver::class);
+        $driver->shouldReceive('queryOrder')->with('MG-LATE-1')->andReturn(new DriverResult(
+            result: UnifiedResult::Success,
+            supplierOrderNo: 'MG-LATE-1',
+            supplierRebate: '1.50',
+            movieDetails: ['tickets' => [['code' => 'T-1']]],
+        ));
+        $factory = Mockery::mock(SupplierDriverFactory::class);
+        $factory->shouldReceive('buildMango')->andReturn($driver);
+        ApplicationContext::getContainer()->set(SupplierDriverFactory::class, $factory);
+        $this->expectNotify(0);
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.manage']));
+
+        $body = $this->json($this->request('POST', '/admin/orders/' . $order->id . '/query-supplier', $token));
+
+        $this->assertSame('success', $body['result']);
+        $this->assertSame('success', $order->refresh()->status);
+        $this->assertSame('1.50', (string) OrderMovie::find($order->id)->supplier_rebate);
+        $this->assertSame('100.00', $merchant->refresh()->available_balance, '已成功的订单不重复扣款');
     }
 
     public function testResolveAbnormalAsSuccessDeductsNotifiesAndLogs()
