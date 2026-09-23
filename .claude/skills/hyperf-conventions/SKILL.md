@@ -96,6 +96,28 @@ class User extends Model implements CacheableInterface
 }
 ```
 
+**哪些 Model 接缓存**：只给读多写少、所有修改都走模型 `save()` / `delete()` 的 Model 接缓存，目前是 `Merchant`、`User`（商户余额的修改也是 `save()`，见 `BalanceService::persistBalance()`）。
+
+- 订单（`Order`）及订单明细（`order_recharges` / `order_expresses` / `order_movies`）、尝试记录（`order_attempts`）这类数据必须直接读库，原因有两个：
+  - 状态流转靠带条件的直接更新防并发（如 `OrderDao::finishIfStatus()`：`where status = 预期值` 再 `update`），这类更新不经过模型、不会清缓存，接了缓存就会读到旧状态。
+  - 状态和金额决定是否扣款、退款，读到旧值的代价是重复扣款或重复退款。
+- 新 Model 接缓存前必须同时满足两条：
+  - 这张表的所有修改都经过模型 `save()` / `delete()`。
+  - 读取以按主键为主（model-cache 只缓存按主键读一行）。
+- 以后订单查询成了瓶颈，先加索引；要缓存也只缓存「单号 → 订单 id」这类永远不变的映射，整行订单一律读库。
+
+**什么时候读缓存、什么时候读库**（针对已接缓存的 Model）：
+
+| 场景 | 必须这样读 |
+|---|---|
+| 按主键取一条做展示、鉴权后取当前商户资料 | Dao 的 `find($id)`（内部是 `findFromCache`） |
+| 列表里按一批 id 补名称、手机号等 | Dao 的批量方法，商户用 `MerchantDao::findMany($ids)` |
+| 读出来要据此判断再写库（余额够不够、状态能不能改） | 在事务里用 `lockForUpdate()` 读库（如 `MerchantDao::lockForUpdate()`），读、判断、写在同一个事务里完成 |
+| 刚被别的流程改过、必须拿最新值 | `$model->refresh()` 或 Dao 的普通查询 |
+| 按非主键条件查（手机号、邮箱、`app_key` 等） | Dao 的普通查询，缓存不覆盖这类查询 |
+
+- 修改已接缓存的 Model 必须走 `save()` / `delete()`，缓存由框架自动清掉。确实需要直接 `update()`（比如带条件的并发更新）时，更新后必须调用 `$model->deleteCache()` 清掉这一行的缓存。
+
 **关键点，容易踩坑**：
 - `Cacheable` trait **不会**自动接管 `find()`，必须显式调用 `User::findFromCache($id)` 才走缓存（这个 Dao 层的坑已经在 [app/Dao/AbstractDao.php](app/Dao/AbstractDao.php) 和 `UserDao::find()` 里踩过一次）。新的 Dao 要用缓存时，必须重写 `find()` 改调 `findFromCache`，父类的 `find()` 不走缓存
 - 按**一批** id 取已接缓存的 Model（目前是 `Merchant`、`User`）时，必须走 Dao 里基于 `findManyFromCache()` 的批量方法，比如商户用 `MerchantDao::findMany($ids)`（按 id 作键返回，空数组返回空集合）。没接缓存的 Model（订单、供应商等）按一批 id 查时直接 `whereIn('id', $ids)`，空数组也能正常返回空结果
