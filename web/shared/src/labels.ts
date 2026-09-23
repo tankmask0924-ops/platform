@@ -117,3 +117,25 @@ export const cardTypeLabels: LabelMap = {
   direct: { label: '直充' },
   card_secret: { label: '卡密' },
 }
+
+/** 快递物流状态（order_expresses.logistics_status） */
+export const logisticsStatusLabels: LabelMap = {
+  pending_pickup: { label: '待揽收', type: 'warning' },
+  in_transit: { label: '运输中', type: 'primary' },
+  signed: { label: '已签收', type: 'success' },
+  rejected: { label: '拒收退回', type: 'danger' },
+  cancelled: { label: '已取消', type: 'info' },
+}
+
+/** 快递费用调整方向 / 费用项（order_express_fee_adjustments） */
+export const feeAdjustmentTypeLabels: LabelMap = {
+  supplement: { label: '补扣', type: 'danger' },
+  refund: { label: '退回', type: 'success' },
+}
+
+export const feeItemLabels: LabelMap = {
+  freight: { label: '运费' },
+  insured: { label: '保价费' },
+  material: { label: '耗材费' },
+  reverse: { label: '逆向费' },
+}

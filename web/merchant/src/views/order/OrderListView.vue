@@ -5,8 +5,10 @@ import {
   type CsvColumn,
   csvFilename,
   downloadCsv,
+  ExpressDetailInfo,
   labelOf,
   merchantOrderStatusLabels,
+  MovieDetailInfo,
   money,
   StatusTag,
   toOptions,
@@ -234,6 +236,15 @@ onMounted(list.load)
           </el-descriptions-item>
         </el-descriptions>
 
+        <template v-if="detail.express">
+          <h4 class="block-title">快递明细</h4>
+          <ExpressDetailInfo :detail="detail.express" />
+        </template>
+        <template v-if="detail.movie">
+          <h4 class="block-title">电影票明细</h4>
+          <MovieDetailInfo :detail="detail.movie" />
+        </template>
+
         <div class="section-header">
           <h4>回调记录</h4>
           <el-button v-if="canNotify(detail.status)" size="small" :loading="renotifying" @click="renotify">重新推送</el-button>
@@ -260,6 +271,10 @@ onMounted(list.load)
 .pagination {
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.block-title {
+  margin: 20px 0 8px;
 }
 
 .section-header {

@@ -2,7 +2,9 @@
 import {
   balanceLogTypeLabels,
   businessLineLabels,
+  ExpressDetailInfo,
   labelOf,
+  MovieDetailInfo,
   money,
   orderStatusLabels,
   ratePercent,
@@ -158,6 +160,14 @@ onMounted(load)
           <el-descriptions-item label="完成时间">{{ order.completed_at ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ order.finished_at ?? '-' }}</el-descriptions-item>
         </el-descriptions>
+      </el-card>
+
+      <el-card v-if="order.express" shadow="never" header="快递明细">
+        <ExpressDetailInfo :detail="order.express" />
+      </el-card>
+
+      <el-card v-if="order.movie" shadow="never" header="电影票明细">
+        <MovieDetailInfo :detail="order.movie" />
       </el-card>
 
       <el-card shadow="never" header="返佣">

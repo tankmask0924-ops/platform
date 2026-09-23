@@ -24,6 +24,9 @@ use App\Model\MerchantBalanceLog;
 use App\Model\MerchantRebate;
 use App\Model\Order;
 use App\Model\OrderAttempt;
+use App\Model\OrderExpress;
+use App\Model\OrderExpressFeeAdjustment;
+use App\Model\OrderMovie;
 use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
@@ -83,6 +86,9 @@ class OrderControllerTest extends HttpTestCase
         foreach ($this->orderIds as $id) {
             OrderAttempt::where('order_id', $id)->delete();
             OrderRecharge::where('order_id', $id)->delete();
+            OrderExpress::where('order_id', $id)->delete();
+            OrderExpressFeeAdjustment::where('order_id', $id)->delete();
+            OrderMovie::where('order_id', $id)->delete();
             MerchantBalanceLog::where('order_id', $id)->delete();
             MerchantRebate::where('order_id', $id)->delete();
             AdminOperationLog::where('target_type', 'order')->where('target_id', $id)->delete();
@@ -167,6 +173,72 @@ class OrderControllerTest extends HttpTestCase
         $this->assertStringNotContainsString('enc-pwd', $raw);
 
         $this->assertSame(404, $this->request('GET', '/admin/orders/999999999', $token)->getStatusCode());
+    }
+
+    /**
+     * 快递、电影票订单详情带各自的明细，后台版包括寄收件人、成本、费用调整原因、每张成本和供应商返佣。
+     */
+    public function testDetailIncludesExpressAndMovieDetails()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $express = $this->createOrderOfLine($merchant, $supplier, 'express', 'success');
+        OrderExpress::create([
+            'order_id' => $express->id,
+            'express_company_code' => 'EXabc',
+            'express_company_name' => '顺丰',
+            'sender_info' => ['name' => '张三', 'mobile' => '13900000000', 'province' => '广东省', 'city' => '深圳市', 'district' => '南山区', 'address' => '科技园'],
+            'receiver_info' => ['name' => '李四'],
+            'item_info' => ['name' => '文件'],
+            'weight' => 3,
+            'estimated_freight' => '10.00',
+            'frozen_freight' => '11.00',
+            'actual_freight' => '12.00',
+            'freight_sale_price' => '14.00',
+            'logistics_status' => 'in_transit',
+            'fee_over_at' => date('Y-m-d H:i:s'),
+        ]);
+        OrderExpressFeeAdjustment::create(['order_id' => $express->id, 'type' => 'supplement', 'item' => 'material', 'amount' => '3.00', 'reason' => '快递费用调整：耗材费补扣', 'created_at' => date('Y-m-d H:i:s')]);
+
+        $movie = $this->createOrderOfLine($merchant, $supplier, 'movie', 'success');
+        OrderMovie::create([
+            'order_id' => $movie->id, 'cinema_id' => 'C1', 'cinema_name' => '万达影城', 'film_id' => 'F1', 'show_id' => 'S1',
+            'show_time' => '2026-09-30 19:30:00', 'seats' => [['seat_code' => '1-3', 'row_label' => '1', 'col_label' => '3', 'love_status' => 0]],
+            'seat_count' => 1, 'unit_price' => '40.00', 'unit_cost' => '38.00', 'mobile' => '13800000000',
+            'lock_expire_at' => date('Y-m-d H:i:s'), 'ticket_codes' => [['code' => 'T-1']], 'supplier_rebate' => '3.00',
+        ]);
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view']));
+
+        $expressBody = $this->json($this->request('GET', '/admin/orders/' . $express->id, $token));
+        $this->assertNull($expressBody['recharge']);
+        $this->assertNull($expressBody['movie']);
+        $this->assertSame('张三', $expressBody['express']['sender']['name']);
+        $this->assertSame(['10.00', '11.00', '12.00', '14.00'], [
+            $expressBody['express']['estimated_freight'], $expressBody['express']['frozen_freight'],
+            $expressBody['express']['actual_freight'], $expressBody['express']['freight_sale_price'],
+        ]);
+        $this->assertSame('快递费用调整：耗材费补扣', $expressBody['express']['fee_adjustments'][0]['reason']);
+
+        $movieBody = $this->json($this->request('GET', '/admin/orders/' . $movie->id, $token));
+        $this->assertNull($movieBody['express']);
+        $this->assertSame('38.00', $movieBody['movie']['unit_cost']);
+        $this->assertSame('3.00', $movieBody['movie']['supplier_rebate']);
+        $this->assertSame([['code' => 'T-1']], $movieBody['movie']['ticket_codes']);
+    }
+
+    /**
+     * 快递、电影票的异常单不能人工置成功（快递扣多少要看云洋的费用明细，电影票成功必须带取票码），只能置失败。
+     */
+    public function testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.resolve']));
+
+        foreach (['express', 'movie'] as $line) {
+            $order = $this->createOrderOfLine($merchant, $supplier, $line, 'abnormal');
+            $response = $this->request('POST', '/admin/orders/' . $order->id . '/resolve', $token, ['result' => 'success', 'remark' => '核实已完成']);
+            $this->assertSame(409, $response->getStatusCode(), $line);
+            $this->assertSame('abnormal', $order->refresh()->status);
+        }
     }
 
     public function testResolveAbnormalAsSuccessDeductsNotifiesAndLogs()
@@ -446,6 +518,29 @@ class OrderControllerTest extends HttpTestCase
     /**
      * 已受理的订单（冻结 10 元，第一家处理中）。`$status` 直接写入，模拟不同阶段。
      */
+    /**
+     * 快递 / 电影票订单（没有 order_recharges 行），冻结 10 元。
+     */
+    private function createOrderOfLine(Merchant $merchant, Supplier $supplier, string $businessLine, string $status): Order
+    {
+        $order = Order::create([
+            'order_no' => strtoupper($businessLine[0]) . date('YmdHis') . random_int(100000, 999999),
+            'merchant_id' => $merchant->id,
+            'merchant_order_no' => 'MO-' . uniqid('', true),
+            'business_line' => $businessLine,
+            'status' => $status,
+            'sale_price' => '10.00',
+            'cost_price' => '8.00',
+            'supplier_id' => $supplier->id,
+            'frozen_amount' => '10.00',
+            'refunded_amount' => '0.00',
+            'callback_url' => 'https://merchant.example.com/notify',
+        ]);
+        $this->orderIds[] = $order->id;
+
+        return $order;
+    }
+
     private function createOrder(
         Merchant $merchant,
         Supplier $supplier,

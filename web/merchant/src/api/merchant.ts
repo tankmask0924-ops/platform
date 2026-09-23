@@ -1,4 +1,4 @@
-import type { Paged } from '@platform/shared'
+import type { ExpressDetail, MovieDetail, Paged } from '@platform/shared'
 import type { QualificationPayload } from '@/qualification'
 import { http } from './http'
 
@@ -96,6 +96,9 @@ export interface OrderDetail extends Order {
   recharge_account: string | null
   card_no?: string
   card_pwd?: string
+  /** 只有快递 / 电影票订单有 */
+  express?: ExpressDetail | null
+  movie?: MovieDetail | null
   notify_logs: NotifyLog[]
 }
 

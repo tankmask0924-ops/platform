@@ -1,4 +1,4 @@
-import type { Paged } from '@platform/shared'
+import type { ExpressDetail, MovieDetail, Paged } from '@platform/shared'
 import { http } from './http'
 
 type Query = Record<string, unknown>
@@ -362,6 +362,8 @@ export interface Order {
 export interface OrderDetail extends Order {
   supplier_name: string | null
   recharge: { product_id: number; recharge_account: string | null; rebate_amount: string | null; has_card_secret: boolean } | null
+  express: ExpressDetail | null
+  movie: MovieDetail | null
   attempts: {
     attempt_no: number
     supplier_id: number

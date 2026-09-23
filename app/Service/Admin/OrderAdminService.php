@@ -18,6 +18,9 @@ use App\Dao\MerchantNotifyLogDao;
 use App\Dao\MerchantRebateDao;
 use App\Dao\OrderAttemptDao;
 use App\Dao\OrderDao;
+use App\Dao\OrderExpressDao;
+use App\Dao\OrderExpressFeeAdjustmentDao;
+use App\Dao\OrderMovieDao;
 use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
 use App\Dao\SupplierDao;
@@ -26,6 +29,7 @@ use App\Model\MerchantBalanceLog;
 use App\Model\MerchantNotifyLog;
 use App\Model\Order;
 use App\Model\OrderAttempt;
+use App\Model\OrderExpressFeeAdjustment;
 use App\Service\AbstractService;
 use App\Service\MerchantNotifyService;
 use App\Service\Order\OrderResultApplier;
@@ -106,6 +110,15 @@ class OrderAdminService extends AbstractService
     #[Inject]
     protected MerchantNotifyService $merchantNotifyService;
 
+    #[Inject]
+    protected OrderExpressDao $orderExpressDao;
+
+    #[Inject]
+    protected OrderExpressFeeAdjustmentDao $feeAdjustmentDao;
+
+    #[Inject]
+    protected OrderMovieDao $orderMovieDao;
+
     /**
      * @param array<string, mixed> $query 原始查询参数
      * @return array{data: list<array<string, mixed>>, total: int, page: int, per_page: int}
@@ -145,6 +158,8 @@ class OrderAdminService extends AbstractService
         return $this->formatOrder($order) + [
             'supplier_name' => $supplierName($order->supplier_id),
             'recharge' => $this->formatRecharge($order),
+            'express' => $this->formatExpress($order),
+            'movie' => $this->formatMovie($order),
             'attempts' => $this->orderAttemptDao->listForOrder($order->id)
                 ->map(fn (OrderAttempt $attempt) => [
                     'attempt_no' => $attempt->attempt_no,
@@ -424,6 +439,93 @@ class OrderAdminService extends AbstractService
     /**
      * @return null|array<string, mixed>
      */
+    /**
+     * 快递明细，后台版：比商户看到的多寄收件人、各项成本（预估/冻结/实际运费成本）、费用调整原因。
+     * `freight_sale_price` 是实际向商户收的运费，跟 `actual_freight`（成本）并排看就是这单运费的毛利。
+     *
+     * @return null|array<string, mixed>
+     */
+    private function formatExpress(Order $order): ?array
+    {
+        if ($order->business_line !== 'express') {
+            return null;
+        }
+        $express = $this->orderExpressDao->findByOrderId((int) $order->id);
+        if ($express === null) {
+            return null;
+        }
+
+        return [
+            'company_code' => $express->express_company_code,
+            'company_name' => $express->express_company_name,
+            'sender' => $express->sender_info,
+            'receiver' => $express->receiver_info,
+            'item' => $express->item_info,
+            'weight' => $express->weight,
+            'insured_amount' => $express->insured_amount,
+            'waybill_no' => $express->waybill_no,
+            'logistics_status' => $express->logistics_status,
+            'estimated_freight' => $express->estimated_freight,
+            'frozen_freight' => $express->frozen_freight,
+            'actual_freight' => $express->actual_freight,
+            'actual_insured_fee' => $express->actual_insured_fee,
+            'actual_material_fee' => $express->actual_material_fee,
+            'actual_reverse_fee' => $express->actual_reverse_fee,
+            'freight_sale_price' => $express->freight_sale_price,
+            'fee_over_at' => $express->fee_over_at?->toDateTimeString(),
+            'signed_at' => $express->signed_at?->toDateTimeString(),
+            'fee_adjustments' => $this->feeAdjustmentDao->listForOrder((int) $order->id)
+                ->map(static fn (OrderExpressFeeAdjustment $adjustment) => [
+                    'type' => $adjustment->type,
+                    'item' => $adjustment->item,
+                    'amount' => $adjustment->amount,
+                    'reason' => $adjustment->reason,
+                    'created_at' => $adjustment->created_at->toDateTimeString(),
+                ])->values()->all(),
+        ];
+    }
+
+    /**
+     * 电影票明细，后台版：比商户看到的多每张成本和供应商返佣。取票码后台也显示——电影票没有卡密那样的
+     * 敏感等级，客服帮商户查"票出了没有、码是多少"是最常见的问题。
+     *
+     * @return null|array<string, mixed>
+     */
+    private function formatMovie(Order $order): ?array
+    {
+        if ($order->business_line !== 'movie') {
+            return null;
+        }
+        $movie = $this->orderMovieDao->findByOrderId((int) $order->id);
+        if ($movie === null) {
+            return null;
+        }
+
+        return [
+            'cinema_id' => $movie->cinema_id,
+            'cinema_name' => $movie->cinema_name,
+            'film_id' => $movie->film_id,
+            'film_name' => $movie->film_name,
+            'show_id' => $movie->show_id,
+            'show_time' => $movie->show_time->toDateTimeString(),
+            'area_id' => $movie->area_id,
+            'seats' => array_map(static fn (array $seat) => [
+                'seat_code' => $seat['seat_code'],
+                'row_label' => $seat['row_label'] ?? null,
+                'col_label' => $seat['col_label'] ?? null,
+                'love_status' => $seat['love_status'] ?? 0,
+            ], $movie->seats),
+            'seat_count' => $movie->seat_count,
+            'unit_price' => $movie->unit_price,
+            'unit_cost' => $movie->unit_cost,
+            'mobile' => $movie->mobile,
+            'lock_expire_at' => $movie->lock_expire_at->toDateTimeString(),
+            'confirmed_at' => $movie->confirmed_at?->toDateTimeString(),
+            'ticket_codes' => $movie->ticket_codes ?? [],
+            'supplier_rebate' => $movie->supplier_rebate,
+        ];
+    }
+
     private function formatRecharge(Order $order): ?array
     {
         $recharge = $this->orderRechargeDao->find($order->id);
