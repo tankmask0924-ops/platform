@@ -32,7 +32,26 @@ async function load() {
   }
 }
 
-const canQuery = computed(() => ['processing', 'abnormal'].includes(order.value?.status ?? ''))
+/** 话费、卡券：成功订单也能查（看是不是被供应商退款了），异常单能撤单，成功订单能部分退款 */
+const isRechargeOrCard = computed(() => ['recharge', 'card'].includes(order.value?.business_line ?? ''))
+const canQuery = computed(
+  () => ['processing', 'abnormal'].includes(order.value?.status ?? '') || (order.value?.status === 'success' && isRechargeOrCard.value),
+)
+const canCancelAtSupplier = computed(() => order.value?.status === 'abnormal' && isRechargeOrCard.value)
+const canPartialRefund = computed(() => order.value?.status === 'success' && isRechargeOrCard.value)
+const refundable = computed(() => {
+  if (!order.value) {
+    return '0.00'
+  }
+  const cents = Math.round(Number(order.value.deducted_amount ?? 0) * 100) - Math.round(Number(order.value.refunded_amount) * 100)
+  return (Math.max(cents, 0) / 100).toFixed(2)
+})
+
+const refundCheckText: Record<string, string> = {
+  refunded: '供应商已全额退款，订单已自动改为已退款并退回商户',
+  partial: '供应商部分退款，已生成告警，请核实后用「部分退款」处理',
+  none: '供应商没有退款',
+}
 const canNotify = computed(() => ['success', 'failed', 'cancelled', 'refunded'].includes(order.value?.status ?? ''))
 
 const querying = ref(false)
@@ -40,7 +59,9 @@ async function querySupplier() {
   querying.value = true
   try {
     const result = await orderApi.querySupplier(id)
-    const text = `供应商返回：${labelOf(attemptResultLabels, result.result)}${result.fail_reason ? `（${result.fail_reason}）` : ''}，订单当前状态：${labelOf(orderStatusLabels, result.order.status)}`
+    const text = result.refund_check
+      ? `${refundCheckText[result.refund_check]}，订单当前状态：${labelOf(orderStatusLabels, result.order.status)}`
+      : `供应商返回：${labelOf(attemptResultLabels, result.result)}${result.fail_reason ? `（${result.fail_reason}）` : ''}，订单当前状态：${labelOf(orderStatusLabels, result.order.status)}`
     ElMessage({ type: result.result === 'success' ? 'success' : 'info', message: text, duration: 6000 })
     await load()
   } finally {
@@ -57,6 +78,74 @@ async function renotify() {
   await orderApi.renotify(id)
   ElMessage.success('已重推')
   await load()
+}
+
+// 发起供应商撤单（只发起，结果看撤单回调或再查一次供应商）
+const cancelling = ref(false)
+async function cancelAtSupplier() {
+  try {
+    await ElMessageBox.confirm(
+      '向供应商发起撤单。受理不等于撤单成功：请稍后「查询供应商」，确认已撤单（退款）后再「人工处理 → 置失败」解冻。',
+      '发起供应商撤单',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  cancelling.value = true
+  try {
+    const result = await orderApi.cancelAtSupplier(id)
+    ElMessage({
+      type: result.accepted ? 'success' : 'warning',
+      message: result.accepted ? `供应商已受理撤单：${result.message}` : `供应商未受理撤单：${result.message}`,
+      duration: 6000,
+    })
+  } finally {
+    cancelling.value = false
+  }
+}
+
+// 部分退款
+const refundDialog = ref(false)
+const refunding = ref(false)
+const refundFormRef = ref<FormInstance>()
+const refundForm = reactive({ amount: '', remark: '' })
+const refundRules: FormRules = {
+  amount: [
+    { required: true, message: '请填写退款金额', trigger: 'blur' },
+    { pattern: /^\d+(\.\d{1,2})?$/, message: '金额最多两位小数', trigger: 'blur' },
+  ],
+  remark: [{ required: true, message: '请填写退款说明', trigger: 'blur' }],
+}
+
+function openRefund() {
+  Object.assign(refundForm, { amount: '', remark: '' })
+  refundDialog.value = true
+}
+
+async function submitRefund() {
+  const valid = await refundFormRef.value?.validate().catch(() => false)
+  if (!valid) {
+    return
+  }
+  const full = Number(refundForm.amount) >= Number(refundable.value)
+  const text = full
+    ? `退款 ${refundForm.amount} 元等于全部可退金额，订单将改为已退款，返佣作废或扣回。`
+    : `退款 ${refundForm.amount} 元退回商户可用余额，订单仍为成功，返佣不变。`
+  try {
+    await ElMessageBox.confirm(`${text}操作不可撤销，确定吗？`, '确认退款', { type: 'warning' })
+  } catch {
+    return
+  }
+  refunding.value = true
+  try {
+    await orderApi.partialRefund(id, { amount: refundForm.amount, remark: refundForm.remark.trim() })
+    ElMessage.success('已退款')
+    refundDialog.value = false
+    await load()
+  } finally {
+    refunding.value = false
+  }
 }
 
 // 异常单人工处理
@@ -127,7 +216,9 @@ onMounted(load)
             <span>订单 {{ order.order_no }}</span>
             <div>
               <el-button v-if="canQuery" :loading="querying" @click="querySupplier">查询供应商</el-button>
+              <el-button v-if="canCancelAtSupplier" :loading="cancelling" @click="cancelAtSupplier">发起供应商撤单</el-button>
               <el-button v-if="order.status === 'abnormal'" type="danger" @click="openResolve">人工处理</el-button>
+              <el-button v-if="canPartialRefund" type="warning" @click="openRefund">部分退款</el-button>
               <el-button v-if="canNotify" @click="renotify">重推回调</el-button>
             </div>
           </div>
@@ -276,6 +367,31 @@ onMounted(load)
       <el-button type="danger" :loading="resolving" @click="submitResolve">提交</el-button>
     </template>
   </el-dialog>
+
+  <el-dialog v-model="refundDialog" title="部分退款" width="480px" @closed="refundFormRef?.clearValidate()">
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      class="dialog-tip"
+      :title="`可退金额 ${money(refundable)}（已扣款 ${money(order?.deducted_amount)}，已退 ${money(order?.refunded_amount)}）`"
+      description="按核实的供应商退款金额退给商户；退满可退金额就是全额退款。"
+    />
+    <el-form ref="refundFormRef" :model="refundForm" :rules="refundRules" label-width="90px">
+      <el-form-item label="退款金额" prop="amount">
+        <el-input v-model="refundForm.amount" placeholder="例如 20.00">
+          <template #append>元</template>
+        </el-input>
+      </el-form-item>
+      <el-form-item label="退款说明" prop="remark">
+        <el-input v-model="refundForm.remark" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="例如：供应商只充值到账 50 元，退还差额" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="refundDialog = false">取消</el-button>
+      <el-button type="warning" :loading="refunding" @click="submitRefund">提交</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -312,6 +428,10 @@ pre {
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.dialog-tip {
+  margin-bottom: 16px;
 }
 
 pre.inline {

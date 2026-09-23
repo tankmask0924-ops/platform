@@ -216,6 +216,8 @@ class NotifyMerchantJob extends Job
             'business_line' => $order->business_line,
             'status' => $order->merchantFacingStatus(),
             'completed_at' => $order->completed_at?->toDateTimeString(),
+            // 退过款（售后退款、供应商退款、部分退款）才带；部分退款时订单仍是 success，商户靠它知道退了多少
+            'refunded_amount' => bccomp((string) $order->refunded_amount, '0', 2) > 0 ? (string) $order->refunded_amount : null,
             ...ErrorCode::presentOrderFailure($order->fail_reason),
             ...$this->expressFields($order),
             ...$this->movieFields($order),

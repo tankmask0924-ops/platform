@@ -42,8 +42,8 @@ use Throwable;
  * - `supplier_circuit_broken` / `product_fail_rate_spike`：`App\Service\Supplier\CircuitBreakerService`
  *   熔断触发时，整家熔断报前者、单商品熔断报后者（requirements.md 6.6）✅
  * - `abnormal_order_backlog`：需要"积压多少算多"的阈值和一个巡检点，检测链路未建 ⬜
- * - `supplier_refund_after_success`：需要"成功订单的供应商状态变化"检测链路，未建
- *   （见 docs/modules.md 第 8 节「售后处理」说明）⬜
+ * - `supplier_refund_after_success`：`App\Service\Order\SupplierRefundAfterSuccessService`（成功订单的卡速售回调、
+ *   后台「查询供应商」发现全额/部分退款时，requirements.md 7.1）✅
  * - `rebate_loss`：requirements.md 5.5 的保护提示目前只在前端算，后端没有检测点 ⬜
  * - `merchant_debt_exceeded`：`BalanceService::isOverDebtWarningThreshold()` 只是个读取端
  *   判断，真正要告警需要在余额变动后或用巡检任务去触发，未建 ⬜

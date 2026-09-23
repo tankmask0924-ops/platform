@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Controller;
 
 use App\Job\NotifyMerchantJob;
+use App\Model\Alert;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\Order;
@@ -111,6 +112,7 @@ class NotifySupplierControllerTest extends HttpTestCase
     {
         foreach ($this->orderIds as $id) {
             MerchantBalanceLog::where('order_id', $id)->delete();
+            Alert::where('related_type', 'order')->where('related_id', $id)->delete();
             Order::destroy($id);
         }
         $this->orderIds = [];
@@ -290,6 +292,38 @@ class NotifySupplierControllerTest extends HttpTestCase
         $merchant->refresh();
         $this->assertSame('90.00', $merchant->available_balance);
         $this->assertSame('0.00', $merchant->frozen_balance);
+    }
+
+    /**
+     * 成功之后卡速售推来"已退款"（kasushou.md 第 2 节"3 之后变为 5"）：全额退款自动按售后核实未到账处理，
+     * 退回商户、订单改已退款、回调商户并告警（requirements.md 7.1）。
+     */
+    public function testFullRefundCallbackAfterSuccessRefundsMerchantAndAlerts()
+    {
+        $merchant = $this->createMerchant('90.00', '0.00');
+        $supplier = $this->createSupplier();
+        $order = $this->createTerminalOrder($merchant->id, $supplier->id, 'success', [
+            'deducted_amount' => '10.00',
+            'completed_at' => date('Y-m-d H:i:s'),
+            'finished_at' => date('Y-m-d H:i:s'),
+        ]);
+        $this->mockDriverParseCallback($supplier, new DriverResult(
+            result: UnifiedResult::DefiniteFailure,
+            failReason: 'kasushou: order status 5',
+            refundAmount: '9.00',
+            rawRequest: ['external_orderno' => $order->order_no . '-1', 'day' => 0],
+        ));
+        $this->expectNotify(1);
+
+        $response = $this->client->request('POST', '/notify/' . $supplier->code . '/' . $supplier->notify_token, [
+            'form_params' => ['sign' => 'irrelevant-mocked', 'time' => (string) time()],
+        ]);
+
+        $this->assertSame('ok', (string) $response->getBody());
+        $this->assertSame('refunded', $order->refresh()->status);
+        $this->assertSame('10.00', $order->refunded_amount);
+        $this->assertSame('100.00', $merchant->refresh()->available_balance);
+        $this->assertSame(1, Alert::where('type', Alert::TYPE_SUPPLIER_REFUND_AFTER_SUCCESS)->where('related_id', $order->id)->count());
     }
 
     public function testTamperedSignatureCallbackIsRejectedWithoutSideEffects()

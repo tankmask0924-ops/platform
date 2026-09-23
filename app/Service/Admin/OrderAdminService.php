@@ -32,10 +32,14 @@ use App\Model\OrderAttempt;
 use App\Model\OrderExpressFeeAdjustment;
 use App\Service\AbstractService;
 use App\Service\MerchantNotifyService;
+use App\Service\Order\OrderRefundService;
 use App\Service\Order\OrderResultApplier;
+use App\Service\Order\SupplierRefundAfterSuccessService;
 use App\Service\Order\SupplierResultPollingService;
+use App\Service\Supplier\SupplierNotifyAddressService;
 use App\Supplier\CardSecretMasker;
 use App\Supplier\DriverResult;
+use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -118,6 +122,18 @@ class OrderAdminService extends AbstractService
 
     #[Inject]
     protected OrderMovieDao $orderMovieDao;
+
+    #[Inject]
+    protected SupplierDriverFactory $supplierDriverFactory;
+
+    #[Inject]
+    protected SupplierNotifyAddressService $notifyAddressService;
+
+    #[Inject]
+    protected OrderRefundService $orderRefundService;
+
+    #[Inject]
+    protected SupplierRefundAfterSuccessService $refundAfterSuccessService;
 
     /**
      * @param array<string, mixed> $query 原始查询参数
@@ -264,10 +280,15 @@ class OrderAdminService extends AbstractService
     public function querySupplier(int $orderId, int $adminUserId, ?string $ip): array
     {
         $order = $this->findOrderOrFail($orderId);
-        if (! in_array($order->status, self::QUERYABLE_STATUSES, true)) {
-            throw new HttpException(409, '只有处理中或异常的订单可以查询供应商');
+        $checkingRefund = $order->status === Order::STATUS_SUCCESS && in_array($order->business_line, ['recharge', 'card'], true);
+        if (! $checkingRefund && ! in_array($order->status, self::QUERYABLE_STATUSES, true)) {
+            throw new HttpException(409, '只有处理中、异常的订单，或者话费卡券的成功订单（查是否被供应商退款）可以查询供应商');
         }
         $before = $this->formatOrder($order);
+
+        if ($checkingRefund) {
+            return $this->checkRefundAfterSuccess($order, $before, $adminUserId, $ip);
+        }
 
         try {
             $result = $this->pollingService->queryLatestAttempt($order);
@@ -310,6 +331,92 @@ class OrderAdminService extends AbstractService
         $this->operationLogDao->record($adminUserId, self::MODULE, 'renotify', 'order', $order->id, null, [
             'status' => $order->status,
         ], $ip);
+    }
+
+    /**
+     * @return null|array<string, mixed>
+     */
+    /**
+     * 异常单发起供应商撤单（requirements.md 7.1「供应商支持撤单时，客服可发起撤单」，kasushou.md 第 1 节）。
+     * 只对话费、卡券（卡速售）的异常单开放；按最新一次尝试的 `external_orderno` 撤。
+     *
+     * **只发起，不改订单**：卡速售受理撤单不等于撤单成功，结果以撤单结果回调或「查询供应商」看到的状态为准。
+     * 异常单的自动推进本来就只记录不改订单（SupplierRouter），所以撤单成功后客服用「人工处理 → 置失败」解冻；
+     * 撤单失败（已经充上了）就按实际情况置成功。受理与否、供应商给的原因都记操作日志。
+     *
+     * @return array{accepted: bool, message: string}
+     */
+    public function cancelAtSupplier(int $orderId, int $adminUserId, ?string $ip): array
+    {
+        $order = $this->findOrderOrFail($orderId);
+        if ($order->status !== Order::STATUS_ABNORMAL || ! in_array($order->business_line, ['recharge', 'card'], true)) {
+            throw new HttpException(409, '只有话费、卡券的异常单可以发起供应商撤单');
+        }
+        $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
+        $supplier = $attempt === null ? null : $this->supplierDao->find((int) $attempt->supplier_id);
+        if ($attempt === null || $supplier === null) {
+            throw new HttpException(409, '订单没有供应商尝试记录，无法撤单');
+        }
+
+        try {
+            $result = $this->supplierDriverFactory->build($supplier)->cancelOrder(
+                $order->order_no . '-' . $attempt->attempt_no,
+                $this->notifyAddressService->orderNotifyUrl($supplier)
+            );
+        } catch (Throwable $e) {
+            throw new HttpException(502, '发起撤单失败：' . $e->getMessage(), 0, $e);
+        }
+
+        $this->operationLogDao->record($adminUserId, self::MODULE, 'cancel_at_supplier', 'order', $order->id, null, $result + [
+            'supplier_id' => (int) $supplier->id,
+            'attempt_no' => (int) $attempt->attempt_no,
+        ], $ip);
+
+        return $result;
+    }
+
+    /**
+     * 部分退款（requirements.md 7.1「供应商部分退款：转人工处理」、8.3「部分退款订单处理」）：客服核实供应商
+     * 实际退了多少后，把对应金额退给商户。只对话费、卡券的成功订单；退到跟已扣款一样多就是全额退款
+     * （订单改已退款、返佣作废或扣回），见 OrderRefundService::refundPartially()。
+     *
+     * @return array<string, mixed> 处理后的订单
+     */
+    public function partialRefund(int $orderId, mixed $amount, mixed $remark, int $adminUserId, ?string $ip): array
+    {
+        if (! is_string($amount) && ! is_int($amount) && ! is_float($amount)) {
+            throw new HttpException(422, 'amount 必须是金额');
+        }
+        $amount = (string) $amount;
+        if (preg_match('/^\d+(\.\d{1,2})?$/', $amount) !== 1 || bccomp($amount, '0', 2) <= 0) {
+            throw new HttpException(422, 'amount 必须是大于 0、最多两位小数的金额');
+        }
+        $remark = is_string($remark) ? trim($remark) : '';
+        if ($remark === '' || mb_strlen($remark) > 200) {
+            throw new HttpException(422, 'remark 不能为空，且不超过 200 个字符');
+        }
+
+        $order = $this->findOrderOrFail($orderId);
+        if ($order->status !== Order::STATUS_SUCCESS || ! in_array($order->business_line, ['recharge', 'card'], true)) {
+            throw new HttpException(409, '只有话费、卡券的成功订单可以部分退款');
+        }
+        $refundable = bcsub((string) ($order->deducted_amount ?? '0.00'), (string) $order->refunded_amount, 2);
+        if (bccomp($amount, $refundable, 2) > 0) {
+            throw new HttpException(422, '退款金额不能超过可退金额 ' . $refundable . ' 元');
+        }
+        $before = $this->formatOrder($order);
+
+        if (! $this->orderRefundService->refundPartially($order, $amount, '部分退款：' . $remark, $adminUserId)) {
+            throw new HttpException(409, '订单状态已变化，请刷新后重试');
+        }
+
+        $order->refresh();
+        $this->operationLogDao->record($adminUserId, self::MODULE, 'partial_refund', 'order', $order->id, $before, $this->formatOrder($order) + [
+            'amount' => $amount,
+            'remark' => $remark,
+        ], $ip);
+
+        return $this->formatOrder($order);
     }
 
     /**
@@ -437,8 +544,44 @@ class OrderAdminService extends AbstractService
     }
 
     /**
-     * @return null|array<string, mixed>
+     * 成功订单查一次供应商，看是不是被退款了（全额自动处理、部分告警，见 SupplierRefundAfterSuccessService）。
+     *
+     * @param array<string, mixed> $before
+     * @return array{result: string, supplier_order_no: null|string, fail_reason: null|string, order: array<string, mixed>}
      */
+    private function checkRefundAfterSuccess(Order $order, array $before, int $adminUserId, ?string $ip): array
+    {
+        $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);
+        $supplier = $attempt === null ? null : $this->supplierDao->find((int) $attempt->supplier_id);
+        if ($attempt === null || $supplier === null) {
+            throw new HttpException(409, '订单没有供应商尝试记录，无法查询');
+        }
+
+        try {
+            $result = $this->supplierDriverFactory->build($supplier)
+                ->queryOrder($order->order_no . '-' . $attempt->attempt_no, $order->business_line === 'card');
+        } catch (Throwable $e) {
+            throw new HttpException(502, '查询供应商失败：' . $e->getMessage(), 0, $e);
+        }
+        $outcome = $this->refundAfterSuccessService->handle($order, $result);
+        $order->refresh();
+
+        $response = [
+            'result' => strtolower($result->result->name),
+            'supplier_order_no' => $result->supplierOrderNo,
+            'fail_reason' => $result->failReason,
+            'refund_check' => $outcome,
+            'order' => $this->formatOrder($order),
+        ];
+        $this->operationLogDao->record($adminUserId, self::MODULE, 'query_supplier', 'order', $order->id, $before, [
+            'supplier_result' => $response['result'],
+            'refund_check' => $outcome,
+            'status' => $order->status,
+        ], $ip);
+
+        return $response;
+    }
+
     /**
      * 快递明细，后台版：比商户看到的多寄收件人、各项成本（预估/冻结/实际运费成本）、费用调整原因。
      * `freight_sale_price` 是实际向商户收的运费，跟 `actual_freight`（成本）并排看就是这单运费的毛利。

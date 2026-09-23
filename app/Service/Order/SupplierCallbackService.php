@@ -63,7 +63,7 @@ use Hyperf\Logger\LoggerFactory;
  * 验签后驱动查询得到的权威单号必须指向同一笔订单，否则按找不到订单处理。
  *
  * 【幂等】订单已经是终态就直接回复 `ok`，不再往下处理（省掉旧结果覆盖已落定字段的
- * 可能）。跟定时查询同时推进同一笔订单的竞争由 `OrderResultApplier` 的条件更新兜住，
+ * 可能）。例外是**已成功**的订单：交给 SupplierRefundAfterSuccessService 看是不是成功后被退款了。跟定时查询同时推进同一笔订单的竞争由 `OrderResultApplier` 的条件更新兜住，
  * 资金层面还有 `BalanceService` 的唯一索引。
  *
  * 【返回值是驱动特定的裸文本，不是这个代码库其它地方常见的 {code,message,data}
@@ -119,6 +119,9 @@ class SupplierCallbackService extends AbstractService
     #[Inject]
     protected MovieCallbackService $movieCallbackService;
 
+    #[Inject]
+    protected SupplierRefundAfterSuccessService $refundAfterSuccessService;
+
     /**
      * @param array<string, mixed> $payload
      * @param array<string, string> $headers
@@ -167,6 +170,13 @@ class SupplierCallbackService extends AbstractService
             );
         }
 
+        if ($order->status === Order::STATUS_SUCCESS) {
+            // 成功之后供应商又推回调：多半是售后、运营商冲正导致的退款（kasushou.md 第 2 节"3 之后变为 5"），
+            // 全额退款自动处理、部分退款告警转人工；仍是成功的（重推同一个回调）什么都不做
+            $this->refundAfterSuccessService->handle($order, $result);
+
+            return self::KASUSHOU_SUCCESS_REPLY;
+        }
         if (in_array($order->status, self::TERMINAL_STATUSES, true)) {
             // 订单已经是终态：供应商重试同一个回调，或者别的路径已经先一步推进了。
             return self::KASUSHOU_SUCCESS_REPLY;

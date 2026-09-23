@@ -94,6 +94,9 @@ class KasushouDriver
 
     private const PATH_USER_INFO = '/api/v1/user/info';
 
+    /** 撤单（kasushou.md 第 1 节"撤单"）。路径是推断，同本类其它路径 */
+    private const PATH_ORDER_BACK = '/api/v1/order/back';
+
     private const PATH_GOODS_DETAIL = '/api/v1/goods/detail';
 
     private const PATH_GOODS_LIST = '/api/v1/goods/list';
@@ -105,6 +108,7 @@ class KasushouDriver
         self::PATH_ORDER_CREATE => 'place_order',
         self::PATH_ORDER_QUERY => 'query',
         self::PATH_USER_INFO => 'query_balance',
+        self::PATH_ORDER_BACK => 'cancel',
         self::PATH_GOODS_DETAIL => 'goods_detail',
         self::PATH_GOODS_LIST => 'goods_list',
     ];
@@ -219,6 +223,36 @@ class KasushouDriver
         }
 
         return $this->mapOrderData($response['data'], $body, $response['raw'], $isCardProduct);
+    }
+
+    /**
+     * 发起撤单（kasushou.md 第 1 节：撤单接口 + 撤单结果回调，异常单由客服发起）。
+     *
+     * 只表示"卡速售受理了撤单申请"，**不是撤单成功**：结果通过撤单结果回调（`$notifyUrl`，跟下单回调同一个地址，
+     * 走同一个回调入口）或者之后查询订单详情的状态 4/5 + 退款金额得知，由调用方据此推进订单，这里不改任何状态。
+     * 商品不支持撤单（`can_back`）、订单已经成功等情况卡速售返回 400 + 文案，原样带回给客服看。
+     *
+     * @return array{accepted: bool, message: string}
+     */
+    public function cancelOrder(string $externalOrderNo, ?string $notifyUrl = null): array
+    {
+        $body = ['external_orderno' => $externalOrderNo];
+        if ($notifyUrl !== null) {
+            $body['url'] = $notifyUrl;
+        }
+
+        $response = $this->sendSigned(self::PATH_ORDER_BACK, $body);
+        $decoded = json_decode((string) ($response['raw']['body'] ?? ''), true);
+        $message = is_array($decoded) ? (string) ($decoded['msg'] ?? '') : '';
+
+        if ($response['httpStatus'] === null) {
+            return ['accepted' => false, 'message' => 'kasushou: network error or timeout'];
+        }
+
+        return [
+            'accepted' => $response['httpStatus'] === 200,
+            'message' => $message !== '' ? $message : ('http ' . $response['httpStatus']),
+        ];
     }
 
     /**

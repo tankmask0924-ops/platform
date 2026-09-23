@@ -55,7 +55,7 @@
 | 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ✅ `App\Service\Order\SupplierCallbackService`（回调入口见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` + `NotifySupplierControllerTest` | ✅ |
 | 查询余额 | ✅ `KasushouDriver::queryBalance()` | ✅ `App\Service\Supplier\SupplierBalanceService`（余额监控，见第 9 节） | ✅ `KasushouDriverTest` + `SupplierBalanceServiceTest` | ✅ |
 | 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | ✅ `App\Service\Supplier\ProductSyncService`：商品变更通知 `POST /notify/{code}/goods`（`handleNotification()`）+ 每日全量校准（`App\Crontab\SupplierProductSyncCrontab` → `syncAllSuppliers()`），见第 9 节 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测）、`NotifySupplierControllerTest`（通知路由 200/403/404） | ✅ |
-| 撤单（异常单处理用，可选） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 撤单（异常单处理用，可选） | ✅ `cancelOrder()`（路径 `/api/v1/order/back` 是推断） | ✅ `OrderAdminService::cancelAtSupplier()` | ✅ | ✅ |
 | 提交售后 / 接收售后结果 | ⬜ | ⬜ | ⬜ | ⬜ |
 | 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
 
@@ -578,7 +578,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 商户等级：CRUD / 各业务线比例设置 | 一期 | ✅ `App\Controller\Admin\MerchantLevelController` | ✅ `App\Service\Admin\MerchantLevelAdminService` | `views/merchant/MerchantLevelView.vue` ✅ 已联调（2026-09-18） | ✅ `GET/POST /admin/merchant-levels`、`GET/PUT /admin/merchant-levels/{id}`、`PUT /admin/merchant-levels/{id}/rates/{businessLine}`；权限 `merchant_level.view` / `merchant_level.manage`（已加进 `AdminBootstrapService::KNOWN_PERMISSIONS`）。列表全量不分页（等级是少量配置行）；详情 `rates` 固定含 recharge/card/movie/express 四个 key，`null` = 未设置、`'0.0000'` = 明确设为 0%；比例设置用 `MerchantLevelBusinessRateDao::upsertRate()`（数据库原生 upsert，按 `(level_id, business_line)` 唯一索引原地更新），接受非负、最多 4 位小数、不超过列上限 99.9999 的值，超过 1（100%）照样保存不拒绝（5.5 只要求提示，前端未建）。没有删除接口；不含调整商户所属等级。测试 `test/Cases/Admin/MerchantLevelControllerTest.php`，含写入后 `RebateCalculator` 读到新比例的联调用例。商品单独覆盖某等级比例（`product_level_rebates`）已在「本地商品库」行完成 |
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ✅ `App\Controller\Admin\PricingRuleController` | ✅ `App\Service\Product\PricingRuleService` | `views/product/PricingRuleView.vue`（菜单在商品与供应商下）✅ 已联调（2026-09-21） | ✅ 见下方「价格设置」说明 |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` | `views/merchant/RebateListView.vue`（菜单在商户管理下，商户详情可跳转按商户筛选） ✅ 已联调（2026-09-18） | 🔨 固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。供应商返佣明细（电影票、快递）三期随业务线一起做。测试 `test/Cases/Admin/RebateControllerTest.php` |
-| 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18；2026-09-23 详情加快递/电影票明细卡片，只过了类型检查） | 🔨 除部分退款处理、发起供应商撤单外均已完成，见下方说明。2026-09-23：详情接口多 `express`（寄收件人、预估/冻结/实际运费成本和向商户收的运费、其它三项实际费用、费用调整含原因）和 `movie`（场次、座位、每张售价和成本、供应商返佣、取票码）两段；两个后台共用 `web/shared` 的 `ExpressDetailInfo` / `MovieDetailInfo` 组件（后台版多出的成本字段有就显示）。快递、电影票异常单只能人工置失败（测试 `testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess`） |
+| 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18；2026-09-23 详情加快递/电影票明细卡片、撤单和部分退款按钮，只过了类型检查） | ✅ 全部完成，见下方说明（部分退款、发起供应商撤单 2026-09-23 补齐）。2026-09-23：详情接口多 `express`（寄收件人、预估/冻结/实际运费成本和向商户收的运费、其它三项实际费用、费用调整含原因）和 `movie`（场次、座位、每张售价和成本、供应商返佣、取票码）两段；两个后台共用 `web/shared` 的 `ExpressDetailInfo` / `MovieDetailInfo` 组件（后台版多出的成本字段有就显示）。快递、电影票异常单只能人工置失败（测试 `testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess`） |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
 | 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | 🔨 订单对账 + 差异标记处理已完成；返佣对账三期随电影票/快递业务线一起做，见下方「对账」说明 |
@@ -700,8 +700,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   `supplier_low_balance` ✅（`SupplierBalanceService`：定时刷新后低于预警线报 warning，供应商返回"预存款不足"
 >   报 critical——后者说明订单已经在失败了）、`supplier_circuit_broken` ✅ 和 `product_fail_rate_spike` ✅
 >   （`CircuitBreakerService`：整家熔断报前者 critical，单商品熔断报后者 warning，两者影响面差一个量级，
->   在列表里要能一眼分开）。**还没有产生方**：`abnormal_order_backlog`（缺"积压多少算多"的阈值和巡检点）、
->   `supplier_refund_after_success`（缺"成功订单的供应商状态变化"检测链路，见「售后处理」说明）、
+>   在列表里要能一眼分开）。`supplier_refund_after_success` ✅（2026-09-23，`SupplierRefundAfterSuccessService`，见「订单管理」说明）。
+>   **还没有产生方**：`abnormal_order_backlog`（缺"积压多少算多"的阈值和巡检点）、
 >   `rebate_loss`（5.5 的保护提示目前只在前端算）、`merchant_debt_exceeded`（`isOverDebtWarningThreshold()`
 >   只是个读取端判断，要告警得在余额变动后或用巡检任务触发）。补检测链路时只需找地方调 `AlertService`，
 >   不用回头改枚举、迁移注释和前端中文名三处。
@@ -787,7 +787,21 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - **重推回调**只允许 success / failed / cancelled / refunded，推一次新的通知任务（失败后照常按间隔重试）。
 > - 以上三个动作都写 `admin_operation_logs`（本次新增 `App\Model\AdminOperationLog` + `App\Dao\AdminOperationLogDao`，
 >   此前这张表还没有代码写入），异常单处理记录处理前后的订单快照和备注。
-> - 未做：部分退款处理（退款流程未建）、发起供应商撤单（驱动未实现撤单，第 2 节"撤单"行）。
+> - **发起供应商撤单**（2026-09-23，`POST /admin/orders/{id}/cancel-supplier`，`order.resolve`）：只对话费卡券异常单，
+>   按最新尝试的 `external_orderno` 调 `KasushouDriver::cancelOrder()`（带订单回调地址收撤单结果）。**只发起、不改订单**：
+>   受理不等于撤单成功，客服之后「查询供应商」确认已撤单（状态 4/5 退款），再「人工处理 → 置失败」解冻——异常单的自动推进
+>   本来就只记录不改订单。受理结果和卡速售给的原因返回给页面并记操作日志。
+> - **成功后被供应商退款**（2026-09-23，requirements.md 7.1 / 7.7，`App\Service\Order\SupplierRefundAfterSuccessService`）：
+>   卡速售对已成功订单再推回调时（`SupplierCallbackService` 以前直接忽略），全额退款（状态 4/5 且退款 = 订单金额）自动走
+>   `OrderRefundService::refundUndelivered()`（订单已退款、退回商户、返佣作废或扣回），部分退款不动钱；两种都报
+>   `supplier_refund_after_success` 告警（挂在订单上）。后台「查询供应商」现在也能查话费卡券的**成功**订单，走同一套判断，
+>   返回 `refund_check`（refunded / partial / none）。定时查询只查处理中的订单，不会主动发现这类变化。
+> - **部分退款**（2026-09-23，`POST /admin/orders/{id}/partial-refund`，`amount` + `remark`，`order.resolve`）：只对话费卡券的
+>   成功订单，金额不能超过「已扣款 − 已退」；订单仍成功、`refunded_amount` 累加、退回商户可用余额（`refund` 流水）、回调商户
+>   （回调新增 `refunded_amount` 字段，退过款才带）。退满剩余金额就按全额退款处理。**部分退款不动返佣**——需求没规定，
+>   先按"订单仍成功、返佣照常"，需要时客服另外调账（待业务确认）。
+>   顺带修了 `refundUndelivered()`：之前部分退过的再全额退款会按已扣款全额再退一次，现在只退剩下的，
+>   条件更新也带上读到的已退金额，跟部分退款并发时不会多退。
 > - 测试：`test/Cases/Admin/OrderControllerTest.php`。
 
 > 「商户管理：启用禁用 / 调整等级 / 限流设置」：三个动作共用新权限编码 `merchant.manage`
@@ -1006,15 +1020,15 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 分类 | 总数 | 已完成 | 开发中 | 未开始 |
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
-| 卡速售 2.0 驱动 | 8 | 6 | 0 | 2 |
+| 卡速售 2.0 驱动 | 8 | 7 | 0 | 1 |
 | 云洋驱动 | 9 | 8 | 0 | 1 |
 | 芒果驱动 | 11 | 11 | 0 | 0 |
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 15 | 4 | 0 |
+| 系统管理后台 | 19 | 16 | 3 | 0 |
 | 异步任务与定时任务 | 13 | 11 | 0 | 2 |
-| **合计** | **109** | **99** | **4** | **6** |
+| **合计** | **109** | **101** | **3** | **5** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1043,6 +1057,6 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~商品库/商户等级页面上的 5.5 价格与返佣保护提示（低于成本价、毛利为负、返佣比例超 100%），可以只在前端算~~（已完成，前端计算）
    - ~~商户后台三处导出（资金流水、返佣明细、订单）~~（2026-09-21 已完成）
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
-   - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
+   - ~~一期只剩：后台订单的部分退款与发起供应商撤单~~（2026-09-23 已完成，**一期到此全部完成**）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
 5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ 沙箱环境

@@ -19,6 +19,7 @@ use App\Model\AdminPermission;
 use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
+use App\Model\Alert;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantRebate;
@@ -91,6 +92,7 @@ class OrderControllerTest extends HttpTestCase
             OrderMovie::where('order_id', $id)->delete();
             MerchantBalanceLog::where('order_id', $id)->delete();
             MerchantRebate::where('order_id', $id)->delete();
+            Alert::where('related_type', 'order')->where('related_id', $id)->delete();
             AdminOperationLog::where('target_type', 'order')->where('target_id', $id)->delete();
             Order::destroy($id);
         }
@@ -241,6 +243,101 @@ class OrderControllerTest extends HttpTestCase
         }
     }
 
+    /**
+     * 发起供应商撤单：只对话费卡券的异常单，按最新尝试的 external_orderno 撤；只发起，不改订单，记操作日志。
+     */
+    public function testCancelAtSupplierForAbnormalOrder()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $abnormal = $this->createOrder($merchant, $supplier, 'abnormal');
+        $success = $this->createOrder($merchant, $supplier, 'success');
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('cancelOrder')->once()
+            ->with($abnormal->order_no . '-1', Mockery::type('string'))
+            ->andReturn(['accepted' => true, 'message' => '撤单申请已提交']);
+        $this->bindDriver($supplier, $driver);
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.resolve']));
+
+        $body = $this->json($this->request('POST', '/admin/orders/' . $abnormal->id . '/cancel-supplier', $token));
+
+        $this->assertTrue($body['accepted']);
+        $this->assertSame('abnormal', $abnormal->refresh()->status, '只发起撤单，不改订单');
+        $this->assertSame('cancel_at_supplier', AdminOperationLog::where('target_type', 'order')->where('target_id', $abnormal->id)->value('action'));
+
+        $this->assertSame(409, $this->request('POST', '/admin/orders/' . $success->id . '/cancel-supplier', $token)->getStatusCode());
+        $manageOnly = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.manage']));
+        $this->assertSame(403, $this->request('POST', '/admin/orders/' . $abnormal->id . '/cancel-supplier', $manageOnly)->getStatusCode());
+    }
+
+    /**
+     * 部分退款：订单仍成功、已退金额累加、退回商户并回调；超过可退金额拒绝；退满剩余的就是全额退款
+     * （订单已退款、返佣作废），而且之前部分退过的不会再退一次。
+     */
+    public function testPartialRefundThenRefundTheRest()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $order = $this->createOrder($merchant, $supplier, 'success');
+        $order->fill(['deducted_amount' => '10.00'])->save();
+        $rebate = MerchantRebate::create([
+            'order_id' => $order->id, 'merchant_id' => $merchant->id, 'business_line' => 'recharge', 'level_id' => 0,
+            'rebate_base' => '0.50', 'rebate_base_source' => 'product', 'rebate_rate' => '1.0000', 'rebate_rate_source' => 'level',
+            'amount' => '0.50', 'status' => 'pending',
+        ]);
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.resolve']));
+        $this->expectNotify(2);
+
+        $body = $this->json($this->request('POST', '/admin/orders/' . $order->id . '/partial-refund', $token, ['amount' => '3.00', 'remark' => '供应商只到账 7 元']));
+        $this->assertSame('success', $body['status']);
+        $this->assertSame('3.00', $body['refunded_amount']);
+        $this->assertSame('103.00', $merchant->refresh()->available_balance);
+        $this->assertSame('pending', $rebate->refresh()->status, '部分退款不动返佣');
+        $this->assertSame('partial_refund', AdminOperationLog::where('target_type', 'order')->where('target_id', $order->id)->value('action'));
+
+        $this->assertSame(422, $this->request('POST', '/admin/orders/' . $order->id . '/partial-refund', $token, ['amount' => '7.01', 'remark' => 'x'])->getStatusCode());
+        $this->assertSame(422, $this->request('POST', '/admin/orders/' . $order->id . '/partial-refund', $token, ['amount' => '1', 'remark' => ''])->getStatusCode());
+
+        $body = $this->json($this->request('POST', '/admin/orders/' . $order->id . '/partial-refund', $token, ['amount' => '7.00', 'remark' => '全部退回']));
+        $this->assertSame('refunded', $body['status']);
+        $this->assertSame('10.00', $body['refunded_amount']);
+        $this->assertSame('110.00', $merchant->refresh()->available_balance, '先退的 3 元不会再退一次');
+        $this->assertSame('voided', $rebate->refresh()->status);
+    }
+
+    /**
+     * 成功订单查询供应商：全额退款自动退回商户并告警；部分退款只告警不动钱。
+     */
+    public function testQuerySupplierOnSuccessOrderDetectsRefund()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $full = $this->createOrder($merchant, $supplier, 'success');
+        $full->fill(['deducted_amount' => '10.00'])->save();
+        $partial = $this->createOrder($merchant, $supplier, 'success');
+        $partial->fill(['deducted_amount' => '10.00'])->save();
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('queryOrder')->with($full->order_no . '-1', false)
+            ->andReturn(new DriverResult(result: UnifiedResult::DefiniteFailure, failReason: 'kasushou: order status 5', refundAmount: '9.80'));
+        $driver->shouldReceive('queryOrder')->with($partial->order_no . '-1', false)
+            ->andReturn(new DriverResult(result: UnifiedResult::Unknown, refundAmount: '4.90'));
+        $this->bindDriver($supplier, $driver);
+        $this->expectNotify(1);
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view', 'order.manage']));
+
+        $fullBody = $this->json($this->request('POST', '/admin/orders/' . $full->id . '/query-supplier', $token));
+        $this->assertSame('refunded', $fullBody['refund_check']);
+        $this->assertSame('refunded', $full->refresh()->status);
+        $this->assertSame('110.00', $merchant->refresh()->available_balance);
+
+        $partialBody = $this->json($this->request('POST', '/admin/orders/' . $partial->id . '/query-supplier', $token));
+        $this->assertSame('partial', $partialBody['refund_check']);
+        $this->assertSame('success', $partial->refresh()->status);
+        $this->assertSame('110.00', $merchant->refresh()->available_balance, '部分退款不自动动钱');
+
+        foreach ([$full, $partial] as $order) {
+            $this->assertSame(1, Alert::where('type', Alert::TYPE_SUPPLIER_REFUND_AFTER_SUCCESS)->where('related_type', 'order')->where('related_id', $order->id)->count());
+        }
+    }
+
     public function testResolveAbnormalAsSuccessDeductsNotifiesAndLogs()
     {
         [$merchant, $supplier] = $this->merchantAndSupplier();
@@ -381,7 +478,8 @@ class OrderControllerTest extends HttpTestCase
     {
         [$merchant, $supplier] = $this->merchantAndSupplier();
         $processing = $this->createOrder($merchant, $supplier, 'processing');
-        $finished = $this->createOrder($merchant, $supplier, 'success');
+        // 成功的话费卡券订单可以查（检测是否被供应商退款），失败的不行
+        $finished = $this->createOrder($merchant, $supplier, 'failed');
         $token = $this->loginAs($this->createAdminWithPermissions(['order.manage']));
 
         $driver = Mockery::mock(KasushouDriver::class);

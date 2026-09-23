@@ -32,7 +32,7 @@ use Hyperf\HttpServer\Annotation\PostMapping;
  * 三档权限：
  * - `order.view`：列表、详情（含成本价、供应商尝试记录）；
  * - `order.manage`：手动查询供应商、手动重推商户回调，不直接改钱；
- * - `order.resolve`：异常单人工置成功/置失败，会扣款或解冻，单独一档。
+ * - `order.resolve`：异常单人工置成功/置失败、发起供应商撤单、部分退款，会扣款、解冻、退款或改变供应商侧订单，单独一档。
  * 记得同步维护 App\Service\Admin\AdminBootstrapService::KNOWN_PERMISSIONS。
  */
 #[Controller(prefix: '/admin/orders')]
@@ -73,6 +73,30 @@ class OrderController extends AbstractController
             $this->request->input('result'),
             $this->request->input('remark'),
             $this->request->input('supplier_order_no'),
+            $this->adminId(),
+            $this->clientIp(),
+        );
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('order.resolve')]
+    #[PostMapping(path: '{id}/cancel-supplier')]
+    public function cancelAtSupplier(int $id): array
+    {
+        return $this->orderAdminService->cancelAtSupplier($id, $this->adminId(), $this->clientIp());
+    }
+
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('order.resolve')]
+    #[PostMapping(path: '{id}/partial-refund')]
+    public function partialRefund(int $id): array
+    {
+        return $this->orderAdminService->partialRefund(
+            $id,
+            $this->request->input('amount'),
+            $this->request->input('remark'),
             $this->adminId(),
             $this->clientIp(),
         );

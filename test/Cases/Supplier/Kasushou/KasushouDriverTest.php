@@ -591,8 +591,29 @@ class KasushouDriverTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $orderData
+     * 撤单（kasushou.md 第 1 节）：按 external_orderno 撤、带回调地址；200 是受理，400 带回卡速售的文案给客服看。
      */
+    public function testCancelOrderReportsAcceptanceAndSupplierMessage()
+    {
+        $sent = [];
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')->twice()->andReturnUsing(function (string $method, string $url, array $options) use (&$sent) {
+            $sent[] = [$url, $options['json']];
+
+            return count($sent) === 1
+                ? new Response(200, [], json_encode(['code' => 200, 'msg' => '撤单申请已提交', 'data' => []]))
+                : new Response(400, [], json_encode(['code' => 400, 'msg' => '该商品不支持撤单']));
+        });
+        $driver = $this->makeDriver($client);
+
+        $this->assertSame(['accepted' => true, 'message' => '撤单申请已提交'], $driver->cancelOrder('R1-1', 'https://platform.example/notify/k/t'));
+        $this->assertSame(['accepted' => false, 'message' => '该商品不支持撤单'], $driver->cancelOrder('R1-1'));
+
+        $this->assertStringEndsWith('/api/v1/order/back', $sent[0][0]);
+        $this->assertSame(['external_orderno' => 'R1-1', 'url' => 'https://platform.example/notify/k/t'], $sent[0][1]);
+        $this->assertArrayNotHasKey('url', $sent[1][1]);
+    }
+
     private function placeOrderWithOrderResponse(int $httpStatus, array $orderData, bool $isCardProduct = false): DriverResult
     {
         $client = Mockery::mock(ClientInterface::class);

@@ -393,6 +393,8 @@ export interface QuerySupplierResult {
   supplier_order_no: string | null
   fail_reason: string | null
   order: Order
+  /** 只有成功订单查询时才有：refunded 已自动全额退款 / partial 部分退款已告警 / none 没有退款 */
+  refund_check?: 'refunded' | 'partial' | 'none'
 }
 
 export const orderApi = {
@@ -401,6 +403,8 @@ export const orderApi = {
   resolve: (id: number, data: { result: 'success' | 'failed'; remark: string; supplier_order_no?: string }) =>
     http.post<Order>(`/admin/orders/${id}/resolve`, data),
   querySupplier: (id: number) => http.post<QuerySupplierResult>(`/admin/orders/${id}/query-supplier`),
+  cancelAtSupplier: (id: number) => http.post<{ accepted: boolean; message: string }>(`/admin/orders/${id}/cancel-supplier`),
+  partialRefund: (id: number, data: { amount: string; remark: string }) => http.post<Order>(`/admin/orders/${id}/partial-refund`, data),
   renotify: (id: number) => http.post<Ok>(`/admin/orders/${id}/renotify`),
 }
 
