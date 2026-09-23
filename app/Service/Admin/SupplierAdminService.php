@@ -278,13 +278,16 @@ class SupplierAdminService extends AbstractService
 
     /**
      * 手动触发商品全量同步（成本价、状态、库存），放队列异步执行。停用的供应商不同步，
-     * 跟每日校准一致。
+     * 跟每日校准一致。电影票（芒果）供应商同一个按钮同步的是城市/影院缓存（见 SyncSupplierProductsJob）。
      */
     public function syncProducts(int $id): void
     {
         $supplier = $this->findOrFail($id);
         if ($supplier->status !== 'active') {
             throw new HttpException(422, '供应商已停用，不同步商品');
+        }
+        if ($supplier->driver === 'yunyang') {
+            throw new HttpException(422, '快递供应商没有商品可同步，价格每次下单实时查询');
         }
 
         $this->queueDriverFactory->get('default')->push(new SyncSupplierProductsJob((int) $supplier->id));
@@ -330,6 +333,7 @@ class SupplierAdminService extends AbstractService
             // 供应商回调地址：卡速售下单时自动带上订单回调地址，商品变更通知地址要在卡速售后台配置
             'order_notify_url' => $this->notifyAddressService->orderNotifyUrl($supplier),
             'goods_notify_url' => $this->notifyAddressService->goodsNotifyUrl($supplier),
+            'cinema_notify_url' => $this->notifyAddressService->cinemaNotifyUrl($supplier),
             'notify_base_url_configured' => $this->notifyAddressService->isConfigured(),
             'contact' => $supplier->contact,
             'settlement_info' => $supplier->settlement_info,

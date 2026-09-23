@@ -38,8 +38,8 @@ const commonParams: Field[] = [
 const orderFields: Field[] = [
   { name: 'order_no', type: 'string', desc: '平台订单号' },
   { name: 'merchant_order_no', type: 'string', desc: '你的订单号' },
-  { name: 'business_line', type: 'string', desc: '业务线：recharge 话费，card 卡券，express 快递' },
-  { name: 'status', type: 'string', desc: '订单状态：processing 处理中，success 成功，failed 失败，cancelled 已取消（快递），refunded 已退款' },
+  { name: 'business_line', type: 'string', desc: '业务线：recharge 话费，card 卡券，movie 电影票，express 快递' },
+  { name: 'status', type: 'string', desc: '订单状态：processing 处理中，success 成功，failed 失败，cancelled 已取消（快递取消、电影票释放座位），refunded 已退款' },
   { name: 'sale_price', type: 'string', desc: '售价（元）' },
   { name: 'frozen_amount', type: 'string', desc: '下单时冻结的金额（元）' },
   { name: 'deducted_amount', type: 'string|null', desc: '实际扣款（元），订单成功后才有值' },
@@ -68,6 +68,46 @@ const placeNotes = [
   '同一个 merchant_order_no 重复提交不会重复下单，返回第一次的订单，网络超时可以放心用原单号重试。',
   '需要先在「服务开通」开通对应业务线，否则返回 42007。',
 ]
+
+const movieFields: Field[] = [
+  ...orderFields,
+  { name: 'movie.cinema_id / cinema_name', type: 'string', desc: '影院' },
+  { name: 'movie.film_id / film_name', type: 'string', desc: '影片' },
+  { name: 'movie.show_id / show_time', type: 'string', desc: '场次和开场时间' },
+  { name: 'movie.area_id', type: 'string|null', desc: '分区，不分区为 null' },
+  { name: 'movie.seats', type: 'array', desc: '座位：seat_code、row_label（排）、col_label（座）、love_status（0 普通，1 情侣座左，2 情侣座右）' },
+  { name: 'movie.seat_count', type: 'int', desc: '张数' },
+  { name: 'movie.unit_price', type: 'string', desc: '每张售价（元），sale_price = unit_price × 张数' },
+  { name: 'movie.lock_expire_at', type: 'string', desc: '锁座有效期，到期前必须确认出票，否则座位自动释放并解冻' },
+  { name: 'movie.confirmed_at', type: 'string|null', desc: '确认出票时间' },
+  { name: 'movie.ticket_codes', type: 'array', desc: '取票码 / 验证码，出票成功后才有' },
+]
+
+const movieExample = {
+  ...orderExample,
+  order_no: 'M20260923100000123456',
+  business_line: 'movie',
+  sale_price: '80.00',
+  frozen_amount: '80.00',
+  movie: {
+    cinema_id: '1001',
+    cinema_name: '万达影城',
+    film_id: 'F1',
+    film_name: '长安三万里',
+    show_id: 'S20260930193000',
+    show_time: '2026-09-30 19:30:00',
+    area_id: null,
+    seats: [
+      { seat_code: '1-3', row_label: '1', col_label: '3', love_status: 0 },
+      { seat_code: '1-4', row_label: '1', col_label: '4', love_status: 0 },
+    ],
+    seat_count: 2,
+    unit_price: '40.00',
+    lock_expire_at: '2026-09-23 10:10:00',
+    confirmed_at: null,
+    ticket_codes: [],
+  },
+}
 
 const expressFields: Field[] = [
   ...orderFields,
@@ -266,6 +306,94 @@ const endpoints: Endpoint[] = [
     ],
   },
   {
+    title: '电影票 - 城市 / 区县 / 影院',
+    method: 'GET',
+    path: '/movie/cities、/movie/regions、/movie/cinemas',
+    desc: '城市列表（无参数）；区县列表（传 city_id）；影院列表（传 city_id，可选 region_id，分页 page / per_page，每页最多 100）。数据每天同步，影院变动会增量更新。',
+    params: [
+      { name: 'city_id', type: 'string', desc: '区县、影院列表必传' },
+      { name: 'region_id', type: 'string', desc: '影院列表按区县筛选' },
+      { name: 'page / per_page', type: 'int', desc: '影院列表分页' },
+    ],
+    response: [
+      { name: 'cities[]', type: 'array', desc: 'city_id、city_name、first_letter、is_hot' },
+      { name: 'regions[]', type: 'array', desc: 'region_id、region_name' },
+      { name: 'data[] / total', type: 'array', desc: '影院：cinema_id、cinema_name、region_id、address、tel、longitude、latitude' },
+    ],
+    example: { cities: [{ city_id: '440300', city_name: '深圳', first_letter: 'S', is_hot: true }] },
+  },
+  {
+    title: '电影票 - 影片 / 场次 / 座位',
+    method: 'GET',
+    path: '/movie/films、/movie/shows、/movie/seats',
+    desc: '影片（传 city_id）、场次（传 cinema_id + film_id）、座位图（传 show_id）都是实时查询。场次价格已经是售价（每张）；分区场次按区给价。',
+    params: [
+      { name: 'city_id', type: 'string', desc: '影片列表必传' },
+      { name: 'cinema_id / film_id', type: 'string', desc: '场次列表必传，用影院、影片接口返回的 ID' },
+      { name: 'show_id', type: 'string', desc: '座位图必传；部分场次 ID 含特殊字符，传参时注意 URL 编码' },
+    ],
+    response: [
+      { name: 'films[]', type: 'array', desc: 'film_id、film_name、attributes（海报、时长等展示信息）' },
+      { name: 'shows[].price', type: 'string|null', desc: '不分区场次的每张售价；分区场次为 null，看 areas' },
+      { name: 'shows[].areas[]', type: 'array', desc: '分区：area_id、area_name、price（每张售价）；分区之间不能混选' },
+      { name: 'seats[]', type: 'array', desc: 'seat_code、row / col（座位图格子坐标，隔着过道会跳号）、row_label、col_label、area_id、love_status、available' },
+    ],
+    example: {
+      shows: [
+        { show_id: 'S20260930193000', cinema_id: '1001', film_id: 'F1', show_time: '2026-09-30 19:30:00', price: '40.00', areas: [], attributes: { hall_name: '1 号厅' } },
+      ],
+    },
+    notes: [
+      '查询失败（包括场次刚下架）返回 42011，请 30 秒左右后重试。',
+      '选座规则（锁座时平台会校验，不满足直接拒绝）：一单 1 ~ 4 个座位；不能跨分区；情侣座必须左右成对购买；同一排被过道隔开的一段超过 5 个座位时，所选座位左右都不能只剩 1 个空座。',
+    ],
+  },
+  {
+    title: '电影票 - 锁座',
+    method: 'POST',
+    path: '/movie/lock',
+    desc: '锁定座位并按最新场次价格冻结金额（每张售价 × 张数），不采用你传的任何价格。锁座有效期 10 分钟，期间调「确认出票」；放弃就调「释放座位」，到期未确认会自动释放并解冻。',
+    params: [
+      { name: 'merchant_order_no', type: 'string', required: true, desc: '你的订单号，在你的账户下唯一' },
+      { name: 'callback_url', type: 'string', required: true, desc: '结果回调地址，只支持 http/https 公网地址' },
+      { name: 'cinema_id', type: 'string', required: true, desc: '影院 ID' },
+      { name: 'film_id', type: 'string', required: true, desc: '影片 ID' },
+      { name: 'show_id', type: 'string', required: true, desc: '场次 ID' },
+      { name: 'seat_codes', type: 'string', required: true, desc: '座位编码，英文逗号分隔，如 1-3,1-4' },
+      { name: 'mobile', type: 'string', required: true, desc: '取票手机号（11 位手机号）' },
+    ],
+    response: movieFields,
+    example: movieExample,
+    notes: [
+      '选座不合法返回 41001（message 说明原因），场次已停售或所选分区不可售返回 42012，都不会冻结金额。',
+      '场次价格刚好变动时锁座会失败：status = failed、fail_code = 43004、全额解冻，请 2~3 分钟后重新查询场次再锁。',
+      '同一个 merchant_order_no 重复提交不会重复锁座；需要先在「服务开通」开通电影票业务线，否则返回 42007。',
+    ],
+  },
+  {
+    title: '电影票 - 确认出票',
+    method: 'POST',
+    path: '/movie/confirm',
+    desc: '终端用户付款后调用，只能在锁座有效期内确认一次（重复调用返回当前状态）。出票成功后扣款并回调你，取票码在 movie.ticket_codes。',
+    params: orderIdentParams,
+    response: movieFields,
+    example: { ...movieExample, status: 'success', deducted_amount: '80.00', completed_at: '2026-09-23 10:05:12', movie: { ...movieExample.movie, confirmed_at: '2026-09-23 10:05:00', ticket_codes: [{ code: '88886666' }] } },
+    notes: [
+      '多数情况下几秒内出票，接口返回时可能已经是 success；仍是 processing 时以回调或订单查询为准。',
+      '锁座已超时返回 42013，请重新锁座。出票失败会全额解冻，status = failed。',
+      '出票成功后不支持退票、改签。影院改票根时会再回调一次新的取票码，请以最新一次为准。',
+    ],
+  },
+  {
+    title: '电影票 - 释放座位',
+    method: 'POST',
+    path: '/movie/release',
+    desc: '放弃已锁的座位，订单变为 cancelled 并全额解冻。已确认出票的订单不能释放（42010）。',
+    params: orderIdentParams,
+    response: movieFields,
+    example: { ...movieExample, status: 'cancelled' },
+  },
+  {
     title: '快递下单',
     method: 'POST',
     path: '/express/order',
@@ -347,6 +475,7 @@ const endpoints: Endpoint[] = [
       { name: 'card_no', type: 'string', desc: '卡号（明文），只有卡密类卡券成功后才返回这个字段' },
       { name: 'card_pwd', type: 'string', desc: '卡密（明文），同上' },
       { name: 'express', type: 'object', desc: '快递订单的运单号、物流状态和费用明细，字段见「快递下单」' },
+      { name: 'movie', type: 'object', desc: '电影票订单的场次、座位、每张售价、锁座有效期、取票码，字段见「电影票 - 锁座」' },
     ],
     example: {
       ...orderExample,
@@ -374,6 +503,7 @@ const callbackFields: Field[] = [
   { name: 'logistics_status', type: 'string', desc: '快递：物流状态' },
   { name: 'deducted_amount', type: 'string', desc: '快递：目前实际扣款合计（元），扣费后才有' },
   { name: 'freight / insured_fee / material_fee / reverse_fee', type: 'string', desc: '快递：实际运费、保价费、耗材费、逆向费（元），扣费后才有' },
+  { name: 'ticket_codes', type: 'string', desc: '电影票：取票码列表（JSON 字符串），出票成功后才有' },
   { name: 'app_key', type: 'string', required: true, desc: '你的 AppKey' },
   { name: 'timestamp', type: 'int', required: true, desc: '发送时间戳（秒）' },
   { name: 'nonce', type: 'string', required: true, desc: '随机字符串' },
@@ -515,7 +645,7 @@ onMounted(loadErrorCodes)
           <li>订单成功、失败、已取消、已退款（售后确认未到账），以及快递扣费后的费用调整时，平台向下单时传入的 <code>callback_url</code> 发 POST 请求，表单格式（<code>application/x-www-form-urlencoded</code>）。</li>
           <li>收到后请先验签（规则同请求签名，用你的 AppSecret），再按 <code>merchant_order_no</code> 更新订单；建议同时校验 <code>timestamp</code> 在 5 分钟以内。</li>
           <li>处理完成后响应内容为 <code>success</code>（纯文本）。其它响应或超时（5 秒）视为失败，按 1 分钟、5 分钟、15 分钟、1 小时、2 小时、6 小时重试 6 次，之后可在「订单列表」手动重推。</li>
-          <li>同一订单可能收到多次通知（重试、手动重推、成功后又退款、快递费用调整），请按订单状态做幂等处理；快递以最新一次的 <code>deducted_amount</code> 为准。</li>
+          <li>同一订单可能收到多次通知（重试、手动重推、成功后又退款、快递费用调整），请按订单状态做幂等处理；快递以最新一次的 <code>deducted_amount</code> 为准，电影票以最新一次的 <code>ticket_codes</code> 为准。</li>
           <li>回调里不带卡密；卡密类卡券成功后请调订单查询接口获取。</li>
         </ul>
 

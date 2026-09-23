@@ -61,11 +61,16 @@ enum ErrorCode: int
     case ExpressChannelUnavailable = 42008;
     case ExpressChannelNotFound = 42009;
     case OrderNotCancellable = 42010;
+    case MovieUnavailable = 42011;
+    case MovieShowNotFound = 42012;
+    case MovieLockExpired = 42013;
 
     // 430xx 订单失败原因
     case InsufficientBalance = 43001;
     case NoSupplierAvailable = 43002;
     case OrderFailed = 43003;
+    case MoviePriceChanged = 43004;
+    case MovieLockTimeout = 43005;
 
     // 490xx 通用
     case RouteNotFound = 49001;
@@ -82,6 +87,8 @@ enum ErrorCode: int
         self::InsufficientBalance,
         self::NoSupplierAvailable,
         self::OrderFailed,
+        self::MoviePriceChanged,
+        self::MovieLockTimeout,
     ];
 
     public function message(): string
@@ -108,9 +115,14 @@ enum ErrorCode: int
             self::ExpressChannelUnavailable => '快递渠道暂时不可用，请稍后重试',
             self::ExpressChannelNotFound => '所选快递公司当前不可用，请重新查价后下单',
             self::OrderNotCancellable => '订单当前状态不能取消',
+            self::MovieUnavailable => '电影票服务暂时不可用，请稍后重试',
+            self::MovieShowNotFound => '场次不存在或已停售，请重新查询场次',
+            self::MovieLockExpired => '锁座已超时，请重新选座锁座',
             self::InsufficientBalance => '可用余额不足',
             self::NoSupplierAvailable => '商品暂时无法供货',
             self::OrderFailed => '订单处理失败',
+            self::MoviePriceChanged => '场次价格已变动，请 2~3 分钟后重新查询场次再锁座',
+            self::MovieLockTimeout => '锁座超时未确认出票，座位已释放',
             self::RouteNotFound => '接口不存在',
             self::MethodNotAllowed => '请求方法不正确',
             self::BadRequest => '请求无法处理',

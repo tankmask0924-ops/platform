@@ -15,6 +15,7 @@ namespace App\Controller;
 use App\Exception\CallbackOrderNotFoundException;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
+use App\Service\Order\MovieCallbackService;
 use App\Service\Order\SupplierCallbackService;
 use App\Service\Supplier\ProductSyncService;
 use App\Service\Supplier\SupplierNotifyAddressService;
@@ -77,6 +78,9 @@ class NotifySupplierController extends AbstractController
     #[Inject]
     protected SupplierNotifyAddressService $notifyAddressService;
 
+    #[Inject]
+    protected MovieCallbackService $movieCallbackService;
+
     /**
      * 地址里的令牌不对跟供应商不存在一样返回 404（见 SupplierNotifyAddressService::resolve()）。
      */
@@ -116,6 +120,25 @@ class NotifySupplierController extends AbstractController
      * 404、验签失败 403，其余（含商品没配映射）200 回 `ok`；查询商品详情失败走全局
      * 异常处理返回 500，供应商视为失败，漏掉的由每日全量校准补上。
      */
+    /**
+     * 芒果影院更新回调（mango.md：只发一次、不补发、接入方无需响应）：`POST /notify/{code}/{token}/cinema`。
+     * 同步失败只记日志，照样回 200，漏掉的由每日全量同步兜底。
+     */
+    #[PostMapping(path: '{code}/{token}/cinema')]
+    public function cinemaChanged(string $code, string $token): PsrResponseInterface
+    {
+        try {
+            $supplier = $this->notifyAddressService->resolve($code, $token);
+        } catch (SupplierNotFoundException $e) {
+            return $this->response->raw($e->getMessage())->withStatus(404);
+        }
+        if ($supplier->driver === 'mango') {
+            $this->movieCallbackService->handleCinemaUpdate($supplier, $this->request->all());
+        }
+
+        return $this->response->raw(self::PRODUCT_NOTIFICATION_REPLY)->withStatus(200);
+    }
+
     #[PostMapping(path: '{code}/{token}/goods')]
     public function productChanged(string $code, string $token): PsrResponseInterface
     {

@@ -76,7 +76,8 @@ use Hyperf\Logger\LoggerFactory;
  * 声明的驱动特定行为（类似 `parseCallback()` 现在这样每个驱动自己实现），本次
  * 任务不为一个尚不存在的第二个驱动预先设计这层抽象。
  *
- * 【快递（云洋）另走一条】按 `suppliers.driver` 分派给 App\Service\Order\ExpressCallbackService：
+ * 【快递（云洋）、电影票（芒果）另走一条】按 `suppliers.driver` 分派给 App\Service\Order\ExpressCallbackService
+ * / MovieCallbackService：
  * 云洋回调没有签名、没有尝试序号、要求回复 JSON，订单成功之后还会因为费用调整和签收继续回调，
  * 上面这套"验签 → 按 external_orderno 找订单 → 终态直接回 ok"对它都不成立。
  * 【范围外，见任务说明】商品变更通知 webhook（`App\Service\Supplier\
@@ -115,6 +116,9 @@ class SupplierCallbackService extends AbstractService
     #[Inject]
     protected ExpressCallbackService $expressCallbackService;
 
+    #[Inject]
+    protected MovieCallbackService $movieCallbackService;
+
     /**
      * @param array<string, mixed> $payload
      * @param array<string, string> $headers
@@ -129,6 +133,10 @@ class SupplierCallbackService extends AbstractService
         if ($supplier->driver === 'yunyang') {
             // 快递：没有签名、没有尝试序号、终态之后还有费用调整，跟话费卡券不是一套流程
             return $this->expressCallbackService->handle($supplier, $payload);
+        }
+        if ($supplier->driver === 'mango') {
+            // 电影票：同样没有签名，出票后改票根还会再回调
+            return $this->movieCallbackService->handle($supplier, $payload);
         }
 
         $driver = $this->supplierDriverFactory->build($supplier);

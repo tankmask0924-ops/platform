@@ -89,6 +89,25 @@ class RebateCalculator extends AbstractService
     }
 
     /**
+     * 电影票、快递（requirements.md 5.3）：返佣基数是供应商返佣，比例只有等级在该业务线的设置
+     * 这一层（没有本地商品，也就没有"商品单独设置"），向下取整到分。没等级、没设置比例、
+     * 供应商返佣为空或 ≤ 0 时金额为 '0.00'，调用方据此不生成返佣记录。
+     */
+    public function calculateForSupplierRebate(string $businessLine, ?string $supplierRebate, ?int $merchantLevelId): RebateCalculationResult
+    {
+        if ($merchantLevelId === null || $supplierRebate === null || bccomp($supplierRebate, '0', self::SCALE) <= 0) {
+            return new RebateCalculationResult('0', null, '0.00');
+        }
+
+        $levelRate = $this->merchantLevelBusinessRateDao->findForLevelAndBusinessLine($merchantLevelId, $businessLine);
+        if ($levelRate === null) {
+            return new RebateCalculationResult('0', null, '0.00');
+        }
+
+        return new RebateCalculationResult($levelRate->rebate_rate, 'level', bcmul($supplierRebate, $levelRate->rebate_rate, self::SCALE));
+    }
+
+    /**
      * @return null|array{0: string, 1: 'level'|'product_level'} [比例, 比例来源]，
      *                                                           都没命中时返回 null
      */

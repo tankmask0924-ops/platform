@@ -41,7 +41,7 @@ use RuntimeException;
  * 快递订单的资金推进（requirements.md 7.2「快递下单与补差价」，yunyang.md 第 2 节）。
  * 同步下单结果、云洋回调（App\Service\Order\ExpressCallbackService）、定时查询
  * （App\Service\Order\SupplierResultPollingService）三条路径拿到的供应商权威结果，
- * 都交给 apply()，不各写一套——话费那边 OrderResultApplier 的定位，但快递的规则完全不同：.
+ * 都交给 apply()，不各写一套——话费那边 OrderResultApplier 的定位，但快递的规则完全不同。
  *
  * 1. **冻结调整**：下单后第一次拿到云洋的冻结运费（`feeOver=0` 的 `freight`），按它重算
  *    预估售价，多退少补冻结金额（BalanceService::adjustFreeze()，可用余额不够就能冻多少冻多少，

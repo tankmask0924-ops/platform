@@ -183,10 +183,10 @@ class OrderAttemptDao extends AbstractDao
             ->select('order_attempts.*')
             ->join('orders', 'orders.id', '=', 'order_attempts.order_id')
             ->where('orders.status', 'processing')
-            // 快递按云洋单号查询，下单结果未知、还没拿到单号的订单查不了（只能等回调或转人工），
-            // 不排除的话它们永远是"最久没查"的那批，会一直占着每轮的名额
+            // 快递、电影票按供应商单号查询，下单/锁座结果未知、还没拿到单号的订单查不了（只能等回调、
+            // 超时释放或转人工），不排除的话它们永远是"最久没查"的那批，会一直占着每轮的名额
             ->where(static function ($query) {
-                $query->where('orders.business_line', '<>', 'express')
+                $query->whereNotIn('orders.business_line', ['express', 'movie'])
                     ->orWhereNotNull('orders.supplier_order_no');
             })
             ->whereIn('order_attempts.result', ['processing', 'unknown'])

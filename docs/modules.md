@@ -126,18 +126,21 @@
 
 | 能力 | Driver 方法 | Service 接入 | 单测 | 状态 |
 |---|---|---|---|---|
-| 城市 / 行政区查询（含批量拉取） | ✅ `queryCities()` / `queryRegions()` | ⬜ | ✅ | 🔨 |
-| 影院查询（含批量拉取 + 更新回调增量同步） | ✅ `queryCinemas()` / `batchCinemas()` / `parseCinemaUpdate()` | ⬜ | ✅ | 🔨 |
-| 影片 / 场次查询（视批量权限，可能只做实时转发） | ✅ `queryFilms()` / `queryShows()` / `batchShows()` | ⬜ | ✅ | 🔨 |
-| 座位查询（不缓存，始终实时） | ✅ `querySeats()` | ⬜ | ✅ | 🔨 |
-| 锁座下单（含分区/情侣座/隔空选座/单笔限座校验） | ✅ `lockSeats()` + `App\Movie\SeatSelectionValidator` | ⬜ | ✅ | 🔨 |
-| 确认下单 | ✅ `confirmOrder()` | ⬜ | ✅ | 🔨 |
-| 释放座位 | ✅ `releaseSeats()` | ⬜ | ✅ | 🔨 |
-| 查询订单详情 | ✅ `queryOrder()` | ⬜ | ✅ | 🔨 |
-| 解析回调（无签名，触发查询确认；出票后改票根幂等处理） | ✅ `parseCallback()` | ⬜ | ✅ | 🔨 |
+| 城市 / 行政区查询（含批量拉取） | ✅ `queryCities()` / `queryRegions()` | ✅ `MovieBaseDataSyncService`（缓存）+ `MovieQueryService` | ✅ | ✅ |
+| 影院查询（含批量拉取 + 更新回调增量同步） | ✅ `queryCinemas()` / `batchCinemas()` / `parseCinemaUpdate()` | ✅ 同上；增量走 `MovieCallbackService::handleCinemaUpdate()`（批量拉取要商务权限，现在按城市逐页拉） | ✅ | ✅ |
+| 影片 / 场次查询（视批量权限，可能只做实时转发） | ✅ `queryFilms()` / `queryShows()` / `batchShows()` | ✅ `MovieQueryService`（实时转发，场次价格换成售价） | ✅ | ✅ |
+| 座位查询（不缓存，始终实时） | ✅ `querySeats()` | ✅ `MovieQueryService` | ✅ | ✅ |
+| 锁座下单（含分区/情侣座/隔空选座/单笔限座校验） | ✅ `lockSeats()` + `App\Movie\SeatSelectionValidator` | ✅ `MovieOrderPlacementService` | ✅ | ✅ |
+| 确认下单 | ✅ `confirmOrder()` | ✅ `App\Service\OpenApi\MovieOrderService::confirm()` | ✅ | ✅ |
+| 释放座位 | ✅ `releaseSeats()` | ✅ `MovieOrderService::release()` / `expireLocks()` | ✅ | ✅ |
+| 查询订单详情 | ✅ `queryOrder()` | ✅ `MovieOrderSettlementService::refreshFromSupplier()`（定时查询、后台手动查询、确认后立刻查） | ✅ | ✅ |
+| 解析回调（无签名，触发查询确认；出票后改票根幂等处理） | ✅ `parseCallback()` | ✅ `MovieCallbackService` | ✅ | ✅ |
 | 查询余额 | ✅ `queryBalance()` | ✅ `SupplierBalanceService` | ✅ | ✅ |
 | 错误码映射表 | ✅ `MangoStatusMapper` | ➖ | ✅ | ✅ |
 
+> **Service 接入（2026-09-23，电影票流程）**：业务规则见第 6 节脚注 ⑧。驱动本身这次只加了城市/区县/影院/影片的归一化
+> （跟场次一样，推断的字段名集中在 `normalize*` 方法里），下面驱动层说明里"Service 接入留空"已不再成立。
+>
 > 本次新增（2026-09-23，驱动层）：`App\Supplier\Mango\MangoSigner`（key 字典序 + key/value 直接拼接 + token 取 md5，
 > 数组按 JSON 拼、公共参数参与签名这两点是推断）、`MangoStatusMapper`、`MangoDriver`、`MangoRateLimitedException`，
 > `SupplierDriverFactory::buildMango()`（配置 `{"base_url","agent_id","app_id","token","tel"}`，`tel` 只用来查余额），
@@ -257,10 +260,10 @@
 | 话费下单 | ✅ | ✅ | ✅ | ✅ |<sup>④</sup>
 | 卡券商品列表（二期） | ✅ | ✅ | ✅ | ✅ |<sup>③</sup>
 | 卡券下单（二期） | ✅ | ✅ | ✅ | ✅ |<sup>⑤</sup>
-| 电影票城市 / 影院 / 影片 / 场次 / 座位查询（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 电影票锁座（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 电影票确认出票（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 电影票释放座位（三期） | ⬜ | ⬜ | ⬜ | ⬜ |
+| 电影票城市 / 影院 / 影片 / 场次 / 座位查询（三期） | ✅ `App\Controller\OpenApi\MovieController` | ✅ `App\Service\OpenApi\MovieQueryService` | ✅ | ✅<sup>⑧</sup> |
+| 电影票锁座（三期） | ✅ 同上 | ✅ `App\Service\Order\MovieOrderPlacementService` | ✅ | ✅<sup>⑧</sup> |
+| 电影票确认出票（三期） | ✅ 同上 | ✅ `App\Service\OpenApi\MovieOrderService` + `MovieOrderSettlementService` | ✅ | ✅<sup>⑧</sup> |
+| 电影票释放座位（三期） | ✅ 同上 | ✅ `App\Service\OpenApi\MovieOrderService` | ✅ | ✅<sup>⑧</sup> |
 | 快递查价（三期） | ✅ `App\Controller\OpenApi\ExpressController` | ✅ `App\Service\OpenApi\ExpressQuoteService` | ✅ | ✅<sup>⑥</sup> |
 | 快递下单（三期） | ✅ `App\Controller\OpenApi\ExpressController` | ✅ `App\Service\Order\ExpressOrderPlacementService` + `ExpressOrderSettlementService` | ✅ | ✅<sup>⑦</sup> |
 | 快递取消（三期） | ✅ 同上 | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅<sup>⑦</sup> |
@@ -473,6 +476,42 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
   结算后费用调整 + 重复推送不重复处理、逆向费扣成负余额、取消解冻、查无此单不解冻、签收完成时间、兜底完成、
   回调按权威单号认领、伪造回调认领不了、定时查询按云洋单号查且排除没有单号的）、
   `SupplierBalanceServiceTest::testYunyangSupplierIsQueriedWithItsOwnDriver`。
+
+⑧ `电影票`（requirements.md 7.3、5.3、5.4，2026-09-23）：查询 `GET /open-api/movie/cities|regions|cinemas|films|shows|seats`，
+下单 `POST /open-api/movie/lock|confirm|release`。
+- **新表**：`order_movies`（比设计多了 `unit_price`/`unit_cost` 每张售价/成本快照、`mobile` 取票手机号、`confirmed_at` 确认出票时间），
+  `movie_cities`/`movie_regions`/`movie_cinemas`。可选的 `movie_showtime_caches` 没建（批量拉场次要商务权限，场次全部实时转发）。
+- **城市/区县/影院读缓存**：`App\Service\Movie\MovieBaseDataSyncService` 全量同步（每天 04:30 `MovieBaseDataSyncCrontab`，
+  后台供应商详情页原「同步商品」按钮对芒果供应商变成「同步城市影院」），按唯一键 upsert、只在拉成功的城市里删过期记录。
+  影院更新回调 `POST /notify/{code}/{token}/cinema` 重拉该影院所在城市（后台详情页显示这个地址，要去芒果后台配置）。
+  批量拉取影院接口要商务权限，现在用逐城市的影院列表接口。
+- **影片、场次、座位实时转发**，查询失败统一 `42011 MovieUnavailable`（让商户 30 秒后重试）。场次价格换成每张售价
+  （电影票加价规则，分区场次按区给价），成本不出现在响应里；缺成本的场次/分区不返回。没配加价规则报系统错误，不按成本卖。
+- **锁座**：重新查场次核价（不采用商户传的价格），重新拉座位图做前置校验（不合法 41001，不建单不冻结不调芒果），
+  冻结 = 每张售价 × 张数；场次找不到或所选分区缺成本 `42012 MovieShowNotFound`。座位参数 `seat_codes` 是逗号分隔字符串
+  （签名只能拼标量）。锁座只调一次不重试；"订单溢价"失败、全额解冻、失败码 `43004 MoviePriceChanged`。
+- **确认出票**：锁内写 `confirmed_at` 后调芒果确认（只调一次，重复确认返回当前状态），随即查一次订单详情推进；锁座已过期
+  `42013 MovieLockExpired`。**释放座位**：锁内确认未确认出票 → 订单 `cancelled`、全额解冻 → 再通知芒果释放（失败只记日志）。
+  **超时释放**：`MovieLockExpiryCrontab` 每分钟把到期 30 秒还没确认的订单置失败（`43005 MovieLockTimeout`）、解冻、通知芒果释放；
+  锁座结果未知、没有芒果单号的也一样（商户确认不了，芒果那边锁座自己会失效）。释放和确认的竞态靠明细行锁里检查 `confirmed_at`。
+- **结算**（`MovieOrderSettlementService`，锁座结果、回调、定时查询、确认后的查询都走它）：出票成功冻结金额全额扣款，
+  完成时间 = 出票时间，写取票码；**返佣基数 = 供应商返佣 `total_rebate`**，比例取等级在电影票业务线的设置
+  （`RebateCalculator::calculateForSupplierRebate()`，基数来源 `supplier`、比例来源 `level`）。返佣晚到的之后再生成，
+  改票根再回调一次商户，都不重复扣款/返佣。芒果说出票失败/支付超时：失败、解冻。
+- **回调**（`SupplierCallbackService` 按驱动分派到 `MovieCallbackService`）：只信带签名查询结果；没有芒果单号的订单按查询结果里
+  带回的 `attach` 认领（有伪造回调用例）；查询失败不回成功。成功回复 `{"code":1}`。
+- **定时查询 / 后台**：定时查询按芒果单号查，没有单号的不进待查列表；后台「人工处理」对电影票只能置失败（成功必须带取票码），
+  「查询供应商」可以用。
+- **对商户的展示**：锁座/确认/释放/订单查询多一个 `movie` 明细（`MovieOrderPresenter`：场次、座位、每张售价、锁座有效期、
+  确认时间、取票码，不给成本和供应商返佣）；商户回调多带 `ticket_codes`（JSON 字符串）。电影票业务线对商户开放申请，
+  四条业务线全部开放。商户后台「接口文档」已加上电影票接口和选座规则。
+- **没做的**：两个后台的订单详情页还没有电影票明细（同快递）；场次批量预拉取缓存（等商务权限）；`limit_price` 用途待芒果确认。
+- 测试：`test/Cases/OpenApi/MovieControllerTest.php`（12 个：城市影院读缓存、场次加价不露成本、查询失败 42011、锁座冻结 = 售价 × 张数 +
+  座位带分区 + attach、分区按区价、选座不合法/场次不存在不建单、订单溢价 43004、确认只调一次并立即出票、锁座过期不能确认、
+  释放取消解冻且不能再释放、订单查询带明细 + 跨商户隔离、未开通）、
+  `test/Cases/Service/Order/MovieOrderSettlementServiceTest.php`（10 个：出票扣款 + 供应商返佣 × 等级比例、改票根和返佣晚到幂等、
+  芒果超时失败原因、超时释放只动到期未确认的、回调按权威 attach 认领 / 伪造认领不了 / 查询失败不回成功、定时查询按芒果单号、
+  全量同步 upsert + 失败城市不删、影院更新回调）、`MangoDriverTest::testBaseDataIsNormalized`。
 
 ---
 
@@ -899,8 +938,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商余额监控 | Crontab | ✅ `App\Crontab\SupplierBalanceCrontab` → `App\Service\Supplier\SupplierBalanceService`，见下方说明 |
 | 供应商商品同步（每日全量校准） | Crontab | ✅ `App\Crontab\SupplierProductSyncCrontab` → `App\Service\Supplier\ProductSyncService`，见下方说明 |
 | 熔断自动恢复（二期） | Crontab | ✅ `App\Crontab\CircuitBreakerRecoveryCrontab`，每分钟把到期的熔断行写回 `normal`；**不是恢复机制本身**，路由按 `paused_until` 实时判断，见第 5 节「熔断」说明 |
-| 城市 / 影院数据批量同步（三期） | Crontab | ⬜ |
-| 场次数据批量同步（三期，视权限） | Crontab | ⬜ |
+| 城市 / 影院数据批量同步（三期） | Crontab | ✅ `App\Crontab\MovieBaseDataSyncCrontab` → `MovieBaseDataSyncService::syncAll()`，每天 04:30，见第 6 节脚注 ⑧ |
+| 场次数据批量同步（三期，视权限） | Crontab | ⬜ 没有批量拉取权限，场次实时转发；权限批下来再建 `movie_showtime_caches` |
+| 电影票锁座超时释放（三期） | Crontab | ✅ `App\Crontab\MovieLockExpiryCrontab` → `MovieOrderService::expireLocks()`，每分钟，见第 6 节脚注 ⑧ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
 | 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
@@ -968,13 +1008,13 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
 | 卡速售 2.0 驱动 | 8 | 6 | 0 | 2 |
 | 云洋驱动 | 9 | 8 | 0 | 1 |
-| 芒果驱动 | 11 | 2 | 9 | 0 |
+| 芒果驱动 | 11 | 11 | 0 | 0 |
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
-| 开放 API 接口 | 15 | 11 | 0 | 4 |
+| 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 15 | 4 | 0 |
-| 异步任务与定时任务 | 12 | 9 | 0 | 3 |
-| **合计** | **108** | **84** | **13** | **11** |
+| 异步任务与定时任务 | 13 | 11 | 0 | 2 |
+| **合计** | **109** | **99** | **4** | **6** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1005,4 +1045,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - 一期只剩：后台订单的部分退款与发起供应商撤单（依赖尚未建的退款流程和驱动撤单接口，见第 8 节「订单管理」行）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账，返佣对账三期）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
-5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ 电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）→ 沙箱环境
+5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ 两个后台订单详情补快递/电影票明细 → 沙箱环境

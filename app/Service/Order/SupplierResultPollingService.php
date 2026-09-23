@@ -80,6 +80,9 @@ class SupplierResultPollingService extends AbstractService
     #[Inject]
     protected ExpressOrderSettlementService $expressSettlementService;
 
+    #[Inject]
+    protected MovieOrderSettlementService $movieSettlementService;
+
     /**
      * @return int 这次实际发起查询的尝试数
      */
@@ -109,6 +112,9 @@ class SupplierResultPollingService extends AbstractService
         if ($order->business_line === ExpressOrderSettlementService::BUSINESS_LINE) {
             // 快递按云洋单号查、结果交给快递自己的结算（requirements.md 7.2），不走路由切换
             return $this->expressSettlementService->refreshFromSupplier($order);
+        }
+        if ($order->business_line === MovieOrderSettlementService::BUSINESS_LINE) {
+            return $this->movieSettlementService->refreshFromSupplier($order);
         }
 
         $attempt = $this->orderAttemptDao->findLatestForOrder((int) $order->id);

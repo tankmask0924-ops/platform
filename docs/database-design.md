@@ -607,7 +607,11 @@ erDiagram
 | area_id | varchar(32) | 否 | 分区 ID，不分区为空 |
 | seats | json | 是 | 座位列表（座位号、行列坐标、情侣座标记） |
 | seat_count | tinyint unsigned | 是 | 座位数，≤ 4 |
+| unit_price | decimal(10,2) | 是 | 每张售价快照（2026-09-23 补：订单上的 `sale_price` 是乘以张数的合计） |
+| unit_cost | decimal(10,2) | 是 | 每张成本快照（锁座时查到的场次成本，2026-09-23 补） |
+| mobile | varchar(20) | 是 | 取票手机号（2026-09-23 补） |
 | lock_expire_at | datetime | 是 | 锁座有效期截止时间 |
+| confirmed_at | datetime | 否 | 商户确认出票时间；为空且锁座到期时超时释放（2026-09-23 补） |
 | ticket_codes | json | 否 | 取票码/验证码，出票成功后写入 |
 | supplier_rebate | decimal(10,2) | 否 | 供应商返佣（以查询订单详情接口为准） |
 

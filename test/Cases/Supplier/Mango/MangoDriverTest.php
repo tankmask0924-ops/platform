@@ -57,6 +57,25 @@ class MangoDriverTest extends TestCase
     }
 
     /**
+     * 城市、影院、影片归一化成平台自己的字段名，影片里的价格类字段也剥掉。
+     */
+    public function testBaseDataIsNormalized()
+    {
+        $cities = $this->driverReturning(['code' => 200, 'data' => [['cityId' => 440300, 'cityName' => '深圳', 'pinyin' => 'shenzhen', 'isHot' => 1], ['cityName' => '没有 ID']]])->queryCities();
+        $this->assertSame([['city_id' => '440300', 'city_name' => '深圳', 'first_letter' => 'S', 'is_hot' => true]], $cities);
+
+        $cinema = $this->driverReturning(['code' => 200, 'data' => ['list' => [[
+            'cinemaId' => 1001, 'cinemaName' => '万达影城', 'cinemaCode' => '44001', 'regionId' => 'NS', 'address' => '某路 1 号', 'lng' => '113.93', 'lat' => '22.53',
+        ]]]])->queryCinemas('440300')[0];
+        $this->assertSame('1001', $cinema['cinema_id']);
+        $this->assertSame('44001', $cinema['cinema_code']);
+        $this->assertSame(['113.93', '22.53'], [$cinema['longitude'], $cinema['latitude']]);
+
+        $film = $this->driverReturning(['code' => 200, 'data' => [['film_id' => 'F1', 'film_name' => '长安三万里', 'poster' => 'p.jpg', 'price' => '60']]])->queryFilms('440300')[0];
+        $this->assertSame(['film_id' => 'F1', 'film_name' => '长安三万里', 'attributes' => ['poster' => 'p.jpg']], $film);
+    }
+
+    /**
      * 场次价格只留一个 cost（不分区 settle_price，分区 user_price），其余价格字段和场次记录自带的
      * 影院/影片 ID 都不能出现在归一化结果里；场次挂在查询时传入的 ID 下。
      */

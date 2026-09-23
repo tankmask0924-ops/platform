@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Job;
 
 use App\Dao\SupplierDao;
+use App\Service\Movie\MovieBaseDataSyncService;
 use App\Service\Supplier\ProductSyncService;
 use Hyperf\AsyncQueue\Job;
 use Hyperf\Context\ApplicationContext;
@@ -38,7 +39,10 @@ class SyncSupplierProductsJob extends Job
         }
 
         try {
-            $container->get(ProductSyncService::class)->syncSupplier($supplier);
+            // 电影票没有商品，这个按钮对芒果供应商就是"同步城市/影院缓存"（requirements.md 7.3 后台手动同步兜底）
+            $supplier->driver === 'mango'
+                ? $container->get(MovieBaseDataSyncService::class)->syncSupplier($supplier)
+                : $container->get(ProductSyncService::class)->syncSupplier($supplier);
         } catch (Throwable $e) {
             $container->get(LoggerFactory::class)->get('supplier-product-sync')->error('manual supplier product sync failed', [
                 'supplier_id' => $this->supplierId,

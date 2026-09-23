@@ -46,7 +46,7 @@ class SubscriptionControllerTest extends HttpTestCase
         $body = $this->list($this->login($this->createMerchant('active')));
 
         $this->assertSame(['recharge', 'card', 'movie', 'express'], array_column($body, 'business_line'));
-        $this->assertSame([true, true, false, true], array_column($body, 'available'), '快递 2026-09-23 随下单接口开放，电影票未开放');
+        $this->assertSame([true, true, true, true], array_column($body, 'available'), '快递、电影票 2026-09-23 随下单接口开放');
         $this->assertSame([null, null, null, null], array_column($body, 'status'));
     }
 
@@ -82,7 +82,7 @@ class SubscriptionControllerTest extends HttpTestCase
     public function testCannotApplyForUnopenedLineOrBeforeQualificationApproved()
     {
         $token = $this->login($this->createMerchant('active'));
-        $this->assertSame(422, $this->apply($token, 'movie')->getStatusCode());
+        // 四条业务线 2026-09-23 已全部开放，这里只剩"不存在的业务线"
         $this->assertSame(422, $this->apply($token, 'nope')->getStatusCode());
 
         $pendingToken = $this->login($this->createMerchant('pending'));

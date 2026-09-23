@@ -219,6 +219,10 @@ class OrderAdminService extends AbstractService
             // 云洋的费用明细，人工置成功会按预估价扣款。只能人工置失败（云洋确认没有这一单时全额解冻）
             throw new HttpException(409, '快递订单不能人工置成功，扣费结果请用「查询供应商」同步');
         }
+        if ($result === 'success' && $order->business_line === 'movie') {
+            // 电影票成功必须带着取票码和供应商返佣，只有芒果的订单详情里有，人工置成功商户拿不到票
+            throw new HttpException(409, '电影票订单不能人工置成功，出票结果请用「查询供应商」同步');
+        }
 
         $driverResult = $result === 'success'
             ? $this->manualSuccessResult($order, $supplierOrderNo)
@@ -258,7 +262,9 @@ class OrderAdminService extends AbstractService
         if ($result === null) {
             throw new HttpException(409, $order->business_line === 'express'
                 ? '快递订单还没有云洋单号（下单结果未知），无法查询，请到云洋后台按平台订单号核实'
-                : '订单没有供应商尝试记录，无法查询');
+                : ($order->business_line === 'movie'
+                    ? '电影票订单还没有芒果单号（锁座结果未知），无法查询；锁座到期会自动释放解冻'
+                    : '订单没有供应商尝试记录，无法查询'));
         }
 
         $order->refresh();

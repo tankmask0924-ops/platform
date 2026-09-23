@@ -235,6 +235,7 @@ export interface SupplierDetail extends Supplier {
   order_notify_url: string
   /** 商品变更通知地址，需要在供应商后台配置 */
   goods_notify_url: string
+  cinema_notify_url: string
   /** 没配 SUPPLIER_NOTIFY_BASE_URL 时为 false，回调地址是本机地址，供应商访问不到 */
   notify_base_url_configured: boolean
   /** 接口配置用当前密钥解不开（换过密钥、或历史脏数据），只能整体重新填写 */

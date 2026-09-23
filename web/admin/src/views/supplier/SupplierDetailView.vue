@@ -47,7 +47,11 @@ async function syncProducts() {
   syncing.value = true
   try {
     await supplierApi.syncProducts(id)
-    ElMessage.success('已开始同步，完成后商品映射的同步时间会更新，过程可在下方调用日志查看')
+    ElMessage.success(
+      supplier.value?.driver === 'mango'
+        ? '已开始同步城市、区县和影院，过程可在下方调用日志查看'
+        : '已开始同步，完成后商品映射的同步时间会更新，过程可在下方调用日志查看',
+    )
   } finally {
     syncing.value = false
   }
@@ -205,7 +209,13 @@ onMounted(() => {
             <span>{{ supplier.name }}</span>
             <div v-if="canManage">
               <el-button :loading="refreshing" @click="refreshBalance">刷新余额</el-button>
-              <el-button :loading="syncing" :disabled="supplier.status !== 'active'" @click="syncProducts">同步商品</el-button>
+              <el-button
+                v-if="supplier.driver !== 'yunyang'"
+                :loading="syncing"
+                :disabled="supplier.status !== 'active'"
+                @click="syncProducts"
+                >{{ supplier.driver === 'mango' ? '同步城市影院' : '同步商品' }}</el-button
+              >
             </div>
           </div>
         </template>
@@ -240,9 +250,20 @@ onMounted(() => {
           <el-descriptions-item label="订单结果回调">
             <code>{{ supplier.order_notify_url }}</code>
             <el-button link type="primary" class="gap-left" @click="copyText(supplier.order_notify_url)">复制</el-button>
-            <div class="muted">下单时自动传给供应商，不用手动配置</div>
+            <div class="muted">
+              {{
+                supplier.driver === 'kasushou'
+                  ? '下单时自动传给供应商，不用手动配置'
+                  : '需要在供应商后台配置成这个地址（账户级回调）；地址里带令牌，不要外传'
+              }}
+            </div>
           </el-descriptions-item>
-          <el-descriptions-item label="商品变更通知">
+          <el-descriptions-item v-if="supplier.driver === 'mango'" label="影院更新通知">
+            <code>{{ supplier.cinema_notify_url }}</code>
+            <el-button link type="primary" class="gap-left" @click="copyText(supplier.cinema_notify_url)">复制</el-button>
+            <div class="muted">需要在芒果后台配置；只推一次不补发，漏掉的靠每天 04:30 的全量同步</div>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="supplier.driver === 'kasushou'" label="商品变更通知">
             <code>{{ supplier.goods_notify_url }}</code>
             <el-button link type="primary" class="gap-left" @click="copyText(supplier.goods_notify_url)">复制</el-button>
             <div class="muted">需要在供应商后台配置成这个地址；地址里带令牌，不要外传</div>

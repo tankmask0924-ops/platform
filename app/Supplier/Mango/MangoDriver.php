@@ -154,51 +154,51 @@ class MangoDriver
     /**
      * 全国所有城市。
      *
-     * @return list<array<string, mixed>>
+     * @return list<array{city_id: string, city_name: string, first_letter: null|string, is_hot: bool}>
      */
     public function queryCities(): array
     {
-        return $this->list(self::PATH_CITIES, []);
+        return $this->normalizeAll($this->list(self::PATH_CITIES, []), $this->normalizeCity(...));
     }
 
     /**
      * 城市下的行政区/县。
      *
-     * @return list<array<string, mixed>>
+     * @return list<array{region_id: string, region_name: string}>
      */
     public function queryRegions(string $cityId): array
     {
-        return $this->list(self::PATH_REGIONS, ['city_id' => $cityId]);
+        return $this->normalizeAll($this->list(self::PATH_REGIONS, ['city_id' => $cityId]), $this->normalizeRegion(...));
     }
 
     /**
      * 影院列表（分页）。
      *
-     * @return list<array<string, mixed>>
+     * @return list<array<string, mixed>> 形状见 normalizeCinema()
      */
     public function queryCinemas(string $cityId, int $page = 1, int $pageSize = self::MAX_PAGE_SIZE): array
     {
-        return $this->list(self::PATH_CINEMAS, ['city_id' => $cityId] + $this->paging($page, $pageSize));
+        return $this->normalizeAll($this->list(self::PATH_CINEMAS, ['city_id' => $cityId] + $this->paging($page, $pageSize)), $this->normalizeCinema(...));
     }
 
     /**
      * 批量拉取影院数据（需要芒果商务单独开权限，300 次/分钟）。限流时抛 MangoRateLimitedException。
      *
-     * @return list<array<string, mixed>>
+     * @return list<array<string, mixed>> 形状见 normalizeCinema()
      */
     public function batchCinemas(int $page = 1, int $pageSize = self::MAX_PAGE_SIZE): array
     {
-        return $this->list(self::PATH_CINEMAS_BATCH, $this->paging($page, $pageSize));
+        return $this->normalizeAll($this->list(self::PATH_CINEMAS_BATCH, $this->paging($page, $pageSize)), $this->normalizeCinema(...));
     }
 
     /**
      * 热映 & 待上映影片。没有批量接口，业务层按需实时查、可以短期缓存。
      *
-     * @return list<array<string, mixed>>
+     * @return list<array{film_id: string, film_name: null|string, attributes: array<string, mixed>}>
      */
     public function queryFilms(string $cityId): array
     {
-        return $this->list(self::PATH_FILMS_HOT, ['city_id' => $cityId]);
+        return $this->normalizeAll($this->list(self::PATH_FILMS_HOT, ['city_id' => $cityId]), $this->normalizeFilm(...));
     }
 
     // ---- 场次、座位：价格是成本，归一化 ----
@@ -574,6 +574,98 @@ class MangoDriver
         }
 
         return array_values(array_filter($data, 'is_array'));
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeAll(array $rows, Closure $normalize): array
+    {
+        return array_values(array_filter(array_map($normalize, $rows)));
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @return null|array{city_id: string, city_name: string, first_letter: null|string, is_hot: bool}
+     */
+    private function normalizeCity(array $raw): ?array
+    {
+        $id = $this->str($raw['city_id'] ?? $raw['cityId'] ?? $raw['id'] ?? null);
+        $name = $this->str($raw['city_name'] ?? $raw['cityName'] ?? $raw['name'] ?? null);
+        if ($id === null || $name === null) {
+            return null;
+        }
+        $letter = $this->str($raw['first_letter'] ?? $raw['firstLetter'] ?? $raw['pinyin'] ?? null);
+
+        return [
+            'city_id' => $id,
+            'city_name' => $name,
+            'first_letter' => $letter === null ? null : strtoupper(substr($letter, 0, 1)),
+            'is_hot' => (int) ($raw['is_hot'] ?? $raw['isHot'] ?? $raw['hot'] ?? 0) === 1,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @return null|array{region_id: string, region_name: string}
+     */
+    private function normalizeRegion(array $raw): ?array
+    {
+        $id = $this->str($raw['region_id'] ?? $raw['regionId'] ?? $raw['area_id'] ?? $raw['id'] ?? null);
+        $name = $this->str($raw['region_name'] ?? $raw['regionName'] ?? $raw['area_name'] ?? $raw['name'] ?? null);
+
+        return $id === null || $name === null ? null : ['region_id' => $id, 'region_name' => $name];
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     * @return null|array{cinema_id: string, cinema_code: null|string, cinema_name: string, city_id: null|string,
+     *     region_id: null|string, address: null|string, tel: null|string, longitude: null|string, latitude: null|string,
+     *     service_info: null|array<mixed>}
+     */
+    private function normalizeCinema(array $raw): ?array
+    {
+        $id = $this->str($raw['cinemaId'] ?? $raw['cinema_id'] ?? $raw['cinemaid'] ?? $raw['id'] ?? null);
+        $name = $this->str($raw['cinemaName'] ?? $raw['cinema_name'] ?? $raw['name'] ?? null);
+        if ($id === null || $name === null) {
+            return null;
+        }
+        $coordinate = static fn (mixed $v): ?string => is_numeric($v) ? (string) $v : null;
+        $service = $raw['service_info'] ?? $raw['serviceInfo'] ?? null;
+
+        return [
+            'cinema_id' => $id,
+            'cinema_code' => $this->str($raw['cinemaCode'] ?? $raw['cinema_code'] ?? null),
+            'cinema_name' => $name,
+            'city_id' => $this->str($raw['city_id'] ?? $raw['cityId'] ?? null),
+            'region_id' => $this->str($raw['region_id'] ?? $raw['regionId'] ?? $raw['area_id'] ?? null),
+            'address' => $this->str($raw['address'] ?? null),
+            'tel' => $this->str($raw['tel'] ?? $raw['phone'] ?? null),
+            'longitude' => $coordinate($raw['longitude'] ?? $raw['lng'] ?? null),
+            'latitude' => $coordinate($raw['latitude'] ?? $raw['lat'] ?? null),
+            'service_info' => is_array($service) ? $service : null,
+        ];
+    }
+
+    /**
+     * 影片信息不含价格，除了统一出 film_id / film_name，其余原样放 attributes 给商户展示。
+     *
+     * @param array<string, mixed> $raw
+     * @return null|array{film_id: string, film_name: null|string, attributes: array<string, mixed>}
+     */
+    private function normalizeFilm(array $raw): ?array
+    {
+        $id = $this->str($raw['film_id'] ?? $raw['filmId'] ?? $raw['id'] ?? null);
+        if ($id === null) {
+            return null;
+        }
+
+        return [
+            'film_id' => $id,
+            'film_name' => $this->str($raw['film_name'] ?? $raw['filmName'] ?? $raw['name'] ?? null),
+            'attributes' => array_diff_key($raw, array_flip([...self::HIDDEN_KEYS, 'film_id', 'filmId', 'id', 'film_name', 'filmName', 'name'])),
+        ];
     }
 
     /**

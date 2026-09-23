@@ -17,6 +17,7 @@ use App\Dao\MerchantDao;
 use App\Dao\MerchantNotifyLogDao;
 use App\Dao\OrderDao;
 use App\Dao\OrderExpressDao;
+use App\Dao\OrderMovieDao;
 use App\Model\Merchant;
 use App\Model\Order;
 use App\Notify\CallbackUrlGuard;
@@ -217,6 +218,7 @@ class NotifyMerchantJob extends Job
             'completed_at' => $order->completed_at?->toDateTimeString(),
             ...ErrorCode::presentOrderFailure($order->fail_reason),
             ...$this->expressFields($order),
+            ...$this->movieFields($order),
             'app_key' => $merchant->app_key,
             'timestamp' => (string) time(),
             'nonce' => bin2hex(random_bytes(16)),
@@ -262,5 +264,23 @@ class NotifyMerchantJob extends Job
         }
 
         return $fields;
+    }
+
+    /**
+     * 电影票订单带上取票码（出票成功、改票根时商户最关心的就是它）。签名只能拼标量，取票码列表按 JSON 字符串放。
+     *
+     * @return array<string, null|string>
+     */
+    private function movieFields(Order $order): array
+    {
+        if ($order->business_line !== 'movie') {
+            return [];
+        }
+        $movie = ApplicationContext::getContainer()->get(OrderMovieDao::class)->findByOrderId((int) $order->id);
+        if ($movie === null || $movie->ticket_codes === null || $movie->ticket_codes === []) {
+            return [];
+        }
+
+        return ['ticket_codes' => (string) json_encode($movie->ticket_codes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)];
     }
 }

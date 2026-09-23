@@ -20,12 +20,15 @@ use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Order\ExpressOrderPresenter;
 use App\Service\Order\ExpressOrderSettlementService;
+use App\Service\Order\MovieOrderPresenter;
+use App\Service\Order\MovieOrderSettlementService;
 use Hyperf\Di\Annotation\Inject;
 
 /**
  * 开放 API「订单查询」（requirements.md 8.1）：按平台订单号或商户订单号查询，
  * 卡密类订单（recharge/card）返回解密后的明文卡号卡密；快递订单多一个 `express`
- * 明细（运单号、物流状态、费用明细和费用调整，形状见 App\Service\Order\ExpressOrderPresenter）。
+ * 明细（运单号、物流状态、费用明细和费用调整，形状见 App\Service\Order\ExpressOrderPresenter），
+ * 电影票订单多一个 `movie` 明细（场次、座位、每张售价、锁座有效期、取票码，见 MovieOrderPresenter）。
  */
 class OrderQueryService extends AbstractService
 {
@@ -46,6 +49,9 @@ class OrderQueryService extends AbstractService
 
     #[Inject]
     protected ExpressOrderPresenter $expressOrderPresenter;
+
+    #[Inject]
+    protected MovieOrderPresenter $movieOrderPresenter;
 
     /**
      * 调用方（App\Controller\OpenApi\OrderController）已经校验过 $orderNo/
@@ -92,6 +98,9 @@ class OrderQueryService extends AbstractService
         }
         if ($order->business_line === ExpressOrderSettlementService::BUSINESS_LINE) {
             $result['express'] = $this->expressOrderPresenter->present((int) $order->id);
+        }
+        if ($order->business_line === MovieOrderSettlementService::BUSINESS_LINE) {
+            $result['movie'] = $this->movieOrderPresenter->present((int) $order->id);
         }
 
         return $result;

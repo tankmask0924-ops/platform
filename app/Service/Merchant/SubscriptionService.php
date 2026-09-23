@@ -34,7 +34,7 @@ class SubscriptionService extends AbstractService
     public const BUSINESS_LINES = ['recharge', 'card', 'movie', 'express'];
 
     /** 已经能下单的业务线，其余的显示"暂未开放" */
-    public const OPEN_BUSINESS_LINES = ['recharge', 'card', 'express'];
+    public const OPEN_BUSINESS_LINES = ['recharge', 'card', 'movie', 'express'];
 
     #[Inject]
     protected MerchantBusinessSubscriptionDao $subscriptionDao;
