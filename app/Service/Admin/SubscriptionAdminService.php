@@ -72,7 +72,7 @@ class SubscriptionAdminService extends AbstractService
         $rows = $this->subscriptionDao->paginateFiltered($filters, $page, $perPage);
 
         $merchantIds = $rows->pluck('merchant_id')->unique()->values()->all();
-        $merchants = $this->merchantDao->newQuery()->whereIn('id', $merchantIds)->get(['id', 'type', 'phone', 'email', 'status'])->keyBy('id');
+        $merchants = $this->merchantDao->findMany($merchantIds);
         // 列表里显示公司名/姓名，审核人员不用逐个点进商户详情
         $names = [];
         foreach ($merchantIds as $merchantId) {

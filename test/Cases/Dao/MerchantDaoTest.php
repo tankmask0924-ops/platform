@@ -53,6 +53,26 @@ class MerchantDaoTest extends TestCase
         $this->assertNull($dao->find(999999999));
     }
 
+    /**
+     * 批量按 id 取商户：走缓存、按 id 作键、重复 id 去重、不存在的 id 直接缺席、空数组返回空集合。
+     */
+    public function testFindManyReturnsMerchantsKeyedByIdFromCache()
+    {
+        $a = $this->createMerchant();
+        $b = $this->createMerchant();
+        $dao = $this->getContainer()->get(MerchantDao::class);
+
+        $found = $dao->findMany([$a->id, (string) $b->id, $a->id, 999999999]);
+        $this->assertEqualsCanonicalizing([$a->id, $b->id], $found->keys()->all());
+        $this->assertSame($a->phone, $found->get($a->id)->phone);
+
+        // 第二次应该命中缓存：直接改库（不经过模型事件、不清缓存），读到的仍是缓存里的旧值
+        Merchant::query()->whereKey($a->id)->update(['phone' => '13000000000']);
+        $this->assertSame($a->phone, $dao->findMany([$a->id])->get($a->id)->phone);
+
+        $this->assertTrue($dao->findMany([])->isEmpty());
+    }
+
     public function testFindByAppKeyReturnsMatchingMerchant()
     {
         $dao = $this->getContainer()->get(MerchantDao::class);

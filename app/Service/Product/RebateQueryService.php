@@ -159,7 +159,7 @@ class RebateQueryService extends AbstractService
             ->get(['id', 'order_no', 'merchant_order_no', 'sale_price'])
             ->keyBy('id');
         $merchants = $internal
-            ? $this->merchantDao->newQuery()->whereIn('id', $rebates->pluck('merchant_id')->unique()->all())->get(['id', 'phone', 'email'])->keyBy('id')
+            ? $this->merchantDao->findMany($rebates->pluck('merchant_id')->all())
             : null;
         $levels = $internal ? $this->levelDao->all()->keyBy('id') : null;
 

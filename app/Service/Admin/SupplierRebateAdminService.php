@@ -20,8 +20,6 @@ use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
-use function Hyperf\Collection\collect;
-
 /**
  * 系统后台「返佣管理 - 供应商返佣明细」（requirements.md 8.3、5.4），只读。
  *
@@ -96,10 +94,8 @@ class SupplierRebateAdminService extends AbstractService
             $merchantIds[] = (int) $order->merchant_id;
             $supplierIds[] = (int) $order->supplier_id;
         }
-        $merchants = $merchantIds === [] ? collect() : $this->merchantDao->newQuery()
-            ->whereIn('id', array_unique($merchantIds))->get(['id', 'phone', 'email'])->keyBy('id');
-        $suppliers = $supplierIds === [] ? collect() : $this->supplierDao->newQuery()
-            ->whereIn('id', array_unique($supplierIds))->pluck('name', 'id');
+        $merchants = $this->merchantDao->findMany($merchantIds);
+        $suppliers = $this->supplierDao->newQuery()->whereIn('id', array_unique($supplierIds))->pluck('name', 'id');
 
         $rows = [];
         foreach ($orders as $order) {

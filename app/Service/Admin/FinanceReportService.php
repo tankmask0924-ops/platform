@@ -290,7 +290,7 @@ class FinanceReportService extends AbstractService
         }
 
         $rows = match ($groupBy) {
-            'merchant' => $this->merchantDao->newQuery()->whereIn('id', $ids)->get(['id', 'phone', 'email'])
+            'merchant' => $this->merchantDao->findMany($ids)
                 ->mapWithKeys(static fn ($m) => [(string) $m->id => (string) ($m->phone ?? $m->email ?? '')]),
             'level' => $this->merchantLevelDao->newQuery()->whereIn('id', $ids)->pluck('name', 'id'),
             'supplier' => $this->supplierDao->newQuery()->whereIn('id', $ids)->pluck('name', 'id'),

@@ -25,6 +25,18 @@ class MerchantDao extends AbstractDao
     }
 
     /**
+     * 按一批 id 取商户，走 model-cache（缓存里没有的才回源查库并写回缓存）。列表页给每行补商户手机号/邮箱
+     * 这类场景统一用它，不要各自 `newQuery()->whereIn()` 绕过缓存。空数组直接返回空集合。
+     *
+     * @param array<int|string> $ids
+     * @return Collection<int, Merchant> 按商户 id 作键
+     */
+    public function findMany(array $ids): Collection
+    {
+        return Merchant::findManyFromCache(array_values(array_unique(array_map('intval', $ids))))->keyBy('id');
+    }
+
+    /**
      * 按 app_key 查商户。app_key 不是主键，model-cache 只覆盖主键查询，
      * 这里走普通查询，不做额外缓存。
      */

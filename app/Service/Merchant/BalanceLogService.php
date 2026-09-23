@@ -21,8 +21,6 @@ use App\Service\AbstractService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
-use function Hyperf\Collection\collect;
-
 /**
  * 商户管理后台（web/merchant）「资金流水：查询」（requirements.md 4.4/4.5、7.2），
  * docs/modules.md 第 7 节。只读——`App\Service\Merchant\BalanceService` 的
@@ -124,7 +122,7 @@ class BalanceLogService extends AbstractService
                 $orderIds[(int) $log->order_id] = true;
             }
         }
-        $orders = $orderIds === [] ? collect() : $this->orderDao->newQuery()
+        $orders = $this->orderDao->newQuery()
             ->whereIn('id', array_keys($orderIds))
             ->get(['id', 'order_no', 'merchant_order_no', 'business_line'])
             ->keyBy('id');

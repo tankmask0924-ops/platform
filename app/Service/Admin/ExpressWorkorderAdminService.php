@@ -26,8 +26,6 @@ use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 use Throwable;
 
-use function Hyperf\Collection\collect;
-
 /**
  * 系统后台「售后处理：快递工单代提交与跟踪」（requirements.md 7.2、8.3，yunyang.md 第 1 节「售后」）。
  * 快递售后不对商户开放，商户找平台客服，客服在订单详情代提交云洋工单。
@@ -176,7 +174,7 @@ class ExpressWorkorderAdminService extends AbstractService
         $page = max(1, (int) ($query['page'] ?? 1));
         $perPage = min(self::MAX_PER_PAGE, max(1, (int) ($query['per_page'] ?? 15)));
         $workorders = $this->workorderDao->paginateFiltered($filters, $page, $perPage);
-        $orderNos = $workorders->isEmpty() ? collect() : $this->orderDao->newQuery()
+        $orderNos = $this->orderDao->newQuery()
             ->whereIn('id', $workorders->pluck('order_id')->unique()->all())->pluck('order_no', 'id');
 
         return [
