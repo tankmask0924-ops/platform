@@ -78,7 +78,7 @@
 | 查询余额 | ✅ `queryBalance()` | ✅ `SupplierBalanceService`（按驱动选工厂方法） | ✅ | ✅ |
 | 取消 | ✅ `cancelOrder()` | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅ |
 | 轨迹查询 | ✅ `queryTrace()` | ✅ `App\Service\OpenApi\ExpressOrderService` | ✅ | ✅ |
-| 提交售后工单 / 接收工单回调 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 提交售后工单 / 接收工单回调 | ✅ `submitWorkOrder()` / `parseWorkOrderCallback()` | ✅ `App\Service\Admin\ExpressWorkorderAdminService`、`App\Service\Order\ExpressWorkorderCallbackService` | ✅ | ✅ 2026-09-23，见第 8 节「快递工单」说明 |
 | 错误码映射表 | ✅ 见下方说明 | ➖ | ✅ | ✅ |
 
 > **Service 接入（2026-09-23，快递下单流程）**：驱动层之外的全部接上了，业务规则见第 6 节脚注 ⑦。驱动本身只改了一处：
@@ -469,7 +469,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - **快递业务线对商户开放申请**（`SubscriptionService::OPEN_BUSINESS_LINES` 加上 express）；商户后台「接口文档」已加上三个接口、
   回调字段和 `freeze_adjust` 流水类型的中文名。
 - **没做的**：两个后台的订单详情页还没有快递明细（寄收件信息、费用明细、调整记录），第 7、8 节订单相关行的页面待补；
-  快递工单（第 3 节最后一行、第 8 节售后处理）仍未开始。
+  快递工单（第 3 节最后一行、第 8 节售后处理）2026-09-23 已完成。
 - 测试：`test/Cases/OpenApi/ExpressOrderControllerTest.php`（11 个：重新查价冻结 + 冻结调整 + 参数透传 + 不泄露、拒单解冻、
   超时不重试、幂等、42009、参数校验、取消解冻 / 已揽收不能取消 / 云洋拒绝不透传文案、轨迹 + 跨商户隔离、订单查询带明细）、
   `test/Cases/Service/Order/ExpressOrderSettlementServiceTest.php`（14 个：冻结调整只一次 / 调低 / 余额不足封顶、7.2 结算举例两种、
@@ -579,7 +579,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 价格设置：电影票 / 快递加价规则 / 价格预览 | 三期 | ✅ `App\Controller\Admin\PricingRuleController` | ✅ `App\Service\Product\PricingRuleService` | `views/product/PricingRuleView.vue`（菜单在商品与供应商下）✅ 已联调（2026-09-21） | ✅ 见下方「价格设置」说明 |
 | 返佣管理：固定期限设置 / 商户返佣明细 / 供应商返佣明细 | 一期（供应商返佣明细三期） | ✅ `App\Controller\Admin\RebateController` | ✅ `App\Service\Product\RebateQueryService` / `App\Service\Admin\SupplierRebateAdminService` | `views/merchant/RebateListView.vue`（菜单「商户返佣」，商户详情可跳转按商户筛选）✅ 已联调（2026-09-18）；`views/merchant/SupplierRebateListView.vue`（菜单「供应商返佣」，2026-09-23，只过了类型检查） | ✅ 供应商返佣明细 2026-09-23 补齐，见下方「供应商返佣」说明。固定期限设置在系统参数 `rebate_due_period_days`（见「系统设置」行）；商户返佣明细 `GET /admin/rebates`，权限 `rebate.view`（预置给财务），筛选同商户后台另加 `merchant_id`，多返回商户手机号/邮箱、等级名、返佣基数及来源、比例来源，以及当前返佣期限 `due_period_days`；与商户后台共用 `RebateQueryService` 和 `MerchantRebateDao::paginateFiltered()/countFiltered()/summarizeByStatus()`。测试 `test/Cases/Admin/RebateControllerTest.php` |
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18；2026-09-23 详情加快递/电影票明细卡片、撤单和部分退款按钮，只过了类型检查） | ✅ 全部完成，见下方说明（部分退款、发起供应商撤单 2026-09-23 补齐）。2026-09-23：详情接口多 `express`（寄收件人、预估/冻结/实际运费成本和向商户收的运费、其它三项实际费用、费用调整含原因）和 `movie`（场次、座位、每张售价和成本、供应商返佣、取票码）两段；两个后台共用 `web/shared` 的 `ExpressDetailInfo` / `MovieDetailInfo` 组件（后台版多出的成本字段有就显示）。快递、电影票异常单只能人工置失败（测试 `testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess`） |
-| 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController` | ✅ `App\Service\Admin\DisputeAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18） | 🔨 话费卡券争议处理已完成，见下方说明；快递工单代提交是三期 |
+| 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController`、`ExpressWorkorderController` | ✅ `App\Service\Admin\DisputeAdminService`、`ExpressWorkorderAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18）；`views/order/ExpressWorkorderListView.vue` + 订单详情「快递工单」卡片（2026-09-23，只过了类型检查） | ✅ 话费卡券争议处理见下方说明；快递工单 2026-09-23 完成，见下方「快递工单」说明 |
 | 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | ✅ 订单对账 + 差异标记处理（2026-09-21）；返佣对账 2026-09-23 随电影票补齐（快递暂不对账），见下方「对账」和「供应商返佣」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
@@ -791,6 +791,29 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   避免结算任务手上的旧数据把已作废的返佣发出去——此前只靠流水去重，拦不住这种情况。
 > - 未做：通过卡速售售后接口提交给供应商并接收结果（驱动未实现售后接口，第 2 节）。
 > - 测试：`test/Cases/Admin/DisputeControllerTest.php`、`test/Cases/Service/Order/OrderRefundServiceTest.php`。
+
+> 「快递工单」（requirements.md 7.2、8.3，yunyang.md 第 1、5 节，2026-09-23）：快递售后不对商户开放，客服在后台代提交云洋工单。
+> 新建 `express_workorders` 表（database-design.md 4.9，比设计多了 `supplier_id`、`content`、`supplier_reply` /
+> `supplier_amount` / `supplier_replied_at`、`resolved_by`、`updated_at`）+ `App\Model\ExpressWorkorder` / `App\Dao\ExpressWorkorderDao`。
+> - **提交**：`POST /admin/orders/{id}/workorders`（`type` 七选一 + `content` ≤ 500 字，权限 `aftersale.handle`），订单详情「快递工单」
+>   卡片里提交。只接受已有云洋单号、没有失败/取消/退款的快递订单；同一订单同类型已有处理中的工单 409。云洋明确拒绝 422 带原因、
+>   **不建工单**；网络失败/解析不了 502、不建工单，提示先去云洋后台确认——工单也没有防重复参数，不能盲目重提。
+> - **驱动**：`YunyangDriver::submitWorkOrder()` 走单独路径 `/api/wuliu/submitWorkOrder`（不带 serviceCode），类型换成云洋编号
+>   （1 重量核实、2 理赔、6 取消、8/9/10 催取件/物流/派送、11 现结到付），成功码 `"200"`；调用日志动作 `submit_workorder`。
+>   **请求字段、响应里的工单号字段、回调字段名都是推断**（文档没有报文样例），集中在驱动常量和两个方法里，联调时对不上只改那里。
+> - **回调**：跟订单回调推到同一个账户级地址，`ExpressCallbackService` 先看有没有工单号，有就交给
+>   `ExpressWorkorderCallbackService`。**回调没签名、工单也没有可复核的查询接口**：回复和金额只记在工单上（列表显示
+>   「云洋回复（未验证）」），**不改状态、不动钱**；顺带做一次带签名的订单查询交给快递结算——重量核实、状态异常退回的运费
+>   体现在订单运费里，按费用调整自动退给商户（requirements.md 7.2）。认不出的工单号 404，云洋会重推。
+> - **结单**：`GET /admin/express-workorders`（status / type / order_no / replied 筛选，处理中且有回复的在前，带 `processing_count`，
+>   `aftersale.view`）、`POST .../{id}/complete`（必填 `result_remark`；理赔工单可填 `claim_amount`，按 `BalanceService::adjust()`
+>   调账加到商户可用余额，流水原因带订单号和工单号）、`POST .../{id}/reject`（必填 `result_remark`），都要 `aftersale.handle`、
+>   写操作日志（module = aftersale）。带状态条件更新，两个客服同时结单后一个 409，不会调两次账；非理赔工单填金额 422
+>   （重量核实退回的运费走费用调整，不能在这里再给一次）。
+> - 订单详情接口多一个 `workorders`（快递订单才有内容）。菜单「订单 → 快递工单」。
+> - 测试：`test/Cases/Admin/ExpressWorkorderControllerTest.php`（理赔提交 → 重复提交 409 → 详情和列表可见 → 结单调账 → 重复结单 409
+>   且不重复调账、云洋拒绝和结果未知都不建工单、非法类型/已失败订单/无权限、驳回和非理赔不能填金额、回调只记录不动钱并触发订单查询）、
+>   `YunyangDriverTest`（工单路径和类型编号、成功码、超时算结果未知、工单回调识别）。
 
 > 「订单管理」：`GET /admin/orders`（按 status / business_line / merchant_id / order_no /
 > merchant_order_no / created_from / created_to 筛选，id 倒序，每页最多 100）、`GET /admin/orders/{id}`
@@ -1044,14 +1067,14 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 |---|---|---|---|---|
 | 基础设施与公共能力 | 13 | 13 | 0 | 0 |
 | 卡速售 2.0 驱动 | 8 | 7 | 0 | 1 |
-| 云洋驱动 | 9 | 8 | 0 | 1 |
+| 云洋驱动 | 9 | 9 | 0 | 0 |
 | 芒果驱动 | 11 | 11 | 0 | 0 |
 | 供应商路由与风控 | 5 | 4 | 0 | 1 |
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 18 | 1 | 0 |
+| 系统管理后台 | 19 | 19 | 0 | 0 |
 | 异步任务与定时任务 | 13 | 11 | 0 | 2 |
-| **合计** | **109** | **103** | **1** | **5** |
+| **合计** | **109** | **105** | **0** | **4** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1082,4 +1105,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~系统后台「系统设置」页面登录联调~~（2026-09-21 已完成）
    - ~~一期只剩：后台订单的部分退款与发起供应商撤单~~（2026-09-23 已完成，**一期到此全部完成**）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账；返佣对账 2026-09-23 随电影票完成）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
-5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ ~~供应商返佣明细 + 返佣对账~~（2026-09-23 已完成）→ 快递工单 → 沙箱环境
+5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ ~~供应商返佣明细 + 返佣对账~~（2026-09-23 已完成）→ ~~快递工单~~（2026-09-23 已完成）→ 沙箱环境

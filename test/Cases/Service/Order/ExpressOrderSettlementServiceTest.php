@@ -386,6 +386,7 @@ class ExpressOrderSettlementServiceTest extends TestCase
     private function bindDriver(Supplier $supplier, DriverResult $callbackResult): void
     {
         $driver = Mockery::mock(YunyangDriver::class);
+        $driver->shouldReceive('parseWorkOrderCallback')->andReturnNull();
         $driver->shouldReceive('parseCallback')->andReturn($callbackResult);
         $factory = Mockery::mock(SupplierDriverFactory::class);
         $factory->shouldReceive('buildYunyang')->andReturn($driver);

@@ -708,16 +708,22 @@ erDiagram
 |---|---|---|---|
 | id | bigint unsigned | 是 | 主键 |
 | order_id | bigint unsigned | 是 | 外键 `orders.id` |
+| supplier_id | bigint unsigned | 是 | 外键 `suppliers.id`，提交给哪家供应商（工单回调按它 + 供应商工单号认领） |
 | type | varchar(24) | 是 | `weight_verify` 重量核实 / `claim` 理赔 / `cancel` 取消 / `cod` 现结到付 / `urge_pickup` 催取件 / `urge_transport` 催物流 / `urge_delivery` 催派送 |
 | status | varchar(16) | 是 | `processing` 处理中 / `completed` 已完成 / `rejected` 已驳回 |
+| content | varchar(500) | 是 | 提交给供应商的工单内容 |
 | supplier_workorder_no | varchar(64) | 否 | 供应商侧工单号 |
 | submitted_by | bigint unsigned | 是 | 外键 `admin_users.id`，代提交的客服 |
-| result_remark | varchar(255) | 否 | 处理结果 |
+| supplier_reply | varchar(500) | 否 | 供应商最近一次回调的说明（回调没有签名，未验证，只给客服看） |
+| supplier_amount | decimal(10,2) | 否 | 供应商回调里的赔付/退回金额（未验证，不直接动钱） |
+| supplier_replied_at | datetime | 否 | 最近一次收到回调的时间 |
+| result_remark | varchar(255) | 否 | 客服填写的处理结果 |
 | claim_amount | decimal(10,2) | 否 | 理赔金额（`type=claim` 时使用，核实后通过调账加给商户） |
-| created_at | datetime | 是 | |
+| resolved_by | bigint unsigned | 否 | 外键 `admin_users.id`，结单的客服 |
+| created_at / updated_at | datetime | 是 | |
 | resolved_at | datetime | 否 | |
 
-索引：`(order_id, type)`。
+索引：`(order_id, type)`、`(status, id)`、`(supplier_id, supplier_workorder_no)`。
 
 ### 4.10 回调与调用日志
 

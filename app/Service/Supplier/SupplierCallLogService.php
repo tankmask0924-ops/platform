@@ -42,7 +42,7 @@ class SupplierCallLogService extends AbstractService
     public const ACTIONS = [
         'place_order', 'query', 'query_balance', 'goods_detail', 'goods_list',
         // 云洋
-        'check_channel', 'cancel', 'query_trace',
+        'check_channel', 'cancel', 'query_trace', 'submit_workorder',
         // 芒果
         'confirm_order', 'query_cities', 'query_regions', 'query_cinemas', 'sync_cinemas',
         'query_films', 'query_shows', 'sync_shows', 'query_seats',

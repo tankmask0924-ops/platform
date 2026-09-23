@@ -55,11 +55,20 @@ class ExpressCallbackService extends AbstractService
     #[Inject]
     protected ExpressOrderSettlementService $settlementService;
 
+    #[Inject]
+    protected ExpressWorkorderCallbackService $workorderCallbackService;
+
     /**
      * @param array<string, mixed> $payload
      */
     public function handle(Supplier $supplier, array $payload): string
     {
+        // 工单回调跟订单回调推到同一个账户级地址（yunyang.md 第 1 节），带工单号的交给工单处理
+        $workorderReply = $this->workorderCallbackService->handle($supplier, $payload);
+        if ($workorderReply !== null) {
+            return $workorderReply;
+        }
+
         $result = $this->supplierDriverFactory->buildYunyang($supplier)->parseCallback($payload);
         if ($result === null) {
             throw new CallbackOrderNotFoundException('ExpressCallbackService: callback carries no shopbill / waybill.');

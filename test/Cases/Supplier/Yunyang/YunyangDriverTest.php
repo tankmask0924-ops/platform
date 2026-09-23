@@ -349,6 +349,55 @@ class YunyangDriverTest extends TestCase
         $this->makeDriver($client)->queryBalance();
     }
 
+    /**
+     * 工单走单独路径、不带 serviceCode，类型换成云洋编号，成功码是 "200"；超时是结果未知（不能让客服马上重提）。
+     */
+    public function testSubmitWorkOrderUsesItsOwnPathAndTypeCode()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')
+            ->once()
+            ->andReturnUsing(function (string $method, string $url, array $options) {
+                $this->assertSame(self::BASE_URL . '/api/wuliu/submitWorkOrder', $url);
+                $this->assertArrayNotHasKey('serviceCode', $options['json']);
+                $this->assertSame(['shopbill' => 'YY-1', 'type' => 2, 'content' => '外箱破损'], json_decode($options['json']['content'], true));
+
+                return new Response(200, [], json_encode(['code' => '200', 'message' => '', 'result' => ['workOrderId' => 'WO-9']]));
+            });
+
+        $this->assertSame(
+            ['accepted' => true, 'unknown' => false, 'workorder_no' => 'WO-9', 'message' => ''],
+            $this->makeDriver($client)->submitWorkOrder('YY-1', 'claim', '外箱破损')
+        );
+
+        $refused = Mockery::mock(ClientInterface::class);
+        $refused->shouldReceive('request')->once()
+            ->andReturn(new Response(200, [], json_encode(['code' => '1', 'message' => '工单已存在', 'result' => null])));
+        $outcome = $this->makeDriver($refused)->submitWorkOrder('YY-1', 'weight_verify', '重量不对');
+        $this->assertFalse($outcome['accepted'], '订单接口的成功码 "1" 不算工单成功');
+        $this->assertFalse($outcome['unknown']);
+
+        $timeout = Mockery::mock(ClientInterface::class);
+        $timeout->shouldReceive('request')->once()->andThrow(new ConnectException('timeout', new Request('POST', self::BASE_URL)));
+        $this->assertTrue($this->makeDriver($timeout)->submitWorkOrder('YY-1', 'urge_pickup', '催一下')['unknown']);
+    }
+
+    public function testWorkOrderCallbackIsRecognizedByWorkOrderNo()
+    {
+        $driver = $this->makeDriver(Mockery::mock(ClientInterface::class));
+
+        $this->assertNull($driver->parseWorkOrderCallback(['shopbill' => 'YY-1', 'typeCode' => 3]), '普通订单回调不是工单回调');
+        $this->assertSame([
+            'workorder_no' => 'WO-9',
+            'shopbill' => 'YY-1',
+            'status' => '已处理',
+            'reply' => '核实超重，退回 3 元',
+            'amount' => '3.00',
+        ], $driver->parseWorkOrderCallback([
+            'workOrderId' => 'WO-9', 'shopbill' => 'YY-1', 'status' => '已处理', 'reply' => '核实超重，退回 3 元', 'weightAmount' => '3.00',
+        ]));
+    }
+
     public function testCallsAreRecordedWithTheSharedActionNames()
     {
         $recorded = [];

@@ -364,6 +364,8 @@ export interface OrderDetail extends Order {
   recharge: { product_id: number; recharge_account: string | null; rebate_amount: string | null; has_card_secret: boolean } | null
   express: ExpressDetail | null
   movie: MovieDetail | null
+  /** 快递工单（只有快递订单有） */
+  workorders: ExpressWorkorder[]
   attempts: {
     attempt_no: number
     supplier_id: number
@@ -405,6 +407,8 @@ export const orderApi = {
   querySupplier: (id: number) => http.post<QuerySupplierResult>(`/admin/orders/${id}/query-supplier`),
   cancelAtSupplier: (id: number) => http.post<{ accepted: boolean; message: string }>(`/admin/orders/${id}/cancel-supplier`),
   partialRefund: (id: number, data: { amount: string; remark: string }) => http.post<Order>(`/admin/orders/${id}/partial-refund`, data),
+  submitWorkorder: (id: number, data: { type: string; content: string }) =>
+    http.post<ExpressWorkorder>(`/admin/orders/${id}/workorders`, data),
   renotify: (id: number) => http.post<Ok>(`/admin/orders/${id}/renotify`),
 }
 
@@ -694,4 +698,38 @@ export const pricingRuleApi = {
   update: (businessLine: string, payload: Query) =>
     http.put<{ data: PricingRule[] }>(`/admin/pricing-rules/${businessLine}`, payload),
   preview: (params: Query) => http.get<PricingPreview>('/admin/pricing-rules/preview', params),
+}
+
+/** 快递工单（客服代提交）：App\Service\Admin\ExpressWorkorderAdminService */
+export interface ExpressWorkorder {
+  id: number
+  order_id: number
+  order_no: string | null
+  type: string
+  status: string
+  content: string
+  supplier_workorder_no: string | null
+  submitted_by: number
+  /** 供应商回调里说的（回调没有签名，未验证） */
+  supplier_reply: string | null
+  supplier_amount: string | null
+  supplier_replied_at: string | null
+  result_remark: string | null
+  /** 核实后调账给商户的理赔金额 */
+  claim_amount: string | null
+  resolved_by: number | null
+  resolved_at: string | null
+  created_at: string | null
+}
+
+export interface ExpressWorkorderList extends Paged<ExpressWorkorder> {
+  processing_count: number
+}
+
+export const workorderApi = {
+  list: (params: Query) => http.get<ExpressWorkorderList>('/admin/express-workorders', params),
+  complete: (id: number, data: { result_remark: string; claim_amount?: string }) =>
+    http.post<ExpressWorkorder>(`/admin/express-workorders/${id}/complete`, data),
+  reject: (id: number, resultRemark: string) =>
+    http.post<ExpressWorkorder>(`/admin/express-workorders/${id}/reject`, { result_remark: resultRemark }),
 }

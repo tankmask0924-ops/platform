@@ -10,15 +10,18 @@ import {
   ratePercent,
   rebateStatusLabels,
   StatusTag,
+  toOptions,
 } from '@platform/shared'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { orderApi, type OrderDetail } from '@/api/admin'
-import { attemptResultLabels } from '@/labels'
+import { attemptResultLabels, workorderStatusLabels, workorderTypeLabels } from '@/labels'
+import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
 const id = Number(route.params.id)
+const permission = usePermissionStore()
 
 const order = ref<OrderDetail | null>(null)
 const loading = ref(false)
@@ -102,6 +105,45 @@ async function cancelAtSupplier() {
     })
   } finally {
     cancelling.value = false
+  }
+}
+
+// 快递工单：客服代提交云洋工单（快递售后不对商户开放），结单在「快递工单」列表
+const canSubmitWorkorder = computed(
+  () =>
+    order.value?.business_line === 'express' &&
+    !!order.value?.supplier_order_no &&
+    !['failed', 'cancelled', 'refunded'].includes(order.value?.status ?? '') &&
+    permission.can('aftersale.handle'),
+)
+const workorderTypeOptions = toOptions(workorderTypeLabels)
+const workorderDialog = ref(false)
+const workorderSubmitting = ref(false)
+const workorderFormRef = ref<FormInstance>()
+const workorderForm = reactive({ type: '', content: '' })
+const workorderRules: FormRules = {
+  type: [{ required: true, message: '请选择工单类型', trigger: 'change' }],
+  content: [{ required: true, message: '请填写工单内容', trigger: 'blur' }],
+}
+
+function openWorkorder() {
+  Object.assign(workorderForm, { type: '', content: '' })
+  workorderDialog.value = true
+}
+
+async function submitWorkorder() {
+  const valid = await workorderFormRef.value?.validate().catch(() => false)
+  if (!valid) {
+    return
+  }
+  workorderSubmitting.value = true
+  try {
+    await orderApi.submitWorkorder(id, { type: workorderForm.type, content: workorderForm.content.trim() })
+    ElMessage.success('工单已提交给云洋')
+    workorderDialog.value = false
+    await load()
+  } finally {
+    workorderSubmitting.value = false
   }
 }
 
@@ -257,6 +299,42 @@ onMounted(load)
         <ExpressDetailInfo :detail="order.express" />
       </el-card>
 
+      <el-card v-if="order.business_line === 'express'" shadow="never">
+        <template #header>
+          <div class="card-header">
+            <span>快递工单</span>
+            <span>
+              <router-link v-if="permission.can('aftersale.view')" :to="{ name: 'express-workorders' }" class="header-link">
+                去工单列表结单
+              </router-link>
+              <el-button v-if="canSubmitWorkorder" size="small" type="primary" @click="openWorkorder">提交工单</el-button>
+            </span>
+          </div>
+        </template>
+        <el-table :data="order.workorders" border empty-text="还没有工单">
+          <el-table-column label="类型" width="100">
+            <template #default="{ row }">{{ labelOf(workorderTypeLabels, row.type) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }"><StatusTag :map="workorderStatusLabels" :value="row.status" /></template>
+          </el-table-column>
+          <el-table-column prop="content" label="内容" min-width="180" />
+          <el-table-column label="云洋回复（未验证）" min-width="180">
+            <template #default="{ row }">
+              {{ row.supplier_reply ?? '-' }}
+              <span v-if="row.supplier_amount" class="muted">金额 {{ money(row.supplier_amount) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="处理结果" min-width="160">
+            <template #default="{ row }">
+              {{ row.result_remark ?? '-' }}
+              <span v-if="row.claim_amount" class="muted">理赔调账 {{ money(row.claim_amount) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="提交时间" width="170" />
+        </el-table>
+      </el-card>
+
       <el-card v-if="order.movie" shadow="never" header="电影票明细">
         <MovieDetailInfo :detail="order.movie" />
       </el-card>
@@ -368,6 +446,31 @@ onMounted(load)
     </template>
   </el-dialog>
 
+  <el-dialog v-model="workorderDialog" title="提交快递工单" width="480px" @closed="workorderFormRef?.clearValidate()">
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      class="dialog-tip"
+      title="工单直接提交给云洋"
+      description="重量核实、状态异常退回的运费会按费用调整自动退给商户；理赔款在工单列表结单时按核实金额调账。"
+    />
+    <el-form ref="workorderFormRef" :model="workorderForm" :rules="workorderRules" label-width="80px">
+      <el-form-item label="类型" prop="type">
+        <el-select v-model="workorderForm.type" placeholder="请选择" style="width: 100%">
+          <el-option v-for="o in workorderTypeOptions" :key="o.value" :value="o.value" :label="o.label" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="内容" prop="content">
+        <el-input v-model="workorderForm.content" type="textarea" :rows="4" maxlength="500" show-word-limit placeholder="说明情况，例如：商户反馈实际重量 2kg，扣费按 5kg" />
+      </el-form-item>
+    </el-form>
+    <template #footer>
+      <el-button @click="workorderDialog = false">取消</el-button>
+      <el-button type="primary" :loading="workorderSubmitting" @click="submitWorkorder">提交</el-button>
+    </template>
+  </el-dialog>
+
   <el-dialog v-model="refundDialog" title="部分退款" width="480px" @closed="refundFormRef?.clearValidate()">
     <el-alert
       type="info"
@@ -432,6 +535,17 @@ pre {
 
 .dialog-tip {
   margin-bottom: 16px;
+}
+
+.header-link {
+  margin-right: 12px;
+  font-size: 13px;
+}
+
+.muted {
+  margin-left: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 pre.inline {

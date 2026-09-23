@@ -133,6 +133,9 @@ class OrderAdminService extends AbstractService
     protected OrderRefundService $orderRefundService;
 
     #[Inject]
+    protected ExpressWorkorderAdminService $workorderAdminService;
+
+    #[Inject]
     protected SupplierRefundAfterSuccessService $refundAfterSuccessService;
 
     /**
@@ -176,6 +179,7 @@ class OrderAdminService extends AbstractService
             'recharge' => $this->formatRecharge($order),
             'express' => $this->formatExpress($order),
             'movie' => $this->formatMovie($order),
+            'workorders' => $order->business_line === 'express' ? $this->workorderAdminService->forOrder($order) : [],
             'attempts' => $this->orderAttemptDao->listForOrder($order->id)
                 ->map(fn (OrderAttempt $attempt) => [
                     'attempt_no' => $attempt->attempt_no,

@@ -18,6 +18,7 @@ use App\Middleware\AdminAuthMiddleware;
 use App\Middleware\AdminPermissionMiddleware;
 use App\Model\AdminUser;
 use App\Network\ClientIpResolver;
+use App\Service\Admin\ExpressWorkorderAdminService;
 use App\Service\Admin\OrderAdminService;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpServer\Annotation\Controller;
@@ -43,6 +44,9 @@ class OrderController extends AbstractController
 
     #[Inject]
     protected ClientIpResolver $clientIpResolver;
+
+    #[Inject]
+    protected ExpressWorkorderAdminService $workorderAdminService;
 
     #[Middleware(AdminAuthMiddleware::class)]
     #[Middleware(AdminPermissionMiddleware::class)]
@@ -76,6 +80,18 @@ class OrderController extends AbstractController
             $this->adminId(),
             $this->clientIp(),
         );
+    }
+
+    /**
+     * 快递订单代提交云洋工单（requirements.md 7.2「售后不对商户开放」）。
+     */
+    #[Middleware(AdminAuthMiddleware::class)]
+    #[Middleware(AdminPermissionMiddleware::class)]
+    #[RequiresPermission('aftersale.handle')]
+    #[PostMapping(path: '{id}/workorders')]
+    public function submitWorkorder(int $id): array
+    {
+        return $this->workorderAdminService->submit($id, $this->request->all(), $this->adminId(), $this->clientIp());
     }
 
     #[Middleware(AdminAuthMiddleware::class)]

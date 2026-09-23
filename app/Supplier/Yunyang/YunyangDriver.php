@@ -63,6 +63,19 @@ use RuntimeException;
 class YunyangDriver
 {
     /**
+     * 平台工单类型 => 云洋工单类型编号（yunyang.md 第 1 节「售后」）。
+     */
+    public const WORK_ORDER_TYPES = [
+        'weight_verify' => 1,
+        'claim' => 2,
+        'cancel' => 6,
+        'urge_pickup' => 8,
+        'urge_transport' => 9,
+        'urge_delivery' => 10,
+        'cod' => 11,
+    ];
+
+    /**
      * 统一入口，所有能力都走这个路径，靠 serviceCode 区分（yunyang.md 第 1 节）。
      */
     private const PATH_OPEN_SERVICE = '/api/wuliu/openService';
@@ -81,6 +94,19 @@ class YunyangDriver
     private const SERVICE_BALANCE = 'queryBalance';
 
     /**
+     * 工单提交走单独的路径（yunyang.md 第 1 节），不带 serviceCode；这个值只当调用日志的键用。
+     */
+    private const SERVICE_SUBMIT_WORK_ORDER = 'submitWorkOrder';
+
+    private const PATH_SUBMIT_WORK_ORDER = '/api/wuliu/submitWorkOrder';
+
+    /**
+     * 工单回调里能认出"这是工单回调而不是订单回调"的字段，也是取工单号的字段，按顺序取第一个有值的。
+     * 【推断】文档只说回调含工单结果和金额，没给字段名。
+     */
+    private const WORK_ORDER_NO_KEYS = ['workOrderId', 'workOrderNo', 'workorderId', 'workorderNo'];
+
+    /**
      * 调用日志里的动作名（`supplier_call_logs.action`），跟卡速售用同一套词，
      * 后台"调用日志"页面筛选时两家供应商的同类调用能对上。
      */
@@ -91,6 +117,7 @@ class YunyangDriver
         self::SERVICE_CANCEL_ORDER => 'cancel',
         self::SERVICE_TRACE => 'query_trace',
         self::SERVICE_BALANCE => 'query_balance',
+        self::SERVICE_SUBMIT_WORK_ORDER => 'submit_workorder',
     ];
 
     /** 下单、取消、查询、检测渠道的成功码 */
@@ -282,6 +309,68 @@ class YunyangDriver
     }
 
     /**
+     * 提交售后工单（yunyang.md 第 1 节「售后」：客服代提交，不对商户开放）。成功码跟账户接口一样是 `"200"`。
+     *
+     * `$type` 是平台的工单类型（WORK_ORDER_TYPES 的键），这里换成云洋的编号。【推断】请求字段
+     * （`shopbill`/`type`/`content`）和响应里的工单号字段名文档没给样例，集中在这里，联调时对不上只改这一处。
+     *
+     * `unknown = true` 表示网络失败/响应解析不了：云洋可能已经受理了，调用方要提示客服去云洋后台确认，
+     * 不能当"提交失败"让客服马上重提（工单同样没有防重复参数）。
+     *
+     * @return array{accepted: bool, unknown: bool, workorder_no: null|string, message: string}
+     */
+    public function submitWorkOrder(string $supplierOrderNo, string $type, string $content): array
+    {
+        if (! isset(self::WORK_ORDER_TYPES[$type])) {
+            throw new InvalidArgumentException('YunyangDriver: unknown work order type "' . $type . '".');
+        }
+
+        $response = $this->send(self::SERVICE_SUBMIT_WORK_ORDER, [
+            'shopbill' => $supplierOrderNo,
+            'type' => self::WORK_ORDER_TYPES[$type],
+            'content' => $content,
+        ], self::CODE_OK_ACCOUNT, self::PATH_SUBMIT_WORK_ORDER);
+
+        if ($response['httpStatus'] !== 200 || $response['code'] === null) {
+            return ['accepted' => false, 'unknown' => true, 'workorder_no' => null, 'message' => $this->describeTransportFailure($response['httpStatus'])];
+        }
+        if (! $response['ok']) {
+            return ['accepted' => false, 'unknown' => false, 'workorder_no' => null, 'message' => $this->describeBusinessFailure($response)];
+        }
+
+        $result = $response['result'];
+        $workorderNo = is_array($result) ? $this->firstString($result, self::WORK_ORDER_NO_KEYS) : $this->toStringOrNull($result);
+
+        return ['accepted' => true, 'unknown' => false, 'workorder_no' => $workorderNo, 'message' => ''];
+    }
+
+    /**
+     * 工单回调（yunyang.md 第 1 节：含重量赔付金额、理赔金额、状态异常处理结果）。不是工单回调返回 null。
+     *
+     * **跟订单回调一样没有签名，而且工单没有带签名的查询接口可以复核**，所以这里的状态、金额只是
+     * "供应商说了什么"，由调用方记下来给客服核实，不能拿去动钱。钱的部分：重量核实退回的运费会体现在
+     * 订单详情的运费里（带签名查询，走费用调整退回商户）；理赔款由客服核实后调账。【推断】字段名同上。
+     *
+     * @param array<string, mixed> $payload
+     * @return null|array{workorder_no: string, shopbill: null|string, status: null|string, reply: null|string, amount: null|string}
+     */
+    public function parseWorkOrderCallback(array $payload): ?array
+    {
+        $workorderNo = $this->firstString($payload, self::WORK_ORDER_NO_KEYS);
+        if ($workorderNo === null) {
+            return null;
+        }
+
+        return [
+            'workorder_no' => $workorderNo,
+            'shopbill' => $this->toStringOrNull($payload['shopbill'] ?? null) ?? $this->toStringOrNull($payload['waybill'] ?? null),
+            'status' => $this->toStringOrNull($payload['status'] ?? $payload['workOrderStatus'] ?? null),
+            'reply' => $this->toStringOrNull($payload['reply'] ?? $payload['result'] ?? $payload['remark'] ?? $payload['content'] ?? null),
+            'amount' => $this->toMoneyString($payload['claimAmount'] ?? $payload['weightAmount'] ?? $payload['amount'] ?? null),
+        ];
+    }
+
+    /**
      * 取消订单。只有待揽收状态能取消，德邦重货等部分渠道不支持接口取消
      * （yunyang.md 第 1 节"取消"），这两种情况云洋都返回失败 + 原因文案，
      * 原样带回给调用方（客服要看到"为什么取消不了"）。
@@ -368,7 +457,7 @@ class YunyangDriver
      * @param array<string, mixed> $content
      * @return array{httpStatus: null|int, code: null|string, message: string, result: mixed, ok: bool, raw: array<string, mixed>}
      */
-    private function send(string $serviceCode, array $content, string $successCode): array
+    private function send(string $serviceCode, array $content, string $successCode, string $path = self::PATH_OPEN_SERVICE): array
     {
         $requestId = $this->signer->requestId();
         $timestamp = $this->signer->timestamp();
@@ -377,7 +466,8 @@ class YunyangDriver
             'requestId' => $requestId,
             'timeStamp' => $timestamp,
             'sign' => $this->signer->sign($this->appId, $requestId, $timestamp, $this->secretKey),
-            'serviceCode' => $serviceCode,
+            // 工单等单独路径的接口不带 serviceCode
+            ...($path === self::PATH_OPEN_SERVICE ? ['serviceCode' => $serviceCode] : []),
             // content 按 JSON 字符串传（文档把它叫"请求内容"且明确说不参与签名）；
             // 联调时如果对方要的是对象，改这一行即可
             'content' => json_encode($content, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
@@ -385,7 +475,7 @@ class YunyangDriver
         $startedAt = microtime(true);
 
         try {
-            $httpResponse = $this->httpClient()->request('POST', $this->baseUrl . self::PATH_OPEN_SERVICE, [
+            $httpResponse = $this->httpClient()->request('POST', $this->baseUrl . $path, [
                 'headers' => ['Content-Type' => 'application/json'],
                 'json' => $body,
                 'timeout' => 10,
@@ -395,7 +485,7 @@ class YunyangDriver
                 'http_errors' => false,
             ]);
         } catch (GuzzleException $e) {
-            $this->recordCall($serviceCode, $body, ['exception' => $e->getMessage()], $startedAt);
+            $this->recordCall($serviceCode, $body, ['exception' => $e->getMessage()], $startedAt, $path);
 
             return [
                 'httpStatus' => null,
@@ -415,7 +505,7 @@ class YunyangDriver
             ? (string) $decoded['code']
             : null;
 
-        $this->recordCall($serviceCode, $body, ['http_status' => $httpStatus, 'body' => is_array($decoded) ? $decoded : $rawBody], $startedAt);
+        $this->recordCall($serviceCode, $body, ['http_status' => $httpStatus, 'body' => is_array($decoded) ? $decoded : $rawBody], $startedAt, $path);
 
         return [
             'httpStatus' => $httpStatus,
@@ -522,7 +612,7 @@ class YunyangDriver
      * @param array<string, mixed> $body
      * @param array<string, mixed> $response
      */
-    private function recordCall(string $serviceCode, array $body, array $response, float $startedAt): void
+    private function recordCall(string $serviceCode, array $body, array $response, float $startedAt, string $path = self::PATH_OPEN_SERVICE): void
     {
         if ($this->callRecorder === null) {
             return;
@@ -531,7 +621,7 @@ class YunyangDriver
         $durationMs = (int) round((microtime(true) - $startedAt) * 1000);
         ($this->callRecorder)(
             self::ACTIONS[$serviceCode] ?? $serviceCode,
-            ['path' => self::PATH_OPEN_SERVICE, 'service_code' => $serviceCode, 'body' => $body],
+            ['path' => $path, 'service_code' => $serviceCode, 'body' => $body],
             $response,
             $durationMs
         );
@@ -550,6 +640,22 @@ class YunyangDriver
     private function describeBusinessFailure(array $response): string
     {
         return sprintf('code %s: %s', $response['code'] ?? 'null', $response['message'] !== '' ? $response['message'] : '(no message)');
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param list<string> $keys
+     */
+    private function firstString(array $data, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            $value = $this->toStringOrNull($data[$key] ?? null);
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     private function toStringOrNull(mixed $value): ?string

@@ -108,6 +108,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'express-workorders',
+          name: 'express-workorders',
+          component: () => import('@/views/order/ExpressWorkorderListView.vue'),
+          meta: { title: '快递工单' },
+        },
+        {
           path: 'pricing-rules',
           name: 'pricing-rules',
           component: () => import('@/views/product/PricingRuleView.vue'),

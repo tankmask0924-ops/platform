@@ -26,6 +26,7 @@ export const supplierCallActionLabels: LabelMap = {
   check_channel: { label: '查价' },
   cancel: { label: '取消 / 释放座位' },
   query_trace: { label: '查轨迹' },
+  submit_workorder: { label: '提交工单' },
   confirm_order: { label: '确认出票' },
   query_cities: { label: '查城市' },
   query_regions: { label: '查区县' },
@@ -238,4 +239,21 @@ export const reportGroupByLabels: LabelMap = {
 export const pricingRuleTypeLabels: LabelMap = {
   fixed: { label: '固定金额' },
   percentage: { label: '百分比' },
+}
+
+/** 快递工单类型（App\Model\ExpressWorkorder::TYPES） */
+export const workorderTypeLabels: LabelMap = {
+  weight_verify: { label: '重量核实' },
+  claim: { label: '理赔' },
+  cancel: { label: '取消订单' },
+  cod: { label: '现结到付' },
+  urge_pickup: { label: '催取件' },
+  urge_transport: { label: '催物流' },
+  urge_delivery: { label: '催派送' },
+}
+
+export const workorderStatusLabels: LabelMap = {
+  processing: { label: '处理中', type: 'warning' },
+  completed: { label: '已完成', type: 'success' },
+  rejected: { label: '已驳回', type: 'info' },
 }
