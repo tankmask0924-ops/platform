@@ -505,7 +505,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - **对商户的展示**：锁座/确认/释放/订单查询多一个 `movie` 明细（`MovieOrderPresenter`：场次、座位、每张售价、锁座有效期、
   确认时间、取票码，不给成本和供应商返佣）；商户回调多带 `ticket_codes`（JSON 字符串）。电影票业务线对商户开放申请，
   四条业务线全部开放。商户后台「接口文档」已加上电影票接口和选座规则。
-- **没做的**：两个后台的订单详情页还没有电影票明细（同快递）；场次批量预拉取缓存（等商务权限）；`limit_price` 用途待芒果确认。
+- **没做的**：场次批量预拉取缓存（可选优化，按需再做，见第 9 节）；`limit_price` 用途待芒果确认。
 - 测试：`test/Cases/OpenApi/MovieControllerTest.php`（12 个：城市影院读缓存、场次加价不露成本、查询失败 42011、锁座冻结 = 售价 × 张数 +
   座位带分区 + attach、分区按区价、选座不合法/场次不存在不建单、订单溢价 43004、确认只调一次并立即出票、锁座过期不能确认、
   释放取消解冻且不能再释放、订单查询带明细 + 跨商户隔离、未开通）、
@@ -1008,7 +1008,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 供应商商品同步（每日全量校准） | Crontab | ✅ `App\Crontab\SupplierProductSyncCrontab` → `App\Service\Supplier\ProductSyncService`，见下方说明 |
 | 熔断自动恢复（二期） | Crontab | ✅ `App\Crontab\CircuitBreakerRecoveryCrontab`，每分钟把到期的熔断行写回 `normal`；**不是恢复机制本身**，路由按 `paused_until` 实时判断，见第 5 节「熔断」说明 |
 | 城市 / 影院数据批量同步（三期） | Crontab | ✅ `App\Crontab\MovieBaseDataSyncCrontab` → `MovieBaseDataSyncService::syncAll()`，每天 04:30，见第 6 节脚注 ⑧ |
-| 场次数据批量同步（三期，视权限） | Crontab | ⬜ 没有批量拉取权限，场次实时转发；权限批下来再建 `movie_showtime_caches` |
+| 场次数据批量同步（三期，视权限） | Crontab | ➖ 可选优化，按需再做（2026-09-28 决定，不计入进度）：场次实时转发已满足功能，锁座本来就要实时核价，缓存只能加速浏览查询；等商户量上来、实时查询明显变慢或被限流，且芒果批量拉取权限批下来，再建 `movie_showtime_caches` |
 | 电影票锁座超时释放（三期） | Crontab | ✅ `App\Crontab\MovieLockExpiryCrontab` → `MovieOrderService::expireLocks()`，每分钟，见第 6 节脚注 ⑧ |
 | 返佣到期自动入账 | Crontab | ✅ `App\Crontab\RebateSettlementCrontab`，见第 1 节"返佣待到账生成 + 到期结算"（只做到账，不含作废/扣回） |
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
@@ -1099,8 +1099,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 19 | 0 | 0 |
-| 异步任务与定时任务 | 13 | 12 | 0 | 1 |
-| **合计** | **109** | **108** | **0** | **1** |
+| 异步任务与定时任务 | 12 | 12 | 0 | 0 |
+| **合计** | **108** | **108** | **0** | **0** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
