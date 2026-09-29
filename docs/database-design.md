@@ -1,7 +1,7 @@
 # 接口开放平台 数据库设计
 
-> 依据：[requirements.md](requirements.md) v1.7（2026-09-14）
-> 状态：草案，待评审。评审通过后按[分期计划](requirements.md#10-分期计划)拆成迁移文件（`migrations/`）落地。
+> 依据：[requirements.md](requirements.md) v1.8（2026-09-29）
+> 状态：已按[分期计划](requirements.md#10-分期计划)全部落地为迁移文件（`migrations/`），表结构以迁移为准；本文件随改表同步更新。
 
 ## 目录
 
@@ -48,7 +48,7 @@
 | 软删除 | 不用软删除；商户/供应商/商品等用 `status` 字段表达启用/停用/下架，保留历史订单的可追溯性 |
 | 快照字段 | 订单表内的 `sale_price`、`cost_price` 等是**下单时的快照**，之后改价格/返佣配置不影响历史订单（对应 [5.1](requirements.md#51-售价)） |
 | 幂等键 | 商户订单号 `(merchant_id, merchant_order_no)` 唯一索引；供应商单号在对应明细表里唯一（供应商侧防重复） |
-| 字符集 | 建议 `utf8mb4`（当前 `config/autoload/databases.php` 默认是 `utf8`，存中文没问题但不支持 emoji/生僻字，建议后续统一改成 `utf8mb4`，不在本次设计范围内改动配置文件） |
+| 字符集 | `utf8mb4` / `utf8mb4_unicode_ci`，由 `.env` 的 `DB_CHARSET` / `DB_COLLATION` 指定（`.env.example` 已填好）；`config/autoload/databases.php` 里没配时的兜底默认值仍是框架自带的 `utf8`，部署时必须带上这两项 |
 
 ---
 
@@ -443,7 +443,7 @@ erDiagram
 | triggered_reason | varchar(255) | 否 | 触发原因（失败率快照） |
 | created_at / updated_at | datetime | 是 | |
 
-索引：`(supplier_id, product_id)` 唯一。**`product_id` 不用 `NULL`**：MySQL 的唯一索引不会把多个 `NULL` 当作重复值拦截，如果用 `NULL` 表示"整个供应商"，会出现同一供应商被插入多条全局熔断记录而不报错；改用 `0` 作为"整个供应商"的哨兵值，唯一索引才能真正生效。
+索引：`(supplier_id, product_id)` 唯一。**`product_id` 不用 `NULL`**：MySQL 的唯一索引不会把多个 `NULL` 当作重复值拦截，如果用 `NULL` 表示"整个供应商"，会出现同一供应商被插入多条全局熔断记录而不报错；改用 `0` 作为"整个供应商"的哨兵值，唯一索引才能真正生效。`(status, paused_until)`：熔断到期恢复任务按 `status='paused' AND paused_until <= now()` 扫描。
 
 #### `supplier_call_logs`
 
@@ -614,6 +614,9 @@ erDiagram
 | confirmed_at | datetime | 否 | 商户确认出票时间；为空且锁座到期时超时释放（2026-09-23 补） |
 | ticket_codes | json | 否 | 取票码/验证码，出票成功后写入 |
 | supplier_rebate | decimal(10,2) | 否 | 供应商返佣（以查询订单详情接口为准） |
+| created_at / updated_at | datetime | 是 | |
+
+索引：`lock_expire_at`（锁座超时释放任务按到期时间扫描未确认的订单）。
 
 #### `order_expresses`（快递）
 
@@ -639,6 +642,7 @@ erDiagram
 | fee_over_at | datetime | 否 | 供应商完成扣费时间（订单"成功"时刻） |
 | signed_at | datetime | 否 | 签收时间（订单完成时间来源） |
 | supplier_rebate | decimal(10,2) | 否 | 供应商返佣（当前无，预留字段） |
+| created_at / updated_at | datetime | 是 | |
 
 #### `order_express_fee_adjustments`
 
@@ -705,7 +709,7 @@ erDiagram
 | resolved_at | datetime | 否 | 处理完成时间 |
 | created_at / updated_at | datetime | 是 | |
 
-索引：`order_id` 唯一（需求文档未描述"驳回后可重新提交争议"的场景，按一单只能提交一次争议设计；如果之后要支持重新提交，需要把 `order_id` 改成普通索引，应用层校验"同一订单不能同时存在两条 `processing`"）；`(merchant_id, status)`。
+索引：`order_id` 唯一（需求文档未描述"驳回后可重新提交争议"的场景，按一单只能提交一次争议设计；如果之后要支持重新提交，需要把 `order_id` 改成普通索引，应用层校验"同一订单不能同时存在两条 `processing`"）；`(merchant_id, status)`；`(supplier_id, supplier_aftersale_no)`（收到供应商售后回调时按售后单号找争议）。
 
 #### `express_workorders`（快递工单，客服代提交）
 
@@ -845,7 +849,7 @@ erDiagram
 | updated_by | bigint unsigned | 否 | 外键 `admin_users.id` |
 | updated_at | datetime | 是 | |
 
-预置 key（种子数据）：
+可配置的 key（不预置种子数据，没有这一行时用代码默认值）：
 
 | key | 说明 | 默认值 |
 |---|---|---|
@@ -853,15 +857,20 @@ erDiagram
 | `abnormal_order_hours` | 异常单时长 | 24 |
 | `circuit_breaker_window_minutes` | 熔断统计窗口 | 10 |
 | `circuit_breaker_min_orders` | 熔断最小订单数 | 20 |
-| `circuit_breaker_fail_rate` | 熔断失败率阈值 | 0.5000 |
+| `circuit_breaker_fail_rate_percent` | 熔断失败率阈值（百分数，如 50.00 = 50%） | 50.00 |
 | `circuit_breaker_pause_minutes` | 熔断暂停时长 | 5 |
 | `default_rate_limit_per_second` | 默认限流 | 50 |
-| `debt_warning_threshold` | 欠款预警线 | 运营配置，无默认 |
+| `debt_warning_threshold` | 欠款预警线（元） | 1000.00 |
 | `dispute_deadline_days` | 售后争议时限 | 7 |
-| `rebate_fixed_period_days` | 返佣固定期限 | 7 |
-| `express_completion_fallback_days` | 快递完成兜底天数 | 15 |
-| `movie_lock_seat_ttl_minutes` | 电影票锁座有效期（一步式供应商时使用；本次供应商固定 10 分钟，不读此配置） | 10 |
-| `merchant_notify_retry_intervals` | 商户回调重试间隔（分钟） | `[1,5,15,60,120,360]` |
+| `rebate_due_period_days` | 返佣固定期限 | 7 |
+| `express_complete_fallback_days` | 快递完成兜底天数 | 15 |
+
+以上 key 和默认值以 `App\Service\Admin\SystemSettingAdminService::DEFINITIONS` 为准（后台「系统参数」页就是按它列出的）。
+
+**不做成系统参数**（写死在代码里）：
+
+- 电影票锁座有效期：芒果固定 10 分钟（`MangoDriver::LOCK_TTL_SECONDS`），以供应商为准，后台配了也改变不了芒果那边的锁座时长。以后接一步式下单的供应商再加。
+- 商户回调重试间隔：1/5/15/60/120/360 分钟（`NotifyMerchantJob::RETRY_DELAY_SECONDS`），requirements.md 7.6 定死的规则。
 
 ### 4.13 定价规则
 
@@ -902,6 +911,7 @@ erDiagram
 | resolved_at | datetime | 否 | |
 | triggered_at | datetime | 是 | 最近一次触发时间 |
 | created_at | datetime | 是 | 首次触发时间 |
+| updated_at | datetime | 是 | 最近一次修改时间（触发或标记处理） |
 
 索引：`(status, triggered_at)`（后台告警列表默认按未处理、最近触发排序）；`(type, related_type, related_id)`。
 

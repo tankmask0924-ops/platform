@@ -1,63 +1,37 @@
-# Introduction
+# 接口开放平台（platform）
 
-This is a skeleton application using the Hyperf framework. This application is meant to be used as a starting place for those looking to get their feet wet with Hyperf Framework.
+面向商户的话费、卡券、电影票、快递接口开放平台：商户预存余额，通过开放 API 下单，平台按路由规则转给供应商（卡速售、芒果、云洋），赚取售价差和供应商返佣。
 
-# Requirements
+- 后端：Hyperf 3.1 + PHP 8.4 + Swoole，本目录
+- 前端：商户管理后台、系统管理后台，见 [web/README.md](web/README.md)
 
-Hyperf has some requirements for the system environment, it can only run under Linux and Mac environment, but due to the development of Docker virtualization technology, Docker for Windows can also be used as the running environment under Windows.
+## 文档
 
-The various versions of Dockerfile have been prepared for you in the [hyperf/hyperf-docker](https://github.com/hyperf/hyperf-docker) project, or directly based on the already built [hyperf/hyperf](https://hub.docker.com/r/hyperf/hyperf) Image to run.
+| 文档 | 内容 |
+|---|---|
+| [docs/requirements.md](docs/requirements.md) | 需求：业务规则、资金、返佣、订单流程、功能清单 |
+| [docs/database-design.md](docs/database-design.md) | 数据库设计（表结构以 `migrations/` 为准） |
+| [docs/modules.md](docs/modules.md) | 模块设计与开发进度 |
+| [docs/suppliers/](docs/suppliers/) | 卡速售、云洋、芒果接口要点 |
 
-When you don't want to use Docker as the basis for your running environment, you need to make sure that your operating environment meets the following requirements:  
+## 本地开发
 
- - PHP >= 8.1
- - Any of the following network engines
-   - Swoole PHP extension >= 5.0，with `swoole.use_shortname` set to `Off` in your `php.ini`
-   - Swow PHP extension >= 1.3
- - JSON PHP extension
- - Pcntl PHP extension
- - OpenSSL PHP extension （If you need to use the HTTPS）
- - PDO PHP extension （If you need to use the MySQL Client）
- - Redis PHP extension （If you need to use the Redis Client）
- - Protobuf PHP extension （If you need to use the gRPC Server or Client）
-
-# Installation using Composer
-
-The easiest way to create a new Hyperf project is to use [Composer](https://getcomposer.org/). If you don't have it already installed, then please install as per [the documentation](https://getcomposer.org/download/).
-
-To create your new Hyperf project:
+本机不装 PHP，所有 PHP 命令都在 Docker 容器 `pf` 里执行。MySQL / Redis 在局域网服务器上，连接信息写在 `.env`（从 `.env.example` 复制）。
 
 ```bash
-composer create-project hyperf/hyperf-skeleton path/to/install
+docker compose up -d                                   # 启动，HTTP 端口 9501
+docker compose restart                                 # 改完代码后重启生效（Swoole 常驻内存）
+docker exec pf php bin/hyperf.php migrate              # 执行数据库迁移
+docker exec pf php bin/hyperf.php admin:sync-permissions  # 同步后台权限项（新增权限后执行）
+docker exec pf php bin/hyperf.php admin:create         # 创建后台管理员账号
+docker exec pf composer test                           # 全部测试
+docker exec pf composer analyse                        # 静态分析
 ```
 
-If your development environment is based on Docker you can use the official Composer image to create a new Hyperf project:
+编码规范、测试写法等见 [.claude/skills/hyperf-conventions/SKILL.md](.claude/skills/hyperf-conventions/SKILL.md)。
 
-```bash
-docker run --rm -it -v $(pwd):/app composer create-project --ignore-platform-reqs hyperf/hyperf-skeleton path/to/install
-```
+## 部署要点
 
-# Getting started
-
-Once installed, you can run the server immediately using the command below.
-
-```bash
-cd path/to/install
-php bin/hyperf.php start
-```
-
-Or if in a Docker based environment you can use the `docker-compose.yml` provided by the template:
-
-```bash
-cd path/to/install
-docker-compose up
-```
-
-This will start the cli-server on port `9501`, and bind it to all network interfaces. You can then visit the site at `http://localhost:9501/` which will bring up Hyperf default home page.
-
-## Hints
-
-- A nice tip is to rename `hyperf-skeleton` of files like `composer.json` and `docker-compose.yml` to your actual project name.
-- Take a look at `config/routes.php` and `app/Controller/IndexController.php` to see an example of a HTTP entrypoint.
-
-**Remember:** you can always replace the contents of this README.md file to something that fits your project description.
+- `.env` 必须配置 `APP_ENCRYPTION_KEY`、`MERCHANT_JWT_SECRET`、`ADMIN_JWT_SECRET`，`DB_CHARSET=utf8mb4`
+- `SUPPLIER_NOTIFY_BASE_URL`：供应商能访问到的平台公网地址，不配则收不到供应商回调
+- 确认容器里有 `crontab-dispatcher` 和 `async-queue` 两个进程，否则定时任务和异步下单不执行
