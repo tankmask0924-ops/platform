@@ -36,7 +36,7 @@ use Throwable;
  * 两边都要有；而且告警表是二期才建的，在此之前各检测点本来就在记日志，接入告警时
  * 保留日志不丢历史连续性。
  *
- * 7 个 type 当前的产生方：
+ * 8 个 type 当前的产生方：
  * - `supplier_low_balance`：`App\Service\Supplier\SupplierBalanceService`（定时刷新后低于
  *   预警线、以及供应商返回"预存款不足"时，requirements.md 6.7）✅
  * - `supplier_circuit_broken` / `product_fail_rate_spike`：`App\Service\Supplier\CircuitBreakerService`
@@ -47,6 +47,8 @@ use Throwable;
  * - `rebate_loss`：requirements.md 5.5 的保护提示目前只在前端算，后端没有检测点 ⬜
  * - `merchant_debt_exceeded`：`BalanceService::isOverDebtWarningThreshold()` 只是个读取端
  *   判断，真正要告警需要在余额变动后或用巡检任务去触发，未建 ⬜
+ * - `frozen_balance_mismatch`：`App\Service\Reconciliation\FrozenBalanceCheckService` 定时核对商户冻结余额
+ *   ≠ 处理中订单冻结金额之和时（requirements.md 9）✅
  */
 class AlertService extends AbstractService
 {

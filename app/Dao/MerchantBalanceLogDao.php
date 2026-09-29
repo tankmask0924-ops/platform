@@ -108,4 +108,39 @@ class MerchantBalanceLogDao extends AbstractDao
             ->values()
             ->all();
     }
+
+    /**
+     * 冻结余额核对定位订单用：按流水算出某商户每笔订单**现在还冻着多少**
+     * （freeze + freeze_adjust − deduct − unfreeze），只返回不为 0 的订单，按订单 id 作键。
+     * `freeze_adjust` 的 `amount` 带符号，其余三种都存正数（见 App\Service\Merchant\BalanceService）。
+     *
+     * @return array<int, string>
+     */
+    public function netFrozenByOrder(int $merchantId): array
+    {
+        return $this->newQuery()
+            ->where('merchant_id', $merchantId)
+            ->whereNotNull('order_id')
+            ->whereIn('type', ['freeze', 'freeze_adjust', 'deduct', 'unfreeze'])
+            ->groupBy('order_id')
+            ->selectRaw("order_id, SUM(CASE WHEN type IN ('deduct', 'unfreeze') THEN -amount ELSE amount END) as net_frozen")
+            ->havingRaw('net_frozen <> 0')
+            ->get()
+            ->mapWithKeys(static fn ($row) => [(int) $row->order_id => (string) $row->net_frozen])
+            ->all();
+    }
+
+    /**
+     * 某商户最近一条流水记下的冻结余额（没有流水时 null）。跟 `merchants.frozen_balance` 不一样，
+     * 说明余额被绕过 BalanceService 直接改过。
+     */
+    public function latestFrozenAfter(int $merchantId): ?string
+    {
+        $value = $this->newQuery()
+            ->where('merchant_id', $merchantId)
+            ->orderByDesc('id')
+            ->value('frozen_after');
+
+        return $value === null ? null : (string) $value;
+    }
 }

@@ -54,6 +54,8 @@ class Alert extends Model
 
     public const TYPE_MERCHANT_DEBT_EXCEEDED = 'merchant_debt_exceeded';
 
+    public const TYPE_FROZEN_BALANCE_MISMATCH = 'frozen_balance_mismatch';
+
     public const TYPES = [
         self::TYPE_SUPPLIER_LOW_BALANCE,
         self::TYPE_SUPPLIER_CIRCUIT_BROKEN,
@@ -62,6 +64,7 @@ class Alert extends Model
         self::TYPE_SUPPLIER_REFUND_AFTER_SUCCESS,
         self::TYPE_REBATE_LOSS,
         self::TYPE_MERCHANT_DEBT_EXCEEDED,
+        self::TYPE_FROZEN_BALANCE_MISMATCH,
     ];
 
     public const LEVEL_WARNING = 'warning';

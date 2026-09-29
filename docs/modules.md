@@ -724,6 +724,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   报 critical——后者说明订单已经在失败了）、`supplier_circuit_broken` ✅ 和 `product_fail_rate_spike` ✅
 >   （`CircuitBreakerService`：整家熔断报前者 critical，单商品熔断报后者 warning，两者影响面差一个量级，
 >   在列表里要能一眼分开）。`supplier_refund_after_success` ✅（2026-09-23，`SupplierRefundAfterSuccessService`，见「订单管理」说明）。
+>   `frozen_balance_mismatch` ✅（2026-09-29 新增的第 8 类，`FrozenBalanceCheckService`，见第 9 节「冻结余额定时核对」说明）。
 >   **还没有产生方**：`abnormal_order_backlog`（缺"积压多少算多"的阈值和巡检点）、
 >   `rebate_loss`（5.5 的保护提示目前只在前端算）、`merchant_debt_exceeded`（`isOverDebtWarningThreshold()`
 >   只是个读取端判断，要告警得在余额变动后或用巡检任务触发）。补检测链路时只需找地方调 `AlertService`，
@@ -1014,8 +1015,22 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 异常单标记 | Crontab | ✅ `App\Crontab\AbnormalOrderCrontab` → `App\Service\Order\AbnormalOrderService`，见下方说明 |
 | 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
 | 快递完成兜底（三期） | Crontab | ✅ `App\Crontab\ExpressCompletionCrontab` → `ExpressOrderSettlementService::completeOverdue()`，每小时一次，见第 6 节脚注 ⑦ |
-| 冻结余额定时核对（requirements.md 9「资金安全」） | Crontab | ⬜ 2026-09-29 核对文档时发现漏登记：每个商户的 `frozen_balance` 应等于其处理中订单的冻结金额之和，对不上要告警。需先定冻结金额从哪里取（订单 `sale_price`、快递调整后的冻结额）和告警类型 |
+| 冻结余额定时核对（requirements.md 9「资金安全」） | Crontab | ✅ `App\Crontab\FrozenBalanceCheckCrontab` → `App\Service\Reconciliation\FrozenBalanceCheckService::checkAll()`，每 10 分钟，见下方说明（2026-09-29） |
 | 告警补齐产生方：异常单积压 / 商户欠款超预警线 / 返佣后亏本（requirements.md 8.3、4.5） | Crontab 或事件触发 | ⬜ 2026-09-29 登记：7 类告警里这 3 类只有类型常量、没有任何地方调 `AlertService::raise()`（见第 8 节「告警」说明末尾）。欠款可在余额变动后或巡检触发；异常单积压要先定阈值；返佣后亏本在返佣生成时判断 |
+
+> 「冻结余额定时核对」（requirements.md 9「定时核对：商户冻结余额 = 该商户所有处理中订单的冻结金额之和」，2026-09-29）：
+> - **为什么要核对**：订单改状态和动冻结余额不在同一个事务里（先标成功再 `deduct()`、先标失败再 `unfreeze()`、先建订单行再 `freeze()`），
+>   两步之间进程挂了，就会留下成功/失败订单还冻着钱、或处理中订单根本没冻钱（之后扣款会把冻结余额扣穿）。单笔操作有流水和幂等，发现不了这种情况。
+> - **口径**：`merchants.frozen_balance` 对比 `processing` + `abnormal` 订单的 `orders.frozen_amount` 之和（快递冻结调整、结算都同步这一列，
+>   其余终态订单的冻结已扣款或解冻）。只看冻结余额不为 0、或还有处理中/异常订单的商户。
+> - **复查**：有差额的商户隔 5 秒重算一次，差额相同才报，避开"改状态 → 动余额"之间毫秒级窗口的假差额；变了就留给下一轮。
+> - **定位订单**：按流水算每笔订单还冻着多少（freeze + freeze_adjust − deduct − unfreeze，`MerchantBalanceLogDao::netFrozenByOrder()`），
+>   处理中/异常订单应等于 `frozen_amount`、其余应为 0，对不上的列进告警（最多 3 个订单号，完整明细在 `alert` 日志）。订单都对得上时再比最近一条流水的
+>   `frozen_after`，不一样就提示"余额可能被直接改过"。
+> - **只报不改**：告警类型新增 `frozen_balance_mismatch`（critical，按商户去重，前端名称「冻结余额对不上」），由人工核实后处理，不自动改余额。
+> - 另有 `checkMerchants(ids)` 只核对指定商户（排查、测试用）。开发库 11 个商户上线前核对过，全部对得上。
+> - 测试 `test/Cases/Service/Reconciliation/FrozenBalanceCheckServiceTest.php`（对得上不报、两边都是 0、成功单没扣冻结、处理中单没冻结、
+>   快递冻结调整和部分扣款部分解冻不误报、余额被直接改过的提示、复查时已对上不报、重复触发只累加一条）。
 
 > 「供应商下单异步执行」（requirements.md 9「调用供应商下单……走异步队列，不阻塞商户下单请求」，2026-09-23）：
 > - 话费、卡券下单请求里只做幂等、校验、建单、冻结，然后 `SupplierOrderDispatcher::enqueue()` 推一个 `PlaceSupplierOrderJob`（只带订单 id），
@@ -1101,8 +1116,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 19 | 0 | 0 |
-| 异步任务与定时任务 | 14 | 12 | 0 | 2 |
-| **合计** | **110** | **108** | **0** | **2** |
+| 异步任务与定时任务 | 14 | 13 | 0 | 1 |
+| **合计** | **110** | **109** | **0** | **1** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1134,4 +1149,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~一期只剩：后台订单的部分退款与发起供应商撤单~~（2026-09-23 已完成，**一期到此全部完成**）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账；返佣对账 2026-09-23 随电影票完成）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
 5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ ~~供应商返佣明细 + 返佣对账~~（2026-09-23 已完成）→ ~~快递工单~~（2026-09-23 已完成）→ 沙箱环境
-6. 补漏（2026-09-29 对照文档核对时发现，不依赖供应商）：冻结余额定时核对 → 告警补齐 3 类产生方（欠款超预警线、异常单积压、返佣后亏本），见第 9 节
+6. 补漏（2026-09-29 对照文档核对时发现，不依赖供应商）：~~冻结余额定时核对~~（2026-09-29 已完成）→ 告警补齐 3 类产生方（欠款超预警线、异常单积压、返佣后亏本），见第 9 节

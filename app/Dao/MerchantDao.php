@@ -84,4 +84,21 @@ class MerchantDao extends AbstractDao
     {
         return $this->newQuery()->count();
     }
+
+    /**
+     * 冻结余额定时核对用（App\Service\Reconciliation\FrozenBalanceCheckService）：冻结余额不为 0 的商户，
+     * 按 id 作键。直接读库不走 model-cache：核对要的是此刻的真实值。
+     *
+     * @param null|list<int> $merchantIds 只查这些商户（复查、指定范围核对时用），不管冻结余额是不是 0
+     * @return array<int, string>
+     */
+    public function frozenBalances(?array $merchantIds = null): array
+    {
+        $query = $this->newQuery();
+        $merchantIds === null ? $query->where('frozen_balance', '<>', 0) : $query->whereIn('id', $merchantIds);
+
+        return $query->pluck('frozen_balance', 'id')
+            ->mapWithKeys(static fn ($balance, $id) => [(int) $id => (string) $balance])
+            ->all();
+    }
 }

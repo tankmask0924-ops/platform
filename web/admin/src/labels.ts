@@ -183,6 +183,7 @@ export const alertTypeLabels: LabelMap = {
   supplier_refund_after_success: { label: '供应商成功后退款' },
   rebate_loss: { label: '返佣后亏本' },
   merchant_debt_exceeded: { label: '商户欠款超预警线' },
+  frozen_balance_mismatch: { label: '冻结余额对不上' },
 }
 
 export const alertLevelLabels: LabelMap = {

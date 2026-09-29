@@ -352,6 +352,56 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 冻结余额定时核对用：处理中、异常订单的冻结金额合计，按商户 id 作键。这两种状态的订单钱还冻着，
+     * 其余状态在进入终态时已经扣款或解冻（快递结算、冻结调整都会同步 `frozen_amount`）。
+     *
+     * @param null|list<int> $merchantIds 只算这些商户（复查、指定范围核对时用）
+     * @return array<int, string>
+     */
+    public function sumOpenFrozenByMerchant(?array $merchantIds = null): array
+    {
+        $query = $this->newQuery()
+            ->whereIn('status', [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL])
+            ->groupBy('merchant_id')
+            ->selectRaw('merchant_id, SUM(frozen_amount) as frozen_total');
+        if ($merchantIds !== null) {
+            $query->whereIn('merchant_id', $merchantIds);
+        }
+
+        return $query->get()
+            ->mapWithKeys(static fn ($row) => [(int) $row->merchant_id => (string) $row->frozen_total])
+            ->all();
+    }
+
+    /**
+     * 冻结余额核对定位订单用：某商户处理中、异常订单的冻结金额，按订单 id 作键。
+     *
+     * @return array<int, string>
+     */
+    public function openFrozenAmountsForMerchant(int $merchantId): array
+    {
+        return $this->newQuery()
+            ->where('merchant_id', $merchantId)
+            ->whereIn('status', [Order::STATUS_PROCESSING, Order::STATUS_ABNORMAL])
+            ->pluck('frozen_amount', 'id')
+            ->mapWithKeys(static fn ($amount, $id) => [(int) $id => (string) $amount])
+            ->all();
+    }
+
+    /**
+     * @param list<int> $ids
+     * @return array<int, string> 订单 id => 平台订单号
+     */
+    public function orderNosByIds(array $ids): array
+    {
+        return $this->newQuery()
+            ->whereIn('id', $ids)
+            ->pluck('order_no', 'id')
+            ->mapWithKeys(static fn ($orderNo, $id) => [(int) $id => (string) $orderNo])
+            ->all();
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function supplierRebateQuery(array $filters): Builder

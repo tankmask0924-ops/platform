@@ -895,12 +895,12 @@ erDiagram
 
 #### `alerts`
 
-对应 [8.3](requirements.md#83-系统管理后台webadmin)"告警"列出的 7 类场景。
+对应 [8.3](requirements.md#83-系统管理后台webadmin)"告警"列出的 8 类场景。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | id | bigint unsigned | 是 | 主键 |
-| type | varchar(32) | 是 | `supplier_low_balance` 供应商余额不足 / `supplier_circuit_broken` 供应商被熔断 / `product_fail_rate_spike` 商品失败率突增 / `abnormal_order_backlog` 异常单积压 / `supplier_refund_after_success` 供应商成功后退款 / `rebate_loss` 返佣后亏本 / `merchant_debt_exceeded` 商户欠款超过预警线 |
+| type | varchar(32) | 是 | `supplier_low_balance` 供应商余额不足 / `supplier_circuit_broken` 供应商被熔断 / `product_fail_rate_spike` 商品失败率突增 / `abnormal_order_backlog` 异常单积压 / `supplier_refund_after_success` 供应商成功后退款 / `rebate_loss` 返佣后亏本 / `merchant_debt_exceeded` 商户欠款超过预警线 / `frozen_balance_mismatch` 冻结余额对不上（2026-09-29 补） |
 | level | varchar(16) | 是 | `warning` / `critical` |
 | related_type | varchar(32) | 否 | `supplier` / `product` / `merchant` / `order`，为空表示全局性告警 |
 | related_id | bigint unsigned | 否 | 关联对象 ID |
