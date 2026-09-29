@@ -17,6 +17,7 @@ use App\Dao\AdminUserDao;
 use App\Dao\SystemSettingDao;
 use App\Model\AdminUser;
 use App\Service\AbstractService;
+use App\Service\Alert\AlertPatrolService;
 use App\Service\Merchant\BalanceService;
 use App\Service\Merchant\DisputeService;
 use App\Service\Merchant\RateLimitSettingService;
@@ -34,7 +35,7 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *
  * 只列出代码里真正在读的参数；key 和默认值直接引用读取方的常量，两边不会对不上。
  * 表里没有这一行时，读取方用代码默认值——所以"恢复默认"就是删掉这一行。
- * 电影票锁座有效期（三期）等功能上线时再加进来。
+ * 电影票锁座有效期以芒果为准（固定 10 分钟），不做成参数。
  * 每次修改记操作日志（requirements.md 9「系统参数相关操作重点审计」）。
  */
 class SystemSettingAdminService extends AbstractService
@@ -64,6 +65,15 @@ class SystemSettingAdminService extends AbstractService
             'max' => 720,
             'default' => AbnormalOrderService::DEFAULT_HOURS,
             'description' => '订单处理中超过这个时长仍拿不到供应商结果，标记为异常单转人工',
+        ],
+        AlertPatrolService::ABNORMAL_BACKLOG_THRESHOLD_SETTING_KEY => [
+            'name' => '异常单积压告警线',
+            'type' => 'int',
+            'unit' => '笔',
+            'min' => 1,
+            'max' => 100000,
+            'default' => AlertPatrolService::DEFAULT_ABNORMAL_BACKLOG_THRESHOLD,
+            'description' => '未处理的异常单达到这个笔数时报「异常单积压」告警',
         ],
         RateLimitSettingService::DEFAULT_SETTING_KEY => [
             'name' => '默认限流',

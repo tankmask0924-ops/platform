@@ -855,6 +855,7 @@ erDiagram
 |---|---|---|
 | `switch_duration_minutes` | 供应商切换时长 | 30 |
 | `abnormal_order_hours` | 异常单时长 | 24 |
+| `abnormal_order_backlog_threshold` | 异常单积压告警线（笔） | 10 |
 | `circuit_breaker_window_minutes` | 熔断统计窗口 | 10 |
 | `circuit_breaker_min_orders` | 熔断最小订单数 | 20 |
 | `circuit_breaker_fail_rate_percent` | 熔断失败率阈值（百分数，如 50.00 = 50%） | 50.00 |

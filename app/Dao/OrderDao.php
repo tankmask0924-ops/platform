@@ -402,6 +402,21 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 异常单积压告警用：当前异常单笔数和最早一笔的下单时间。
+     *
+     * @return array{count: int, oldest_created_at: null|string}
+     */
+    public function abnormalBacklog(): array
+    {
+        $row = $this->newQuery()
+            ->where('status', Order::STATUS_ABNORMAL)
+            ->selectRaw('COUNT(*) as n, MIN(created_at) as oldest')
+            ->first();
+
+        return ['count' => (int) ($row->n ?? 0), 'oldest_created_at' => $row?->oldest === null ? null : (string) $row->oldest];
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function supplierRebateQuery(array $filters): Builder

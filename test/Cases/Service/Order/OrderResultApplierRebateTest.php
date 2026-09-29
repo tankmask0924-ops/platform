@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace HyperfTest\Cases\Service\Order;
 
 use App\Job\NotifyMerchantJob;
+use App\Model\Alert;
 use App\Model\Merchant;
 use App\Model\MerchantBalanceLog;
 use App\Model\MerchantLevelBusinessRate;
@@ -77,6 +78,7 @@ class OrderResultApplierRebateTest extends TestCase
         }
         $this->merchantLevelBusinessRateIds = [];
 
+        Alert::where('related_type', 'product')->whereIn('related_id', $this->productIds ?: [0])->delete();
         foreach ($this->productIds as $id) {
             Product::destroy($id);
         }
@@ -137,6 +139,34 @@ class OrderResultApplierRebateTest extends TestCase
 
         $expectedDueAt = Carbon::parse($order->completed_at)->addDays(7)->toDateTimeString();
         $this->assertSame($expectedDueAt, $rebate->due_at->toDateTimeString(), '没有 SystemSetting 覆盖时默认期限是 7 天');
+
+        // 毛利 2.00 − 返佣 0.30 仍赚钱，不报返佣后亏本
+        $this->assertSame(0, Alert::where('type', Alert::TYPE_REBATE_LOSS)->where('related_id', $product->id)->count());
+    }
+
+    /**
+     * 成本涨到 9.90：毛利 0.10 − 商户返佣 0.30 = −0.20，报一条挂在商品上的返佣后亏本告警。
+     */
+    public function testRebateThatOutweighsGrossProfitRaisesRebateLossAlertOnProduct()
+    {
+        $levelId = random_int(1000000, 1099999);
+        $merchant = $this->createMerchant($levelId);
+        $product = $this->createProduct('0.50');
+        $this->createLevelBusinessRate($levelId, '0.6000');
+        $order = $this->createOrder($merchant->id);
+
+        $this->expectNotify(1);
+
+        $this->applier()->apply(
+            $order,
+            new DriverResult(result: UnifiedResult::Success, supplierOrderNo: 'SUP-LOSS', actualCost: '9.90'),
+            $this->uniqueSupplierId(),
+            $product
+        );
+
+        $alert = Alert::where('type', Alert::TYPE_REBATE_LOSS)->where('related_type', 'product')->where('related_id', $product->id)->first();
+        $this->assertNotNull($alert);
+        $this->assertStringContainsString($order->order_no . ' 毛利 0.10 + 供应商返佣 0.00 − 商户返佣 0.30 = -0.20', $alert->message);
     }
 
     public function testSystemSettingOverridesDefaultDuePeriod()

@@ -582,7 +582,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController`、`ExpressWorkorderController` | ✅ `App\Service\Admin\DisputeAdminService`、`ExpressWorkorderAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18）；`views/order/ExpressWorkorderListView.vue` + 订单详情「快递工单」卡片（2026-09-23，只过了类型检查） | ✅ 话费卡券争议处理见下方说明；快递工单 2026-09-23 完成，见下方「快递工单」说明 |
 | 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | ✅ 订单对账 + 差异标记处理（2026-09-21）；返佣对账 2026-09-23 随电影票补齐（快递暂不对账），见下方「对账」和「供应商返佣」说明 |
-| 告警：列表查看 / 标记处理（产生方未补齐的 3 类见第 9 节） | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
+| 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
 
 > 「价格设置」（requirements.md 5.1、8.3，2026-09-21）：新建 `pricing_rules` 表（三期表里第一张）+
@@ -725,11 +725,9 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   （`CircuitBreakerService`：整家熔断报前者 critical，单商品熔断报后者 warning，两者影响面差一个量级，
 >   在列表里要能一眼分开）。`supplier_refund_after_success` ✅（2026-09-23，`SupplierRefundAfterSuccessService`，见「订单管理」说明）。
 >   `frozen_balance_mismatch` ✅（2026-09-29 新增的第 8 类，`FrozenBalanceCheckService`，见第 9 节「冻结余额定时核对」说明）。
->   **还没有产生方**：`abnormal_order_backlog`（缺"积压多少算多"的阈值和巡检点）、
->   `rebate_loss`（5.5 的保护提示目前只在前端算）、`merchant_debt_exceeded`（`isOverDebtWarningThreshold()`
->   只是个读取端判断，要告警得在余额变动后或用巡检任务触发）。补检测链路时只需找地方调 `AlertService`，
->   不用回头改枚举、迁移注释和前端中文名三处。
-> - 前端：顶层菜单「告警」（不塞进某个模块——7 类告警分别指向供应商、商品、商户、订单，挂在任何一个模块下
+>   `abnormal_order_backlog` ✅、`merchant_debt_exceeded` ✅、`rebate_loss` ✅（2026-09-29 补齐，见第 9 节「告警补齐产生方」说明）。
+>   8 类告警全部有产生方。
+> - 前端：顶层菜单「告警」（不塞进某个模块——各类告警分别指向供应商、商品、商户、订单，挂在任何一个模块下
 >   都会显得只跟那个模块有关），列表默认筛"未处理"，关联对象直接跳对应详情页，重复次数 > 1 标黄。
 > - 测试 `test/Cases/Admin/AlertControllerTest.php`（去重累加、不同对象/类型分开、处理后再触发是新的一条、
 >   列表排序与筛选、忽略与已处理分开记、重复标记 409、非法筛选 422、只读权限不能标记）。
@@ -1016,7 +1014,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 每日订单对账（二期） | Crontab | ✅ `App\Crontab\ReconciliationCrontab` → `App\Service\Reconciliation\ReconciliationService`，每天 05:00 对前一天完成的订单，见第 8 节「对账」说明 |
 | 快递完成兜底（三期） | Crontab | ✅ `App\Crontab\ExpressCompletionCrontab` → `ExpressOrderSettlementService::completeOverdue()`，每小时一次，见第 6 节脚注 ⑦ |
 | 冻结余额定时核对（requirements.md 9「资金安全」） | Crontab | ✅ `App\Crontab\FrozenBalanceCheckCrontab` → `App\Service\Reconciliation\FrozenBalanceCheckService::checkAll()`，每 10 分钟，见下方说明（2026-09-29） |
-| 告警补齐产生方：异常单积压 / 商户欠款超预警线 / 返佣后亏本（requirements.md 8.3、4.5） | Crontab 或事件触发 | ⬜ 2026-09-29 登记：7 类告警里这 3 类只有类型常量、没有任何地方调 `AlertService::raise()`（见第 8 节「告警」说明末尾）。欠款可在余额变动后或巡检触发；异常单积压要先定阈值；返佣后亏本在返佣生成时判断 |
+| 告警补齐产生方：异常单积压 / 商户欠款超预警线 / 返佣后亏本（requirements.md 8.3、4.5） | Crontab + 返佣生成时 | ✅ 欠款、积压：`App\Crontab\AlertPatrolCrontab` → `App\Service\Alert\AlertPatrolService::patrol()`，每 5 分钟；返佣后亏本：`App\Service\Alert\RebateLossAlertService`，在两处生成商户返佣之后判断。见下方说明（2026-09-29） |
 
 > 「冻结余额定时核对」（requirements.md 9「定时核对：商户冻结余额 = 该商户所有处理中订单的冻结金额之和」，2026-09-29）：
 > - **为什么要核对**：订单改状态和动冻结余额不在同一个事务里（先标成功再 `deduct()`、先标失败再 `unfreeze()`、先建订单行再 `freeze()`），
@@ -1031,6 +1029,20 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - 另有 `checkMerchants(ids)` 只核对指定商户（排查、测试用）。开发库 11 个商户上线前核对过，全部对得上。
 > - 测试 `test/Cases/Service/Reconciliation/FrozenBalanceCheckServiceTest.php`（对得上不报、两边都是 0、成功单没扣冻结、处理中单没冻结、
 >   快递冻结调整和部分扣款部分解冻不误报、余额被直接改过的提示、复查时已对上不报、重复触发只累加一条）。
+
+> 「告警补齐产生方」（requirements.md 8.3、4.5，2026-09-29）：
+> - **商户欠款超预警线** `merchant_debt_exceeded`：`AlertPatrolService::checkMerchantDebt()` 每 5 分钟查可用余额 < −欠款预警线
+>   （`BalanceService::debtWarningThreshold()`，跟商户后台醒目提示同一条线）的商户，各报一条 warning，按商户去重。用巡检而不是在余额变动时报：
+>   能把余额扣成负数的有补扣、返佣扣回、手动调账好几条路径，巡检一处全覆盖，也不给资金事务加副作用。
+> - **异常单积压** `abnormal_order_backlog`：`checkAbnormalBacklog()` 同一轮巡检，异常单笔数 ≥ 系统参数 `abnormal_order_backlog_threshold`
+>   （新增，默认 10 笔，后台「系统参数」可改）时报一条全局 warning，带最早一笔的下单时间和已挂小时数。
+> - **返佣后亏本** `rebate_loss`：`RebateLossAlertService::checkOrder()` 在真正插入商户返佣之后判断"毛利 + 供应商返佣 − 商户返佣 < 0"，
+>   接在 `OrderResultApplier`（话费、卡券，挂商品）和 `MovieOrderSettlementService`（电影票，挂商户）两处；返佣已生成过被唯一索引拦下时不判断。
+>   前端 5.5 的保存提示管配置那一刻，这里兜"之后成本涨了、提示后仍保存"的实际订单。
+> - 都不自动关闭：回到线内也要运营标记处理，跟其它告警一致。
+> - 测试：`test/Cases/Service/Alert/AlertPatrolServiceTest.php`（超线才报、正好等于预警线不报、积压到阈值报全局告警、低于阈值不报、非法阈值回落默认）、
+>   `RebateLossAlertServiceTest.php`（电影票比例超 100% 但仍赚钱不报、亏本挂商户、持平不报、话费亏本挂商品）、
+>   `OrderResultApplierRebateTest::testRebateThatOutweighsGrossProfitRaisesRebateLossAlertOnProduct`。巡检两项扫全库，测试里 mock 掉 AlertService，不往共享库写告警。
 
 > 「供应商下单异步执行」（requirements.md 9「调用供应商下单……走异步队列，不阻塞商户下单请求」，2026-09-23）：
 > - 话费、卡券下单请求里只做幂等、校验、建单、冻结，然后 `SupplierOrderDispatcher::enqueue()` 推一个 `PlaceSupplierOrderJob`（只带订单 id），
@@ -1116,8 +1128,8 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
 | 商户管理后台 | 16 | 16 | 0 | 0 |
 | 系统管理后台 | 19 | 19 | 0 | 0 |
-| 异步任务与定时任务 | 14 | 13 | 0 | 1 |
-| **合计** | **110** | **109** | **0** | **1** |
+| 异步任务与定时任务 | 14 | 14 | 0 | 0 |
+| **合计** | **110** | **110** | **0** | **0** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
@@ -1149,4 +1161,4 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
    - ~~一期只剩：后台订单的部分退款与发起供应商撤单~~（2026-09-23 已完成，**一期到此全部完成**）
 4. 二期：~~卡券商品列表~~（2026-09-21 已完成，卡券下单此前已完成，卡券相关行到此结束）→ ~~熔断~~（2026-09-21 已完成）→ ~~告警~~（2026-09-21 已完成，7 类里 3 类已有产生方）→ ~~对账~~（2026-09-21 已完成订单对账；返佣对账 2026-09-23 随电影票完成）→ ~~财务报表~~（2026-09-21 已完成）。**二期到此全部完成**
 5. 三期：~~第 3 节云洋驱动层~~（2026-09-21 已完成，Service 接入和工单未做）→ ~~价格设置（加价规则 + 价格预览）~~（2026-09-21 已完成，电影票/快递共用）→ ~~快递查价~~（2026-09-21 已完成）→ ~~快递下单流程（三期建表 + 冻结/结算 + 取消/轨迹）~~（2026-09-23 已完成，见第 6 节脚注 ⑦；两个后台订单详情的快递明细、快递工单未做）→ ~~第 4 节芒果驱动层~~（2026-09-23 已完成，Service 接入未做）→ ~~电影票流程（城市/影院缓存表 + 查询转发加价 + 锁座/确认/释放 + 回调）~~（2026-09-23 已完成，见第 6 节脚注 ⑧）→ ~~两个后台订单详情补快递/电影票明细~~（2026-09-23 已完成）→ ~~供应商返佣明细 + 返佣对账~~（2026-09-23 已完成）→ ~~快递工单~~（2026-09-23 已完成）→ 沙箱环境
-6. 补漏（2026-09-29 对照文档核对时发现，不依赖供应商）：~~冻结余额定时核对~~（2026-09-29 已完成）→ 告警补齐 3 类产生方（欠款超预警线、异常单积压、返佣后亏本），见第 9 节
+6. 补漏（2026-09-29 对照文档核对时发现，不依赖供应商）：~~冻结余额定时核对~~（2026-09-29 已完成）→ ~~告警补齐 3 类产生方（欠款超预警线、异常单积压、返佣后亏本）~~（2026-09-29 已完成），见第 9 节

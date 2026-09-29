@@ -101,4 +101,18 @@ class MerchantDao extends AbstractDao
             ->mapWithKeys(static fn ($balance, $id) => [(int) $id => (string) $balance])
             ->all();
     }
+
+    /**
+     * 欠款超过预警线的商户（可用余额 < −预警线），给告警巡检用，按 id 作键、值为可用余额。直接读库。
+     *
+     * @return array<int, string>
+     */
+    public function debtBeyond(string $threshold): array
+    {
+        return $this->newQuery()
+            ->where('available_balance', '<', bcmul($threshold, '-1', 2))
+            ->pluck('available_balance', 'id')
+            ->mapWithKeys(static fn ($balance, $id) => [(int) $id => (string) $balance])
+            ->all();
+    }
 }

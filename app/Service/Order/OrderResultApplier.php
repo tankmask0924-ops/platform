@@ -23,6 +23,7 @@ use App\Model\Order;
 use App\Model\Product;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
+use App\Service\Alert\RebateLossAlertService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
 use App\Service\Product\RebateCalculator;
@@ -166,6 +167,9 @@ class OrderResultApplier extends AbstractService
     #[Inject]
     protected Encryptor $encryptor;
 
+    #[Inject]
+    protected RebateLossAlertService $rebateLossAlertService;
+
     /**
      * @param null|Product $product 调用方已经手上有的商品行，见类注释"`Product`
      *                              从哪来"一节；只有 `Success` 分支会用到
@@ -284,7 +288,10 @@ class OrderResultApplier extends AbstractService
         } catch (QueryException $e) {
             // merchant_rebates.order_id 唯一索引命中：这笔订单已经生成过返佣记录了，
             // 幂等 no-op，见类注释"重复调用防护"一节。
+            return;
         }
+
+        $this->rebateLossAlertService->checkOrder($order, $calculation->amount, '0.00', (int) $product->id);
     }
 
     private function resolveProduct(Order $order): ?Product

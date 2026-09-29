@@ -41,12 +41,14 @@ use Throwable;
  *   预警线、以及供应商返回"预存款不足"时，requirements.md 6.7）✅
  * - `supplier_circuit_broken` / `product_fail_rate_spike`：`App\Service\Supplier\CircuitBreakerService`
  *   熔断触发时，整家熔断报前者、单商品熔断报后者（requirements.md 6.6）✅
- * - `abnormal_order_backlog`：需要"积压多少算多"的阈值和一个巡检点，检测链路未建 ⬜
+ * - `abnormal_order_backlog`：`App\Service\Alert\AlertPatrolService` 巡检，异常单笔数达到系统参数
+ *   `abnormal_order_backlog_threshold`（默认 10）时报一条全局告警 ✅
  * - `supplier_refund_after_success`：`App\Service\Order\SupplierRefundAfterSuccessService`（成功订单的卡速售回调、
  *   后台「查询供应商」发现全额/部分退款时，requirements.md 7.1）✅
- * - `rebate_loss`：requirements.md 5.5 的保护提示目前只在前端算，后端没有检测点 ⬜
- * - `merchant_debt_exceeded`：`BalanceService::isOverDebtWarningThreshold()` 只是个读取端
- *   判断，真正要告警需要在余额变动后或用巡检任务去触发，未建 ⬜
+ * - `rebate_loss`：`App\Service\Alert\RebateLossAlertService`，生成商户返佣时毛利 + 供应商返佣
+ *   − 商户返佣 < 0（话费卡券挂商品、电影票挂商户）✅
+ * - `merchant_debt_exceeded`：`App\Service\Alert\AlertPatrolService` 巡检，可用余额 < −欠款预警线
+ *   的商户各报一条（requirements.md 4.5）✅
  * - `frozen_balance_mismatch`：`App\Service\Reconciliation\FrozenBalanceCheckService` 定时核对商户冻结余额
  *   ≠ 处理中订单冻结金额之和时（requirements.md 9）✅
  */

@@ -674,11 +674,8 @@ class BalanceService extends AbstractService
     }
 
     /**
-     * requirements.md 4.5「欠款预警线」的判断本身（"超没超线"），不包含任何真正的
-     * 告警动作——这个代码库没有邮件/短信/IM 之类能通知内部财务人员的通道，"告警
-     * 财务、商户后台醒目提示"两侧都还没建，属于另一个未来任务。这里先把"给定一个
-     * 商户，它现在的欠款是不是超过了配置的预警线"这个可复用的判断露出来，供那个
-     * 未来任务直接调用，不用等它落地时才回来定义"超线"是什么意思。
+     * requirements.md 4.5「欠款预警线」的判断本身（"超没超线"），商户后台醒目提示用它；
+     * 告警由 App\Service\Alert\AlertPatrolService 按同一条预警线巡检产生。
      *
      * 非欠款状态（`available_balance ≥ 0`）一律返回 `false`——没有欠款就无所谓
      * "超没超线"。
@@ -690,12 +687,20 @@ class BalanceService extends AbstractService
         }
 
         $debtAmount = bcmul($merchant->available_balance, '-1', self::SCALE);
-        $threshold = (string) $this->systemSettingDao->getValue(
-            self::DEBT_WARNING_THRESHOLD_SETTING_KEY,
-            self::DEFAULT_DEBT_WARNING_THRESHOLD
-        );
 
-        return bccomp($debtAmount, $threshold, self::SCALE) > 0;
+        return bccomp($debtAmount, $this->debtWarningThreshold(), self::SCALE) > 0;
+    }
+
+    /**
+     * 当前的欠款预警线（元，两位小数）。没配或配成非法值时用默认值。
+     */
+    public function debtWarningThreshold(): string
+    {
+        $value = $this->systemSettingDao->getValue(self::DEBT_WARNING_THRESHOLD_SETTING_KEY, self::DEFAULT_DEBT_WARNING_THRESHOLD);
+
+        return is_numeric($value) && bccomp((string) $value, '0', self::SCALE) >= 0
+            ? bcadd((string) $value, '0', self::SCALE)
+            : self::DEFAULT_DEBT_WARNING_THRESHOLD;
     }
 
     /**

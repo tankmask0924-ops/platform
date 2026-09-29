@@ -23,6 +23,7 @@ use App\Model\Order;
 use App\Model\OrderMovie;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
+use App\Service\Alert\RebateLossAlertService;
 use App\Service\Merchant\BalanceService;
 use App\Service\MerchantNotifyService;
 use App\Service\Product\RebateCalculator;
@@ -96,6 +97,9 @@ class MovieOrderSettlementService extends AbstractService
 
     #[Inject]
     protected LoggerFactory $loggerFactory;
+
+    #[Inject]
+    protected RebateLossAlertService $rebateLossAlertService;
 
     /**
      * @param bool $fromLock 同步锁座的结果：此时明确失败只可能是"订单溢价"
@@ -287,7 +291,10 @@ class MovieOrderSettlementService extends AbstractService
             ]);
         } catch (QueryException) {
             // order_id 唯一：已经生成过（改票根回调、重复推送），幂等跳过
+            return;
         }
+
+        $this->rebateLossAlertService->checkOrder($order, $calculation->amount, $supplierRebate);
     }
 
     private function recordProgress(Order $order, DriverResult $result, int $supplierId): void
