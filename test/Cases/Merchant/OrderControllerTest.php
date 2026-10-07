@@ -105,6 +105,24 @@ class OrderControllerTest extends HttpTestCase
         $this->assertSame(422, $this->get('/merchant/orders?created_from=not-a-date', $token)->getStatusCode());
     }
 
+    /**
+     * 每笔订单带耗时（下单到完成的秒数）：只有成功订单有，处理中为 null；列表和详情一致。
+     */
+    public function testOrdersCarryDurationSeconds()
+    {
+        $merchant = $this->createMerchant();
+        $success = $this->createOrder($merchant, 'success');
+        Order::query()->whereKey($success->id)->update(['created_at' => '2026-09-01 10:00:00', 'completed_at' => '2026-09-01 10:05:20']);
+        $processing = $this->createOrder($merchant, 'processing');
+        $token = $this->login($merchant);
+
+        $rows = array_column($this->json($this->get('/merchant/orders', $token))['data'], null, 'order_no');
+        $this->assertSame(320, $rows[$success->order_no]['duration_seconds']);
+        $this->assertNull($rows[$processing->order_no]['duration_seconds']);
+
+        $this->assertSame(320, $this->json($this->get('/merchant/orders/' . $success->order_no, $token))['duration_seconds']);
+    }
+
     public function testMerchantIdQueryParameterCannotWidenTheList()
     {
         $merchant = $this->createMerchant();

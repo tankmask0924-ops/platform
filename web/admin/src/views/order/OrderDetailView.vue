@@ -2,6 +2,7 @@
 import {
   balanceLogTypeLabels,
   businessLineLabels,
+  duration,
   ExpressDetailInfo,
   labelOf,
   MovieDetailInfo,
@@ -300,6 +301,7 @@ onMounted(load)
           <el-descriptions-item label="下单时间">{{ order.created_at }}</el-descriptions-item>
           <el-descriptions-item label="完成时间">{{ order.completed_at ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="结束时间">{{ order.finished_at ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="耗时">{{ duration(order.duration_seconds) }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 

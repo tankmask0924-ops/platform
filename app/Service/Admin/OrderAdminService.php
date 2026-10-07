@@ -549,6 +549,8 @@ class OrderAdminService extends AbstractService
             'created_at' => $order->created_at?->toDateTimeString(),
             'completed_at' => $order->completed_at?->toDateTimeString(),
             'finished_at' => $order->finished_at?->toDateTimeString(),
+            // 下单到完成的秒数，只有成功订单有
+            'duration_seconds' => $order->durationSeconds(),
         ];
     }
 

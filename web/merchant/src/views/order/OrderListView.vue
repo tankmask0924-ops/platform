@@ -5,6 +5,7 @@ import {
   type CsvColumn,
   csvFilename,
   downloadCsv,
+  duration,
   ExpressDetailInfo,
   labelOf,
   merchantOrderStatusLabels,
@@ -60,6 +61,7 @@ const columns: CsvColumn<Order>[] = [
   { header: '实扣金额', value: (r) => r.deducted_amount },
   { header: '已退款', value: (r) => r.refunded_amount },
   { header: '完成时间', value: (r) => r.completed_at },
+  { header: '耗时（秒）', value: (r) => r.duration_seconds },
   { header: '失败原因', value: (r) => r.fail_reason },
 ]
 
@@ -195,6 +197,9 @@ onMounted(async () => {
         <template #default="{ row }">{{ row.fail_reason ?? '-' }}</template>
       </el-table-column>
       <el-table-column prop="created_at" label="下单时间" width="170" />
+      <el-table-column label="耗时" width="110" align="right">
+        <template #default="{ row }">{{ duration(row.duration_seconds) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDetail(row.order_no)">详情</el-button>
@@ -231,6 +236,7 @@ onMounted(async () => {
           <el-descriptions-item label="已退款">{{ money(detail.refunded_amount) }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ detail.created_at ?? '-' }}</el-descriptions-item>
           <el-descriptions-item label="完成时间">{{ detail.completed_at ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="耗时">{{ duration(detail.duration_seconds) }}</el-descriptions-item>
           <el-descriptions-item v-if="detail.fail_reason" label="失败原因" :span="2">
             {{ detail.fail_reason }}（{{ detail.fail_code }}）
           </el-descriptions-item>

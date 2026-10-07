@@ -83,6 +83,8 @@ export interface Order {
   refunded_amount: string
   created_at: string | null
   completed_at: string | null
+  /** 下单到完成的秒数，只有成功订单有 */
+  duration_seconds: number | null
   fail_code: number | null
   fail_reason: string | null
 }

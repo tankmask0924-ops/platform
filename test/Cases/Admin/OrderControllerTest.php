@@ -376,6 +376,20 @@ class OrderControllerTest extends HttpTestCase
         $this->assertSame('100.00', $merchant->refresh()->available_balance, '已成功的订单不重复扣款');
     }
 
+    public function testOrderListAndDetailCarryDurationSeconds()
+    {
+        [$merchant, $supplier] = $this->merchantAndSupplier();
+        $order = $this->createOrderOfLine($merchant, $supplier, 'recharge', 'success');
+        Order::query()->whereKey($order->id)->update(['created_at' => '2026-09-01 10:00:00', 'completed_at' => '2026-09-01 10:00:12']);
+        $failed = $this->createOrderOfLine($merchant, $supplier, 'recharge', 'failed');
+        $token = $this->loginAs($this->createAdminWithPermissions(['order.view']));
+
+        $this->assertSame(12, $this->json($this->request('GET', '/admin/orders/' . $order->id, $token))['duration_seconds']);
+        $rows = array_column($this->json($this->request('GET', '/admin/orders?merchant_id=' . $merchant->id, $token))['data'], null, 'id');
+        $this->assertSame(12, $rows[$order->id]['duration_seconds']);
+        $this->assertNull($rows[$failed->id]['duration_seconds'], '失败订单没有耗时');
+    }
+
     public function testResolveAbnormalAsSuccessDeductsNotifiesAndLogs()
     {
         [$merchant, $supplier] = $this->merchantAndSupplier();

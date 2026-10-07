@@ -91,4 +91,17 @@ class Order extends Model
     {
         return $this->status === self::STATUS_ABNORMAL ? self::STATUS_PROCESSING : $this->status;
     }
+
+    /**
+     * 耗时（秒）：从下单到完成（`completed_at - created_at`）。只有成功的订单才有；失败、处理中、已退款为 null，
+     * 跟话费时效统计（App\Service\Order\RechargeStatsService）同一口径。快递成功但还没签收时完成时间为空，也是 null。
+     */
+    public function durationSeconds(): ?int
+    {
+        if ($this->status !== self::STATUS_SUCCESS || $this->completed_at === null || $this->created_at === null) {
+            return null;
+        }
+
+        return max(0, $this->completed_at->getTimestamp() - $this->created_at->getTimestamp());
+    }
 }

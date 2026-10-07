@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { businessLineLabels, labelOf, money, orderStatusLabels, StatusTag, toOptions, usePagedList } from '@platform/shared'
+import { businessLineLabels, duration, labelOf, money, orderStatusLabels, StatusTag, toOptions, usePagedList } from '@platform/shared'
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { type Order, orderApi } from '@/api/admin'
@@ -110,6 +110,9 @@ onMounted(list.load)
         <template #default="{ row }">{{ row.fail_reason ?? '-' }}</template>
       </el-table-column>
       <el-table-column prop="created_at" label="下单时间" width="170" />
+      <el-table-column label="耗时" width="110" align="right">
+        <template #default="{ row }">{{ duration(row.duration_seconds) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="80" fixed="right">
         <template #default="{ row }">
           <el-button link :type="row.status === 'abnormal' ? 'danger' : 'primary'" @click="open(row.id)">

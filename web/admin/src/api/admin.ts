@@ -361,6 +361,8 @@ export interface Order {
   created_at: string | null
   completed_at: string | null
   finished_at: string | null
+  /** 下单到完成的秒数，只有成功订单有 */
+  duration_seconds: number | null
 }
 
 export interface OrderDetail extends Order {

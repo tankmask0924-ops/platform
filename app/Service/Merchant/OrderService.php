@@ -128,6 +128,7 @@ class OrderService extends AbstractService
             // 话费/卡券订单的充值账号（手机号），商户核对到账、提交争议时要用；其他业务线为 null
             'recharge_account' => $this->orderRechargeDao->find((int) $order->id)?->recharge_account,
             'created_at' => $order->created_at?->toDateTimeString(),
+            'duration_seconds' => $order->durationSeconds(),
             'notify_logs' => $this->notifyLogDao->findByOrderId($order->id)
                 ->map(static fn (MerchantNotifyLog $log) => [
                     'attempt_no' => $log->attempt_no,
@@ -182,6 +183,8 @@ class OrderService extends AbstractService
             'refunded_amount' => $order->refunded_amount,
             'created_at' => $order->created_at?->toDateTimeString(),
             'completed_at' => $order->completed_at?->toDateTimeString(),
+            // 下单到完成的秒数，只有成功订单有（见 Order::durationSeconds()）
+            'duration_seconds' => $order->durationSeconds(),
         ] + ErrorCode::presentOrderFailure($order->fail_reason);
     }
 

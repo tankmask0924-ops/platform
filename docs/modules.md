@@ -625,6 +625,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 >   不同的耗时值有关，不随订单量增长。
 > - 维度：按天（补齐空日期）、按商品（带商品名）、按运营商；区间只收 `YYYY-MM-DD`，默认最近 7 天，最多 92 天。
 > - 前端两个后台共用 `web/shared/src/components/RechargeStatsPanel.vue`（汇总数 + 明细表），耗时用 `duration()` 显示成「5 分 20 秒」。
+> - **每笔订单的耗时**：`Order::durationSeconds()`（同一口径：只有成功订单有，下单到完成的秒数），系统后台订单列表/详情
+>   （`OrderAdminService::formatOrder()`）和商户后台订单列表/详情/导出（`Merchant\OrderService`）都多一个 `duration_seconds`；
+>   页面加「耗时」列，导出多「耗时（秒）」一列。所有业务线都给：快递是下单到签收（或 15 天兜底完成），电影票是下单到出票。
+>   超过一天显示成「15 天 18 小时」。开放 API 的订单查询没有加这个字段。
 > - 测试 `test/Cases/Admin/RechargeStatsControllerTest.php`（成功率和分位数按例子逐字段核对、三种维度及补齐空日期、
 >   非法参数 422、没有 `order.view` 403、商户只能看自己的订单）。
 
