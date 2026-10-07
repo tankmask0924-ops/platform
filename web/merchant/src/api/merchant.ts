@@ -1,4 +1,4 @@
-import type { ExpressDetail, MovieDetail, Paged } from '@platform/shared'
+import type { ExpressDetail, MovieDetail, Paged, RechargeStats } from '@platform/shared'
 import type { QualificationPayload } from '@/qualification'
 import { http } from './http'
 
@@ -280,4 +280,9 @@ export interface ApiErrorCode {
 
 export const apiDocApi = {
   errorCodes: () => http.get<{ data: ApiErrorCode[] }>('/merchant/api-docs/error-codes').then((r) => r.data),
+}
+
+/** 自己话费订单的耗时与成功率：App\Controller\Merchant\RechargeStatsController */
+export const rechargeStatsApi = {
+  get: (params: Query) => http.get<RechargeStats>('/merchant/recharge-stats', params),
 }

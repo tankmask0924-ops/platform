@@ -32,3 +32,20 @@ export function isNegative(value: string | null | undefined): boolean {
 export function isHttpUrl(value: string | null | undefined): value is string {
   return typeof value === 'string' && /^https?:\/\/\S+$/i.test(value.trim())
 }
+
+/** 秒数显示成「8 秒」「5 分 20 秒」「2 小时 3 分」，空值显示 - */
+export function duration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) {
+    return '-'
+  }
+  const total = Math.round(seconds)
+  if (total < 60) {
+    return `${total} 秒`
+  }
+  if (total < 3600) {
+    const s = total % 60
+    return `${Math.floor(total / 60)} 分${s > 0 ? ` ${s} 秒` : ''}`
+  }
+  const m = Math.floor((total % 3600) / 60)
+  return `${Math.floor(total / 3600)} 小时${m > 0 ? ` ${m} 分` : ''}`
+}

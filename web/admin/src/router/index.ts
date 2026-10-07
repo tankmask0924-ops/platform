@@ -114,6 +114,12 @@ const router = createRouter({
           meta: { title: '快递工单' },
         },
         {
+          path: 'recharge-stats',
+          name: 'recharge-stats',
+          component: () => import('@/views/order/RechargeStatsView.vue'),
+          meta: { title: '话费时效' },
+        },
+        {
           path: 'pricing-rules',
           name: 'pricing-rules',
           component: () => import('@/views/product/PricingRuleView.vue'),

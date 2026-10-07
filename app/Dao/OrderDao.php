@@ -417,6 +417,87 @@ class OrderDao extends AbstractDao
     }
 
     /**
+     * 话费订单时效统计（App\Service\Order\RechargeStatsService）的笔数部分：按下单时间取一段时间内的话费订单，
+     * 按天 / 商品 / 运营商分组，给每组的总笔数、成功、失败、已退款、还没结果的笔数，以及成功订单从下单到成功的总秒数。
+     * 中位数、90 分位要用耗时分布算，见 rechargeDurationHistogram()。
+     *
+     * @return list<array{key: null|string, total: int, success: int, failed: int, refunded: int, pending: int, success_seconds: int}>
+     */
+    public function rechargeStatsCounts(string $from, string $to, string $groupBy, ?int $merchantId = null): array
+    {
+        $query = $this->rechargeStatsQuery($from, $to, $groupBy, $merchantId)
+            ->selectRaw('count(*) as n')
+            ->selectRaw("SUM(CASE WHEN orders.status = 'success' THEN 1 ELSE 0 END) as success_n")
+            ->selectRaw("SUM(CASE WHEN orders.status = 'failed' THEN 1 ELSE 0 END) as failed_n")
+            ->selectRaw("SUM(CASE WHEN orders.status = 'refunded' THEN 1 ELSE 0 END) as refunded_n")
+            ->selectRaw("SUM(CASE WHEN orders.status IN ('processing', 'abnormal') THEN 1 ELSE 0 END) as pending_n")
+            ->selectRaw("COALESCE(SUM(CASE WHEN orders.status = 'success' AND orders.completed_at IS NOT NULL THEN TIMESTAMPDIFF(SECOND, orders.created_at, orders.completed_at) ELSE 0 END), 0) as success_seconds");
+
+        return $query->get()
+            ->map(static fn ($row) => [
+                'key' => $row->g === null ? null : (string) $row->g,
+                'total' => (int) $row->n,
+                'success' => (int) $row->success_n,
+                'failed' => (int) $row->failed_n,
+                'refunded' => (int) $row->refunded_n,
+                'pending' => (int) $row->pending_n,
+                'success_seconds' => (int) $row->success_seconds,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * 成功订单的耗时分布：每组里「耗时 N 秒的有几笔」。MySQL 5.7 没有窗口函数，分位数不能在 SQL 里直接算；
+     * 按秒汇总后行数只跟不同的耗时值有关，不随订单量增长，再由调用方按分布算中位数、90 分位。
+     *
+     * @return list<array{key: null|string, seconds: int, count: int}>
+     */
+    public function rechargeDurationHistogram(string $from, string $to, string $groupBy, ?int $merchantId = null): array
+    {
+        return $this->rechargeStatsQuery($from, $to, $groupBy, $merchantId)
+            ->where('orders.status', Order::STATUS_SUCCESS)
+            ->whereNotNull('orders.completed_at')
+            ->selectRaw('TIMESTAMPDIFF(SECOND, orders.created_at, orders.completed_at) as d')
+            ->selectRaw('count(*) as c')
+            ->groupBy('d')
+            ->get()
+            ->map(static fn ($row) => [
+                'key' => $row->g === null ? null : (string) $row->g,
+                'seconds' => max(0, (int) $row->d),
+                'count' => (int) $row->c,
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * 话费时效统计的公共部分：话费订单、下单时间在区间内、可选限定商户，按维度分组（分组表达式选成 `g`）。
+     * 商品和运营商从下单时的商品明细取（`order_recharges.product_id` → `products`）。
+     */
+    private function rechargeStatsQuery(string $from, string $to, string $groupBy, ?int $merchantId): Builder
+    {
+        $query = $this->newQuery()
+            ->where('orders.business_line', 'recharge')
+            ->whereBetween('orders.created_at', [$from, $to]);
+        if ($merchantId !== null) {
+            $query->where('orders.merchant_id', $merchantId);
+        }
+
+        match ($groupBy) {
+            'day' => $query->selectRaw('DATE(orders.created_at) as g')->groupBy('g'),
+            'product' => $query->leftJoin('order_recharges', 'order_recharges.order_id', '=', 'orders.id')
+                ->selectRaw('order_recharges.product_id as g')->groupBy('g'),
+            'operator' => $query->leftJoin('order_recharges', 'order_recharges.order_id', '=', 'orders.id')
+                ->leftJoin('products', 'products.id', '=', 'order_recharges.product_id')
+                ->selectRaw('products.operator as g')->groupBy('g'),
+            default => throw new InvalidArgumentException('unsupported recharge stats group_by: ' . $groupBy),
+        };
+
+        return $query;
+    }
+
+    /**
      * @param array<string, mixed> $filters
      */
     private function supplierRebateQuery(array $filters): Builder

@@ -1,4 +1,4 @@
-import { Coin, Document, Goods, Grid, HomeFilled, Key, List, Money, Postcard, Reading, Service, Tickets, Wallet } from '@element-plus/icons-vue'
+import { Coin, Document, Goods, Grid, Histogram, HomeFilled, Key, List, Money, Postcard, Reading, Service, Tickets, Wallet } from '@element-plus/icons-vue'
 import type { MenuItem } from '@platform/shared'
 
 export const menus: MenuItem[] = [
@@ -10,6 +10,7 @@ export const menus: MenuItem[] = [
     children: [
       { path: '/orders', title: '订单列表', icon: Tickets },
       { path: '/disputes', title: '售后争议', icon: Service },
+      { path: '/recharge-stats', title: '话费统计', icon: Histogram },
     ],
   },
   {

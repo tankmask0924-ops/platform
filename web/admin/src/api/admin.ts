@@ -1,4 +1,4 @@
-import type { ExpressDetail, MovieDetail, Paged } from '@platform/shared'
+import type { ExpressDetail, MovieDetail, Paged, RechargeStats } from '@platform/shared'
 import { http } from './http'
 
 type Query = Record<string, unknown>
@@ -748,4 +748,9 @@ export const workorderApi = {
     http.post<ExpressWorkorder>(`/admin/express-workorders/${id}/complete`, data),
   reject: (id: number, resultRemark: string) =>
     http.post<ExpressWorkorder>(`/admin/express-workorders/${id}/reject`, { result_remark: resultRemark }),
+}
+
+/** 话费订单耗时与成功率：App\Controller\Admin\RechargeStatsController */
+export const rechargeStatsApi = {
+  get: (params: Query) => http.get<RechargeStats>('/admin/recharge-stats', params),
 }

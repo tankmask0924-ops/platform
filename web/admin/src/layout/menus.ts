@@ -57,6 +57,7 @@ export const menus: MenuItem[] = [
       { path: '/orders', title: '订单列表', icon: Tickets, permission: 'order.view' },
       { path: '/disputes', title: '售后争议', icon: Service, permission: 'aftersale.view' },
       { path: '/express-workorders', title: '快递工单', icon: Service, permission: 'aftersale.view' },
+      { path: '/recharge-stats', title: '话费时效', icon: Histogram, permission: 'order.view' },
     ],
   },
   // 财务报表跟对账、告警一样放顶层：它横跨订单、返佣、资金三块，挂在任何一个下面都不对

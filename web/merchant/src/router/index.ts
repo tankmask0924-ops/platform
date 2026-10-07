@@ -48,6 +48,12 @@ const router = createRouter({
           meta: { title: '售后争议' },
         },
         {
+          path: 'recharge-stats',
+          name: 'recharge-stats',
+          component: () => import('@/views/order/RechargeStatsView.vue'),
+          meta: { title: '话费统计' },
+        },
+        {
           path: 'finance/recharge',
           name: 'recharge',
           component: () => import('@/views/finance/RechargeView.vue'),

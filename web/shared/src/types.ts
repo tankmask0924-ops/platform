@@ -60,3 +60,32 @@ export interface MovieDetail {
   unit_cost?: string
   supplier_rebate?: string | null
 }
+
+/** 话费订单耗时与成功率的一行（App\Service\Order\RechargeStatsService） */
+export interface RechargeStatsRow {
+  /** 按天是日期，按商品是商品 id，按运营商是运营商代码；汇总行为 null */
+  key: string | null
+  /** 按商品时是商品名称 */
+  label: string | null
+  total: number
+  success: number
+  failed: number
+  refunded: number
+  /** 处理中、异常，还没有结论 */
+  pending: number
+  /** 百分比；还没有出结论的订单时为 null */
+  success_rate: number | null
+  /** 成功订单从下单到成功的秒数；没有成功订单时为 null */
+  avg_seconds: number | null
+  p50_seconds: number | null
+  p90_seconds: number | null
+}
+
+export interface RechargeStats {
+  group_by: 'day' | 'product' | 'operator'
+  created_from: string
+  created_to: string
+  merchant_id: number | null
+  summary: RechargeStatsRow
+  data: RechargeStatsRow[]
+}

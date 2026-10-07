@@ -527,6 +527,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 账户：修改密码 | 一期 | ✅ | ✅ `App\Service\Merchant\PasswordService` | ✅ 右上角"修改密码"（`web/shared` 的 `ChangePasswordDialog`） | ✅ `PUT /merchant/auth/password`，返回新 token；token 里带密码版本（`pv`），改密码/找回密码后旧登录全部失效（两个后台都是） |
 | 账户：资质提交与审核状态查看 | 一期 | ✅ `App\Controller\Merchant\QualificationController` | ✅ `App\Service\Merchant\QualificationService` | `views/QualificationView.vue` ✅（首页驳回提示链到这里；已在浏览器看过已启用商户的页面，驳回后重新提交的表单跟注册页共用 `components/QualificationFields.vue`） | ✅ `GET /merchant/qualification`：账户状态、类型、当前等级名、最新一次提交的资料（身份证号只返回后 4 位 `id_card_no_masked`）、历次提交和审核结果；`POST /merchant/qualification`：只有 `rejected` 商户能重新提交（待审核、已通过都是 409），锁商户行后新插一条待审核记录、商户回到 `pending`，可以换企业/个人类型（`merchants.type` 一起改）。字段校验和落库跟注册共用 `QualificationService::validate()/createPending()`，并补了按列长度的上限校验。审核通过后资质不能在线修改（没有已启用商户重新审核的流程），变更找平台。系统后台商户详情改成取最新一次提交（原来 `findByMerchantId()` 不排序，有多条时可能取到旧的驳回记录），并返回 `qualification_history`。测试 `test/Cases/Merchant/QualificationControllerTest.php`（注册 → 驳回 → 换类型重新提交 → 审核通过整条链路） |
 | 首页：统计数据展示 | 一期 | ✅ `App\Controller\Merchant\DashboardController` | ✅ `App\Service\Merchant\DashboardService` | `views/DashboardView.vue` ✅ 已联调（2026-09-18）：余额/冻结/待到账返佣、今日订单数/消费/成功率、近 7 天消费柱状图（`components/TrendChart.vue`，内联 SVG，没引图表库；柱高是消费金额，订单数在悬浮提示里）；审核状态和欠款提示仍来自 `/merchant/auth/me` | ✅ `GET /merchant/dashboard`：`pending_rebate`、`today`（订单数、消费金额、成功/已出结果笔数、成功率）、`trend`（近 7 天含今天，最早在前，没单的日子补 0）。口径都按下单日期：订单数含处理中；消费 = 实扣 − 已退款；成功率 = 成功 ÷（成功 + 失败 + 已退款），处理中（含异常单）和商户取消的不计入，当天没有出结果的订单时为 `null`。一条 `OrderDao::dailySummaryForMerchant()` 按日期+状态分组查出，走 `(merchant_id, status, created_at)` 索引的前缀。测试 `test/Cases/Merchant/DashboardControllerTest.php` |
+| 话费统计：自己话费订单的耗时与成功率 | 2026-10-07 新增 | ✅ `App\Controller\Merchant\RechargeStatsController` | ✅ `App\Service\Order\RechargeStatsService`（两个后台共用） | `views/order/RechargeStatsView.vue`（菜单「订单管理 → 话费统计」，套 `web/shared` 的 `RechargeStatsPanel`），只过了类型检查 | ✅ `GET /merchant/recharge-stats`，商户 id 取自登录态、请求里的 `merchant_id` 不认。口径见第 8 节「话费时效」行下方说明。测试 `test/Cases/Admin/RechargeStatsControllerTest.php::testMerchantSeesOnlyOwnOrders` |
 | 开发设置：生成 / 重置 AppKey 与 AppSecret | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 开发设置：IP 白名单配置 | 一期 | ✅ | ✅ | `views/DevSettingsView.vue` ✅ 已联调（2026-09-18） | ✅ |
 | 服务开通：查看可开通业务线 / 提交申请 / 查看状态 | 一期 | ✅ `App\Controller\Merchant\SubscriptionController` | ✅ `App\Service\Merchant\SubscriptionService` | `views/ServiceView.vue` ✅ 已在浏览器看过列表（申请动作靠接口测试覆盖） | ✅ `GET /merchant/subscriptions`（四条业务线及开通状态，电影票/快递 `available=false` 暂未开放）、`POST /merchant/subscriptions`（`business_line`）：只有 active 商户能申请；每个商户每条业务线一行（表上 `(merchant_id, business_line)` 唯一），驳回后重新申请是把这一行改回 pending；审核中/已开通重复申请 409。**开放 API 门槛**：`SubscriptionService::isSubscribed()`，没开通的业务线商品列表和下单都返回新错误码 42007「未开通该业务线」（下单时放在幂等重放之后、欠款拦截之前，已下成功的单重提仍原样返回）。测试 `test/Cases/Merchant/SubscriptionControllerTest.php`，开放 API 侧见 `ProductControllerTest`/`RechargeOrderPlacementServiceTest` 新增用例（其余下单测试的商户 fixture 都补了已开通的话费/卡券） |
@@ -581,6 +582,7 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 订单管理：全部订单查询 / 详情 / 异常单处理 / 部分退款处理 / 手动查询供应商 / 手动重推商户回调 | 一期 | ✅ `App\Controller\Admin\OrderController` | ✅ `App\Service\Admin\OrderAdminService` | `views/order/OrderListView.vue`、`OrderDetailView.vue` ✅ 已联调（2026-09-18；2026-09-23 详情加快递/电影票明细卡片、撤单和部分退款按钮，只过了类型检查） | ✅ 全部完成，见下方说明（部分退款、发起供应商撤单 2026-09-23 补齐）。2026-09-23：详情接口多 `express`（寄收件人、预估/冻结/实际运费成本和向商户收的运费、其它三项实际费用、费用调整含原因）和 `movie`（场次、座位、每张售价和成本、供应商返佣、取票码）两段；两个后台共用 `web/shared` 的 `ExpressDetailInfo` / `MovieDetailInfo` 组件（后台版多出的成本字段有就显示）。快递、电影票异常单只能人工置失败（测试 `testExpressAndMovieAbnormalOrdersCannotBeResolvedAsSuccess`） |
 | 售后处理：话费卡券争议处理 / 快递工单代提交与跟踪 | 一期（快递工单三期） | ✅ `App\Controller\Admin\DisputeController`、`ExpressWorkorderController` | ✅ `App\Service\Admin\DisputeAdminService`、`ExpressWorkorderAdminService` | `views/order/DisputeListView.vue` ✅ 已联调（2026-09-18）；`views/order/ExpressWorkorderListView.vue` + 订单详情「快递工单」卡片（2026-09-23，只过了类型检查） | ✅ 话费卡券争议处理见下方说明；快递工单 2026-09-23 完成，见下方「快递工单」说明 |
 | 财务报表 | 二期 | ✅ `App\Controller\Admin\ReportController` | ✅ `App\Service\Admin\FinanceReportService` | `views/FinanceReportView.vue`（顶层菜单「财务报表」）✅ 已联调（2026-09-21） | ✅ 见下方「财务报表」说明 |
+| 话费时效：话费订单的耗时与成功率 | 2026-10-07 新增 | ✅ `App\Controller\Admin\RechargeStatsController` | ✅ `App\Service\Order\RechargeStatsService` | `views/order/RechargeStatsView.vue`（菜单「订单管理 → 话费时效」，可按商户筛选） | ✅ 见下方「话费时效」说明 |
 | 对账：订单对账 / 返佣对账 / 差异标记处理 | 二期 | ✅ `App\Controller\Admin\ReconciliationController` | ✅ `App\Service\Admin\ReconciliationAdminService`（后台）/ `App\Service\Reconciliation\ReconciliationService`（产生） | `views/ReconciliationListView.vue`（顶层菜单「对账」）✅ 已联调（2026-09-21） | ✅ 订单对账 + 差异标记处理（2026-09-21）；返佣对账 2026-09-23 随电影票补齐（快递暂不对账），见下方「对账」和「供应商返佣」说明 |
 | 告警：列表查看 / 标记处理 | 二期 | ✅ `App\Controller\Admin\AlertController` | ✅ `App\Service\Admin\AlertAdminService`（后台）/ `App\Service\Alert\AlertService`（产生） | `views/AlertListView.vue`（顶层菜单「告警」）✅ 已联调（2026-09-21） | ✅ 见下方「告警」说明 |
 | 系统设置：管理员账号 / 角色权限 / 系统参数 / 操作日志 | 一期 | ✅ `AdminUserController` / `RoleController` / `SystemSettingController` / `OperationLogController` | ✅ `AdminUserAdminService` / `RoleAdminService` / `SystemSettingAdminService` / `OperationLogAdminService` | `views/system/*` ✅ 已联调（2026-09-21，四页逐个走过，见下方说明）；菜单按 `/admin/auth/me` 返回的权限显示 | ✅ 管理员：不能禁用自己/改自己角色，只有超管能动超管账号，至少保留一个启用的超管；角色：不能改自己所在角色的权限、只能授出自己有的权限，预置运营/财务/客服（`admin:sync-permissions` 补建）；系统参数：代码里在读的 6 项，带范围校验；返佣期限可以短于争议时限（requirements.md 5.4「扣回」允许，到账后才核实未到账的从余额扣回），原先的互相限制已去掉；操作日志：`App\Aspect\AdminOperationLogAspect` 给所有挂了 `#[RequiresPermission]` 的写操作自动记日志（敏感字段打码），Service 手动记过前后对比的不重复记；管理员修改自己密码 `PUT /admin/auth/password` |
@@ -611,6 +613,20 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 > - 测试 `test/Cases/Admin/PricingRuleControllerTest.php`（11 个：未设置返回 null、固定/百分比保存与就地更新、
 >   四舍五入进位、7.2 的"成本 10 → 售价 12"例子、预览未保存规则不落库、没规则时预览 422、
 >   非法值和非法业务线 422、只读权限不能改、`salePriceFor()` 没配规则抛错）。
+
+> 「话费时效」（2026-10-07 新增）：话费订单的耗时与成功率，系统后台 `GET /admin/recharge-stats`（权限 `order.view`，可传
+> `merchant_id`）和商户后台 `GET /merchant/recharge-stats`（只看自己）共用 `App\Service\Order\RechargeStatsService`。
+> - **以订单为单位、按下单时间取数**：一笔订单换过几家供应商都只算一次，看的是商户感受到的结果；按供应商看每次尝试的成功率仍在
+>   供应商详情的统计里，两边口径不同。
+> - **成功率 = 成功 ÷（成功 + 失败 + 已退款）**：已退款等于没充上（售后核实未到账、供应商成功后全额退款），算没成功；处理中、
+>   异常单不进分母，单独给 `pending`；部分退款仍算成功。跟商户首页「今日成功率」同一口径。
+> - **耗时只算成功订单，从下单到成功**（`completed_at - created_at`），给平均值、中位数、90 分位（最近秩法）。MySQL 5.7 没有
+>   窗口函数，`OrderDao::rechargeDurationHistogram()` 按「分组 + 耗时秒数」汇总笔数，PHP 按分布算分位数，返回行数只跟
+>   不同的耗时值有关，不随订单量增长。
+> - 维度：按天（补齐空日期）、按商品（带商品名）、按运营商；区间只收 `YYYY-MM-DD`，默认最近 7 天，最多 92 天。
+> - 前端两个后台共用 `web/shared/src/components/RechargeStatsPanel.vue`（汇总数 + 明细表），耗时用 `duration()` 显示成「5 分 20 秒」。
+> - 测试 `test/Cases/Admin/RechargeStatsControllerTest.php`（成功率和分位数按例子逐字段核对、三种维度及补齐空日期、
+>   非法参数 422、没有 `order.view` 403、商户只能看自己的订单）。
 
 > 「财务报表」（requirements.md 8.3、1.2，2026-09-21）：两个只读聚合接口，不建表
 > （database-design.md 6「财务报表走查询/视图，不新增表」）。
@@ -1126,17 +1142,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 | 芒果驱动 | 11 | 11 | 0 | 0 |
 | 供应商路由与风控 | 5 | 5 | 0 | 0 |
 | 开放 API 接口 | 15 | 15 | 0 | 0 |
-| 商户管理后台 | 16 | 16 | 0 | 0 |
-| 系统管理后台 | 19 | 19 | 0 | 0 |
+| 商户管理后台 | 17 | 17 | 0 | 0 |
+| 系统管理后台 | 20 | 20 | 0 | 0 |
 | 异步任务与定时任务 | 14 | 14 | 0 | 0 |
-| **合计** | **110** | **110** | **0** | **0** |
+| **合计** | **112** | **112** | **0** | **0** |
 
 上表"商户管理后台""系统管理后台"两行只统计后端接口。前端页面单独统计（第 7、8 节"前端页面"列）：
 
 | 前端 | 总数 | 接口已就绪（✅/🔨） | 页面已完成 | 页面待补（接口已就绪） |
 |---|---|---|---|---|
-| 商户管理后台（web/merchant） | 16 | 16 | 16 | 0 |
-| 系统管理后台（web/admin） | 19 | 19 | 19 | 0 |
+| 商户管理后台（web/merchant） | 17 | 17 | 17 | 0 |
+| 系统管理后台（web/admin） | 20 | 20 | 20 | 0 |
 
 > **前端进度（2026-09-18）**：已就绪接口的页面全部写完并登录联调过（两个后台逐页走过一遍）。联调时修掉的问题：
 > model-cache 用 Redis hash 存储会把 NULL 读成 ''（已改 `RedisStringHandler`）、商户提交的图片链接只接受 http(s)（防管理端 XSS）、
