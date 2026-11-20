@@ -92,7 +92,8 @@ class ProductControllerTest extends HttpTestCase
 
         $body = $this->get($merchant, 'express');
 
-        $this->assertFalse($body['available']);
+        // 快递已经开放（SubscriptionService::OPEN_BUSINESS_LINES），但没有本地商品，只显示等级比例
+        $this->assertTrue($body['available']);
         $this->assertSame('0.3000', $body['level_rate']);
         $this->assertSame([], $body['data']);
     }

@@ -23,11 +23,9 @@ use App\Service\Order\SupplierRouter;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
 use Hyperf\Contract\ConfigInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\TestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use RuntimeException;
 
@@ -42,6 +40,8 @@ use function Hyperf\Support\make;
  */
 class SupplierOrderDispatcherTest extends TestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     private array $productIds = [];
@@ -54,8 +54,7 @@ class SupplierOrderDispatcherTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->config()->set('supplier.dispatch_async', true);
     }
 

@@ -67,7 +67,8 @@ class MerchantDaoTest extends TestCase
         $this->assertSame($a->phone, $found->get($a->id)->phone);
 
         // 第二次应该命中缓存：直接改库（不经过模型事件、不清缓存），读到的仍是缓存里的旧值
-        Merchant::query()->whereKey($a->id)->update(['phone' => '13000000000']);
+        // 手机号唯一：用本用例商户的 id 拼一个不会跟库里别的行撞上的号码
+        Merchant::query()->whereKey($a->id)->update(['phone' => sprintf('170%08d', $a->id % 100000000)]);
         $this->assertSame($a->phone, $dao->findMany([$a->id])->get($a->id)->phone);
 
         $this->assertTrue($dao->findMany([])->isEmpty());

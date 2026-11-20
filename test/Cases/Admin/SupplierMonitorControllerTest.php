@@ -29,11 +29,9 @@ use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\AsyncQueue\JobInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use RuntimeException;
 
@@ -48,6 +46,8 @@ use function Hyperf\Support\make;
  */
 class SupplierMonitorControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const PASSWORD = 'correct-password';
 
     private array $adminUserIds = [];
@@ -70,8 +70,7 @@ class SupplierMonitorControllerTest extends HttpTestCase
      */
     protected function setUp(): void
     {
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
     }
 

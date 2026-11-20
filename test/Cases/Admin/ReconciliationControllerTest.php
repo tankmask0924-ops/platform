@@ -26,11 +26,9 @@ use App\Supplier\Kasushou\KasushouDriver;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\UnifiedResult;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use RuntimeException;
 
@@ -46,6 +44,8 @@ use function Hyperf\Support\make;
  */
 class ReconciliationControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const PASSWORD = 'correct-password';
 
     /**
@@ -78,8 +78,7 @@ class ReconciliationControllerTest extends HttpTestCase
     {
         $this->batchDate = date('Y-m-d');
         $this->orderDay = date('Y-m-d', strtotime('-1 day'));
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
     }
 

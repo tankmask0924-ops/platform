@@ -33,11 +33,9 @@ use App\Supplier\UnifiedResult;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use Mockery\MockInterface;
 use RuntimeException;
@@ -56,6 +54,8 @@ use function Hyperf\Support\make;
  */
 class MovieControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const SECRET = 'movie-secret';
 
     private array $merchantIds = [];
@@ -80,8 +80,7 @@ class MovieControllerTest extends HttpTestCase
         PricingRule::query()->delete();
         PricingRule::create(['business_line' => 'movie', 'rule_type' => 'fixed', 'value' => '2']);
 
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
 
         $queue = Mockery::mock(DriverInterface::class);

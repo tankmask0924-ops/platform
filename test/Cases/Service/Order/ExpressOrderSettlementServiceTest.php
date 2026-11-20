@@ -36,9 +36,7 @@ use Carbon\Carbon;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use PHPUnit\Framework\TestCase;
 
@@ -56,6 +54,8 @@ use function Hyperf\Support\make;
  */
 class ExpressOrderSettlementServiceTest extends TestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     private array $supplierIds = [];
@@ -80,8 +80,7 @@ class ExpressOrderSettlementServiceTest extends TestCase
         PricingRule::query()->delete();
         PricingRule::create(['business_line' => 'express', 'rule_type' => 'fixed', 'value' => '2']);
 
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
 
         // 数一下回调商户的次数，不真的往队列里推
         $this->notifications = 0;

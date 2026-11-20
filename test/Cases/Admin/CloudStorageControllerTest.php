@@ -24,11 +24,9 @@ use App\Storage\CloudStorageClient;
 use App\Storage\CloudStorageClientFactory;
 use App\Storage\StorageConfig;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use RuntimeException;
 
@@ -45,6 +43,8 @@ use function Hyperf\Support\make;
  */
 class CloudStorageControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const PASSWORD = 'correct-password';
 
     /** 1x1 透明 PNG */
@@ -68,8 +68,7 @@ class CloudStorageControllerTest extends HttpTestCase
 
     protected function setUp(): void
     {
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
         $factory = Mockery::mock(CloudStorageClientFactory::class);
         $factory->shouldReceive('make')->andReturnUsing(function (StorageConfig $config) {

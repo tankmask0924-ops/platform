@@ -29,10 +29,9 @@ use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
 use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 
 use function Hyperf\Support\make;
@@ -93,6 +92,8 @@ use function Hyperf\Support\make;
  */
 class NotifySupplierControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     private array $supplierIds = [];
@@ -103,8 +104,7 @@ class NotifySupplierControllerTest extends HttpTestCase
 
     protected function setUp(): void
     {
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
     }
 

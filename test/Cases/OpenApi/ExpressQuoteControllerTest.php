@@ -23,11 +23,9 @@ use App\Signature\SignatureSigner;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\Yunyang\YunyangDriver;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use RuntimeException;
 
@@ -45,6 +43,8 @@ use function Hyperf\Support\make;
  */
 class ExpressQuoteControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const SECRET = 'express-quote-secret';
 
     private array $merchantIds = [];
@@ -71,8 +71,7 @@ class ExpressQuoteControllerTest extends HttpTestCase
         PricingRule::create(['business_line' => 'express', 'rule_type' => 'fixed', 'value' => '2']);
 
         // 每个用例换一个新容器，替换进去的驱动工厂不影响别的测试
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
     }
 

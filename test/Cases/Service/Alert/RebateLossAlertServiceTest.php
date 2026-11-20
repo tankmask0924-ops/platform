@@ -17,10 +17,8 @@ use App\Model\Order;
 use App\Service\Alert\AlertService;
 use App\Service\Alert\RebateLossAlertService;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\TestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use Mockery\MockInterface;
 
@@ -35,13 +33,14 @@ use function Hyperf\Support\make;
  */
 class RebateLossAlertServiceTest extends TestCase
 {
+    use RebuildsContainer;
+
     private MockInterface $alertService;
 
     protected function setUp(): void
     {
         parent::setUp();
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->alertService = Mockery::mock(AlertService::class);
         ApplicationContext::getContainer()->set(AlertService::class, $this->alertService);
     }

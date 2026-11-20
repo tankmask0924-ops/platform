@@ -19,10 +19,8 @@ use App\Model\MerchantBalanceLog;
 use App\Model\Order;
 use App\Service\Reconciliation\FrozenBalanceCheckService;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\TestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 
 use function Hyperf\Support\make;
@@ -36,14 +34,15 @@ use function Hyperf\Support\make;
  */
 class FrozenBalanceCheckServiceTest extends TestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     protected function setUp(): void
     {
         parent::setUp();
         // 有个用例要替换 OrderDao，Service 在容器里是单例，每个用例重建容器
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
     }
 
     protected function tearDown(): void

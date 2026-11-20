@@ -23,11 +23,9 @@ use App\Service\Order\ExpressOrderSettlementService;
 use App\Supplier\SupplierDriverFactory;
 use App\Supplier\Yunyang\YunyangDriver;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 
 use function Hyperf\Support\make;
@@ -41,6 +39,7 @@ use function Hyperf\Support\make;
  */
 class ExpressWorkorderControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
     use CreatesAdmins;
 
     private const PASSWORD = 'correct-password';
@@ -56,8 +55,7 @@ class ExpressWorkorderControllerTest extends HttpTestCase
      */
     protected function setUp(): void
     {
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
     }
 

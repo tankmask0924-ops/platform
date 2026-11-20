@@ -43,9 +43,7 @@ use Carbon\Carbon;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use Mockery\MockInterface;
 use PHPUnit\Framework\TestCase;
@@ -62,6 +60,8 @@ use function Hyperf\Support\make;
  */
 class MovieOrderSettlementServiceTest extends TestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     private array $supplierIds = [];
@@ -76,8 +76,7 @@ class MovieOrderSettlementServiceTest extends TestCase
 
     protected function setUp(): void
     {
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
 
         $this->notifications = 0;
         $queue = Mockery::mock(DriverInterface::class);

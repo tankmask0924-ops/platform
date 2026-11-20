@@ -33,11 +33,9 @@ use App\Supplier\Yunyang\YunyangStatusMapper;
 use Hyperf\AsyncQueue\Driver\DriverFactory;
 use Hyperf\AsyncQueue\Driver\DriverInterface;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\Client;
 use HyperfTest\HttpTestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 use Mockery\MockInterface;
 
@@ -55,6 +53,8 @@ use function Hyperf\Support\make;
  */
 class ExpressOrderControllerTest extends HttpTestCase
 {
+    use RebuildsContainer;
+
     private const SECRET = 'express-order-secret';
 
     private array $merchantIds = [];
@@ -81,8 +81,7 @@ class ExpressOrderControllerTest extends HttpTestCase
         PricingRule::query()->delete();
         PricingRule::create(['business_line' => 'express', 'rule_type' => 'fixed', 'value' => '2']);
 
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
         $this->client = make(Client::class);
 
         $queue = Mockery::mock(DriverInterface::class);

@@ -21,10 +21,8 @@ use App\Service\Alert\AlertPatrolService;
 use App\Service\Alert\AlertService;
 use App\Service\Merchant\BalanceService;
 use Hyperf\Context\ApplicationContext;
-use Hyperf\Contract\ApplicationInterface;
-use Hyperf\Di\Container;
-use Hyperf\Di\Definition\DefinitionSourceFactory;
 use Hyperf\Testing\TestCase;
+use HyperfTest\RebuildsContainer;
 use Mockery;
 
 use function Hyperf\Support\make;
@@ -40,6 +38,8 @@ use function Hyperf\Support\make;
  */
 class AlertPatrolServiceTest extends TestCase
 {
+    use RebuildsContainer;
+
     private array $merchantIds = [];
 
     private ?array $backlogSettingBackup = null;
@@ -52,8 +52,7 @@ class AlertPatrolServiceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        ApplicationContext::setContainer(new Container((new DefinitionSourceFactory())()));
-        ApplicationContext::getContainer()->get(ApplicationInterface::class);
+        $this->rebuildContainer();
 
         $alertService = Mockery::mock(AlertService::class);
         $alertService->shouldReceive('raise')->andReturnUsing(function (string $type, string $level, string $message, ?string $relatedType = null, ?int $relatedId = null) {
