@@ -17,6 +17,7 @@ use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
 use App\Model\CardBrand;
+use App\Model\CardCategory;
 use App\Model\MerchantLevel;
 use App\Model\MerchantLevelBusinessRate;
 use App\Model\Product;
@@ -62,6 +63,8 @@ class ProductControllerTest extends HttpTestCase
 
     private array $brandIds = [];
 
+    private array $categoryIds = [];
+
     protected function tearDown(): void
     {
         foreach ($this->productIds as $id) {
@@ -77,7 +80,9 @@ class ProductControllerTest extends HttpTestCase
             Product::destroy($id);
         }
         CardBrand::destroy($this->brandIds);
+        CardCategory::destroy($this->categoryIds);
         $this->brandIds = [];
+        $this->categoryIds = [];
         $this->goodsIds = [];
         $this->supplierIds = [];
         foreach ($this->adminUserIds as $id) {
@@ -299,6 +304,8 @@ class ProductControllerTest extends HttpTestCase
         $this->productIds[] = $body['id'];
         $this->assertSame($brand->id, $body['brand_id']);
         $this->assertSame($brand->name, $body['brand_name']);
+        $this->assertSame($brand->category_id, $body['category_id']);
+        $this->assertNotNull($body['category_name']);
 
         // 品牌停用后，已有商品照常保存；按品牌筛选
         $brand->fill(['status' => 'disabled'])->save();
@@ -306,6 +313,12 @@ class ProductControllerTest extends HttpTestCase
         $list = json_decode((string) $this->client->request('GET', '/admin/products?brand_id=' . $brand->id, ['headers' => ['Authorization' => 'Bearer ' . $this->viewToken()]])->getBody(), true);
         $this->assertSame([$body['id']], array_column($list['data'], 'id'));
         $this->assertSame($brand->name, $list['data'][0]['brand_name']);
+
+        // 按分类筛：分类下全部品牌的商品；没有品牌的分类筛不出东西
+        $byCategory = json_decode((string) $this->client->request('GET', '/admin/products?category_id=' . $brand->category_id, ['headers' => ['Authorization' => 'Bearer ' . $this->viewToken()]])->getBody(), true);
+        $this->assertSame([$body['id']], array_column($byCategory['data'], 'id'));
+        $empty = json_decode((string) $this->client->request('GET', '/admin/products?category_id=' . $this->createCategory()->id, ['headers' => ['Authorization' => 'Bearer ' . $this->viewToken()]])->getBody(), true);
+        $this->assertSame(['data' => [], 'total' => 0], ['data' => $empty['data'], 'total' => $empty['total']]);
     }
 
     public function testCreateWithInvalidBusinessLineReturns422()
@@ -650,12 +663,21 @@ class ProductControllerTest extends HttpTestCase
         ];
     }
 
-    private function createBrand(string $status = 'active'): CardBrand
+    private function createBrand(string $status = 'active', ?CardCategory $category = null): CardBrand
     {
-        $brand = CardBrand::create(['name' => '品牌_' . uniqid('', true), 'sort' => 0, 'status' => $status]);
+        $category ??= $this->createCategory();
+        $brand = CardBrand::create(['category_id' => $category->id, 'name' => '品牌_' . uniqid('', true), 'sort' => 0, 'status' => $status]);
         $this->brandIds[] = $brand->id;
 
         return $brand;
+    }
+
+    private function createCategory(): CardCategory
+    {
+        $category = CardCategory::create(['name' => '分类_' . uniqid('', true), 'sort' => 0, 'status' => 'active']);
+        $this->categoryIds[] = $category->id;
+
+        return $category;
     }
 
     private function createSupplier(string $businessLine): Supplier

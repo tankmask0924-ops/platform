@@ -1149,7 +1149,10 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
   路由也跳过最少购买数量大于 1 的映射（供应商后来改了限制时兜底）。后台供应商商品列表显示「下单参数」和最少购买数量。
 - **卡券品牌**：新表 `card_brands`，`products.brand_id`；后台 `GET/POST /admin/card-brands`、`PUT/DELETE /admin/card-brands/{id}`（权限 `product.view` / `product.manage`），页面 `views/product/CardBrandView.vue`。
   新建卡券商品必须选启用的品牌，话费不能带品牌；有商品的品牌不能删、只能停用，停用后已有商品照常编辑。商品列表可按 `brand_id` 筛选；开放 API 商品列表、商户后台「商品价格」返回品牌（已更新 `open-api-integration.md`）。
-- **后台菜单**：「本地商品」拆成「话费商品」`/products/recharge`、「卡券商品」`/products/card`（同一个列表页按业务线传参），新增「卡券品牌」`/products/brands`；旧地址 `/products` 跳到话费商品。
+- **后台菜单**：「本地商品」拆成「话费商品」`/products/recharge`、「卡券商品」`/products/card`（同一个列表页按业务线传参），新增「卡券分类」`/products/brands`；旧地址 `/products` 跳到话费商品。
+- **两级分类**（同日追加）：新表 `card_categories`，`card_brands.category_id`；后台 `GET/POST /admin/card-categories`、`PUT/DELETE /admin/card-categories/{id}`，品牌列表可按 `category_id` 筛、新建品牌必须选启用的分类；有品牌的分类不能删。
+  商品列表可按 `category_id` 筛（分类下全部品牌的商品）；商品详情、后台列表、开放 API、商户后台都返回 `category_id` / `category_name`（`App\Service\Product\CardBrandLookupService` 一次批量补品牌和分类）。
+  后台「卡券分类」页左边分类、右边选中分类下的品牌；新建卡券商品时品牌下拉按分类分组。会员等级、时长是商品本身的区别，不做成分类。测试 `CardCategoryControllerTest`。
 - 测试：`ProductMappingControllerTest::testParamMappingFollowsGoodsTemplateAndUnusableGoodsAreRejected`、`ProductMappingDetailRefreshTest`、`SupplierRouterTest::testMappingWhoseGoodsNeedsMoreThanOneIsNotEligible`、`ProductSyncServiceTest::testSaleRestrictionsAreCopiedToMappings`、`KasushouDriverTest`、`CardBrandControllerTest`、`ProductControllerTest::testCardBrandIsRequiredValidatedAndReturned`。
 
 **云存储与商品图片**（2026-11-20）：

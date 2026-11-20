@@ -150,9 +150,11 @@ export interface Product {
   province: string | null
   charge_speed: string | null
   card_type: string | null
-  /** 卡券品牌 */
+  /** 卡券品牌和所属分类 */
   brand_id: number | null
   brand_name: string | null
+  category_id: number | null
+  category_name: string | null
   face_value: string
   sale_price: string
   rebate_amount: string
@@ -166,7 +168,7 @@ export interface ProductDetail extends Product {
   level_rebates: { level_id: number; level_name: string | null; rebate_rate: string }[]
 }
 
-export type ProductForm = Partial<Omit<Product, 'id' | 'brand_name' | 'created_at' | 'updated_at'>> & {
+export type ProductForm = Partial<Omit<Product, 'id' | 'brand_name' | 'category_id' | 'category_name' | 'created_at' | 'updated_at'>> & {
   /** 只在新建时传：选中的供应商商品，顺序即优先级 */
   supplier_goods_ids?: number[]
 }
@@ -217,9 +219,29 @@ export const supplierGoodsApi = {
   list: (params: Query) => http.get<Paged<SupplierGoods>>('/admin/supplier-goods', params),
 }
 
-/** 卡券品牌：App\Controller\Admin\CardBrandController */
+/** 卡券分类（第一级）：App\Controller\Admin\CardCategoryController */
+export interface CardCategory {
+  id: number
+  name: string
+  sort: number
+  status: 'active' | 'disabled'
+  brand_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export const cardCategoryApi = {
+  list: (status?: 'active' | 'disabled') => http.get<CardCategory[]>('/admin/card-categories', status ? { status } : {}),
+  create: (data: { name: string; sort: number }) => http.post<CardCategory>('/admin/card-categories', data),
+  update: (id: number, data: Partial<{ name: string; sort: number; status: string }>) => http.put<CardCategory>(`/admin/card-categories/${id}`, data),
+  remove: (id: number) => http.delete<Ok>(`/admin/card-categories/${id}`),
+}
+
+/** 卡券品牌（第二级，属于一个分类）：App\Controller\Admin\CardBrandController */
 export interface CardBrand {
   id: number
+  category_id: number | null
+  category_name: string | null
   name: string
   sort: number
   status: 'active' | 'disabled'
@@ -229,9 +251,10 @@ export interface CardBrand {
 }
 
 export const cardBrandApi = {
-  list: (status?: 'active' | 'disabled') => http.get<CardBrand[]>('/admin/card-brands', status ? { status } : {}),
-  create: (data: { name: string; sort: number; status?: string }) => http.post<CardBrand>('/admin/card-brands', data),
-  update: (id: number, data: Partial<{ name: string; sort: number; status: string }>) => http.put<CardBrand>(`/admin/card-brands/${id}`, data),
+  list: (params: { status?: 'active' | 'disabled'; category_id?: number } = {}) => http.get<CardBrand[]>('/admin/card-brands', params),
+  create: (data: { category_id: number; name: string; sort: number }) => http.post<CardBrand>('/admin/card-brands', data),
+  update: (id: number, data: Partial<{ category_id: number; name: string; sort: number; status: string }>) =>
+    http.put<CardBrand>(`/admin/card-brands/${id}`, data),
   remove: (id: number) => http.delete<Ok>(`/admin/card-brands/${id}`),
 }
 

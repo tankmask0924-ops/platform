@@ -41,8 +41,12 @@ class CardBrandController extends AbstractController
     public function index(): array
     {
         $status = $this->request->input('status');
+        $categoryId = $this->request->input('category_id');
 
-        return $this->cardBrandAdminService->list($status !== null && $status !== '' ? (string) $status : null);
+        return $this->cardBrandAdminService->list(
+            $status !== null && $status !== '' ? (string) $status : null,
+            $categoryId !== null && $categoryId !== '' ? (int) $categoryId : null
+        );
     }
 
     #[Middleware(AdminAuthMiddleware::class)]

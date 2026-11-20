@@ -255,9 +255,11 @@ export interface PricedProduct {
   province: string | null
   charge_speed: string | null
   card_type: string | null
-  /** 卡券品牌，话费为 null */
+  /** 卡券品牌和所属分类，话费为 null */
   brand_id: number | null
   brand_name: string | null
+  category_id: number | null
+  category_name: string | null
   face_value: string
   sale_price: string
   /** 按本商户当前等级算出的每单返佣 */

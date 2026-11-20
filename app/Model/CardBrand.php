@@ -15,10 +15,12 @@ namespace App\Model;
 use Carbon\Carbon;
 
 /**
- * 卡券品牌（爱奇艺、腾讯视频、游戏点卡……），卡券商品按品牌归类，后台和商户按品牌筛选。
+ * 卡券品牌（爱奇艺、腾讯视频……），卡券的第二级，属于一个分类（App\Model\CardCategory）。
+ * 卡券商品选品牌，后台和商户按分类、品牌筛选。
  * 话费不用品牌，运营商体现在 products.operator 上。
  *
  * @property int $id
+ * @property null|int $category_id card_categories.id（品牌属于哪个分类；新建品牌必填）
  * @property string $name
  * @property int $sort
  * @property string $status active / disabled
@@ -33,7 +35,7 @@ class CardBrand extends Model
 
     protected ?string $table = 'card_brands';
 
-    protected array $fillable = ['name', 'sort', 'status'];
+    protected array $fillable = ['category_id', 'name', 'sort', 'status'];
 
     protected array $casts = ['sort' => 'integer'];
 }

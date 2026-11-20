@@ -85,7 +85,7 @@ const router = createRouter({
           path: 'products/brands',
           name: 'card-brands',
           component: () => import('@/views/product/CardBrandView.vue'),
-          meta: { title: '卡券品牌' },
+          meta: { title: '卡券分类' },
         },
         {
           path: 'products/:id(\\d+)',

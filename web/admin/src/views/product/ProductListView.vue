@@ -2,9 +2,9 @@
 import { labelOf, money, StatusTag, toOptions, usePagedList } from '@platform/shared'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { type CardBrand, cardBrandApi, type Product, productApi } from '@/api/admin'
+import { type CardBrand, cardBrandApi, type CardCategory, cardCategoryApi, type Product, productApi } from '@/api/admin'
 import { cardTypeLabels, operatorLabels, productStatusLabels } from '@/labels'
 import ProductFormDialog from './ProductFormDialog.vue'
 
@@ -13,20 +13,33 @@ const props = defineProps<{ businessLine: 'recharge' | 'card' }>()
 
 const router = useRouter()
 const route = useRoute()
-const list = usePagedList<Product, { business_line: string; status: string; brand_id: number | '' }>(productApi.list, {
+const list = usePagedList<Product, { business_line: string; status: string; category_id: number | ''; brand_id: number | '' }>(productApi.list, {
   business_line: props.businessLine,
   status: '',
+  category_id: '',
   // 从「卡券品牌」页点商品数跳过来时带着品牌
   brand_id: props.businessLine === 'card' && route.query.brand_id ? Number(route.query.brand_id) : '',
 })
 const { rows, total, page, perPage, loading, filters } = list
 const formDialog = ref<InstanceType<typeof ProductFormDialog>>()
 const brands = ref<CardBrand[]>([])
+const categories = ref<CardCategory[]>([])
+// 品牌下拉跟着已选的分类走
+const brandsInCategory = computed(() =>
+  filters.category_id === '' ? brands.value : brands.value.filter((b) => b.category_id === filters.category_id),
+)
 
 async function loadBrands() {
   if (props.businessLine === 'card' && brands.value.length === 0) {
-    brands.value = await cardBrandApi.list()
+    ;[brands.value, categories.value] = await Promise.all([cardBrandApi.list(), cardCategoryApi.list()])
   }
+}
+
+function onCategoryChange() {
+  if (filters.brand_id !== '' && !brandsInCategory.value.some((b) => b.id === filters.brand_id)) {
+    filters.brand_id = ''
+  }
+  list.search()
 }
 
 // 从「话费商品」切到「卡券商品」时组件会复用，换业务线要重新查
@@ -34,6 +47,7 @@ watch(
   () => props.businessLine,
   (line) => {
     filters.business_line = line
+    filters.category_id = ''
     filters.brand_id = ''
     loadBrands()
     list.search()
@@ -44,7 +58,7 @@ function spec(row: Product): string {
   if (row.business_line === 'recharge') {
     return [labelOf(operatorLabels, row.operator), row.province ?? '全国'].join(' / ')
   }
-  return [row.brand_name ?? '未设置品牌', labelOf(cardTypeLabels, row.card_type)].join(' / ')
+  return [row.category_name ?? '未分类', row.brand_name ?? '未设置品牌', labelOf(cardTypeLabels, row.card_type)].join(' / ')
 }
 
 async function toggle(row: Product) {
@@ -75,9 +89,14 @@ onMounted(() => {
         {{ props.businessLine === 'card' ? '新增卡券商品' : '新增话费商品' }}
       </el-button>
       <div class="filters">
-        <el-select v-if="props.businessLine === 'card'" v-model="filters.brand_id" clearable placeholder="全部品牌" style="width: 150px" @change="list.search">
-          <el-option v-for="b in brands" :key="b.id" :value="b.id" :label="b.status === 'active' ? b.name : `${b.name}（已停用）`" />
-        </el-select>
+        <template v-if="props.businessLine === 'card'">
+          <el-select v-model="filters.category_id" clearable placeholder="全部分类" style="width: 140px" @change="onCategoryChange">
+            <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="c.status === 'active' ? c.name : `${c.name}（已停用）`" />
+          </el-select>
+          <el-select v-model="filters.brand_id" clearable placeholder="全部品牌" style="width: 150px" @change="list.search">
+            <el-option v-for="b in brandsInCategory" :key="b.id" :value="b.id" :label="b.status === 'active' ? b.name : `${b.name}（已停用）`" />
+          </el-select>
+        </template>
         <el-select v-model="filters.status" clearable placeholder="全部状态" style="width: 120px" @change="list.search">
           <el-option v-for="o in toOptions(productStatusLabels)" :key="o.value" :value="o.value" :label="o.label" />
         </el-select>
@@ -93,7 +112,7 @@ onMounted(() => {
         </template>
       </el-table-column>
       <el-table-column prop="name" label="名称" min-width="180" />
-      <el-table-column :label="props.businessLine === 'card' ? '品牌 / 类型' : '运营商 / 地区'" min-width="150">
+      <el-table-column :label="props.businessLine === 'card' ? '分类 / 品牌 / 类型' : '运营商 / 地区'" min-width="190">
         <template #default="{ row }">{{ spec(row as Product) }}</template>
       </el-table-column>
       <el-table-column label="面值" width="100" align="right">

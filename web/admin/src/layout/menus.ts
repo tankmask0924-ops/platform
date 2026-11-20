@@ -48,7 +48,7 @@ export const menus: MenuItem[] = [
     children: [
       { path: '/products/recharge', title: '话费商品', icon: Box, permission: 'product.view' },
       { path: '/products/card', title: '卡券商品', icon: Tickets, permission: 'product.view' },
-      { path: '/products/brands', title: '卡券品牌', icon: CollectionTag, permission: 'product.view' },
+      { path: '/products/brands', title: '卡券分类', icon: CollectionTag, permission: 'product.view' },
       { path: '/suppliers', title: '供应商', icon: OfficeBuilding, permission: 'supplier.view' },
       { path: '/pricing-rules', title: '加价规则', icon: Money, permission: 'pricing.view' },
     ],

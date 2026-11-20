@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Service\Admin;
 
 use App\Dao\CardBrandDao;
+use App\Dao\CardCategoryDao;
 use App\Dao\ProductDao;
 use App\Model\CardBrand;
 use App\Service\AbstractService;
@@ -21,7 +22,7 @@ use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
 /**
- * 系统管理后台「卡券品牌」：增删改查。商品已经用到的品牌不能删，只能停用（停用后新建、编辑卡券商品时选不到，
+ * 系统管理后台「卡券品牌」：卡券的第二级，每个品牌属于一个分类（新建品牌必须选启用的分类）。增删改查。商品已经用到的品牌不能删，只能停用（停用后新建、编辑卡券商品时选不到，
  * 已有商品不受影响）。权限跟本地商品一样：product.view / product.manage。
  */
 class CardBrandAdminService extends AbstractService
@@ -36,19 +37,26 @@ class CardBrandAdminService extends AbstractService
     #[Inject]
     protected ProductDao $productDao;
 
+    #[Inject]
+    protected CardCategoryDao $cardCategoryDao;
+
+    #[Inject]
+    protected CardCategoryAdminService $cardCategoryAdminService;
+
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function list(?string $status): array
+    public function list(?string $status, ?int $categoryId = null): array
     {
         if ($status !== null && ! in_array($status, self::STATUSES, true)) {
             throw new HttpException(422, 'status 必须是 active 或 disabled');
         }
 
-        $brands = $this->cardBrandDao->listAll($status);
+        $brands = $this->cardBrandDao->listAll($status, $categoryId);
         $counts = $this->productDao->countByBrand($brands->pluck('id')->all());
+        $categories = $this->categoryNames($brands->pluck('category_id')->all());
 
-        return $brands->map(fn (CardBrand $brand) => $this->format($brand, $counts[$brand->id] ?? 0))->values()->all();
+        return $brands->map(fn (CardBrand $brand) => $this->format($brand, $counts[$brand->id] ?? 0, $categories))->values()->all();
     }
 
     /**
@@ -58,9 +66,11 @@ class CardBrandAdminService extends AbstractService
     public function create(array $data): array
     {
         $name = $this->validateName($data['name'] ?? null, null);
+        $categoryId = $this->cardCategoryAdminService->assertSelectable($data['category_id'] ?? null);
 
         try {
             $brand = $this->cardBrandDao->create([
+                'category_id' => $categoryId,
                 'name' => $name,
                 'sort' => $this->validateSort($data['sort'] ?? 0),
                 'status' => array_key_exists('status', $data) ? $this->validateStatus($data['status']) : CardBrand::STATUS_ACTIVE,
@@ -69,7 +79,7 @@ class CardBrandAdminService extends AbstractService
             throw new HttpException(422, '品牌「' . $name . '」已经存在', 0, $e);
         }
 
-        return $this->format($brand, 0);
+        return $this->format($brand, 0, $this->categoryNames([$categoryId]));
     }
 
     /**
@@ -82,6 +92,9 @@ class CardBrandAdminService extends AbstractService
     {
         $brand = $this->findOrFail($id);
         $attributes = [];
+        if (array_key_exists('category_id', $data)) {
+            $attributes['category_id'] = $this->cardCategoryAdminService->assertSelectable($data['category_id'], $brand->category_id);
+        }
         if (array_key_exists('name', $data)) {
             $attributes['name'] = $this->validateName($data['name'], $id);
         }
@@ -98,7 +111,7 @@ class CardBrandAdminService extends AbstractService
             throw new HttpException(422, '品牌名称已经存在', 0, $e);
         }
 
-        return $this->format($brand, $this->productDao->countByBrand([$id])[$id] ?? 0);
+        return $this->format($brand, $this->productDao->countByBrand([$id])[$id] ?? 0, $this->categoryNames([$brand->category_id]));
     }
 
     public function delete(int $id): void
@@ -110,17 +123,6 @@ class CardBrandAdminService extends AbstractService
         }
 
         $brand->delete();
-    }
-
-    /**
-     * 按 id 批量取品牌名称，按 id 作键（商品列表补品牌名用）。
-     *
-     * @param array<int, int> $ids
-     * @return array<int, string>
-     */
-    public function namesById(array $ids): array
-    {
-        return $this->cardBrandDao->findMany($ids)->map(static fn (CardBrand $brand) => $brand->name)->all();
     }
 
     /**
@@ -184,12 +186,26 @@ class CardBrandAdminService extends AbstractService
     }
 
     /**
+     * @param array<int, null|int> $categoryIds
+     * @return array<int, string> 分类 id => 名称
+     */
+    private function categoryNames(array $categoryIds): array
+    {
+        $ids = array_values(array_unique(array_filter($categoryIds, static fn ($id) => $id !== null)));
+
+        return $this->cardCategoryDao->findMany($ids)->map(static fn ($category) => $category->name)->all();
+    }
+
+    /**
+     * @param array<int, string> $categoryNames
      * @return array<string, mixed>
      */
-    private function format(CardBrand $brand, int $productCount): array
+    private function format(CardBrand $brand, int $productCount, array $categoryNames): array
     {
         return [
             'id' => $brand->id,
+            'category_id' => $brand->category_id,
+            'category_name' => $brand->category_id === null ? null : ($categoryNames[$brand->category_id] ?? null),
             'name' => $brand->name,
             'sort' => $brand->sort,
             'status' => $brand->status,

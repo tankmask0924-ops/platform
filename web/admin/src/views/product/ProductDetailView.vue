@@ -255,8 +255,9 @@ onMounted(() => {
             <el-descriptions-item label="充值速度">{{ product.charge_speed ? labelOf(chargeSpeedLabels, product.charge_speed) : '不限' }}</el-descriptions-item>
           </template>
           <template v-else>
+            <el-descriptions-item label="卡券分类">{{ product.category_name ?? '未分类' }}</el-descriptions-item>
             <el-descriptions-item label="卡券品牌">{{ product.brand_name ?? '未设置' }}</el-descriptions-item>
-            <el-descriptions-item label="卡券类型" :span="2">{{ labelOf(cardTypeLabels, product.card_type) }}</el-descriptions-item>
+            <el-descriptions-item label="卡券类型">{{ labelOf(cardTypeLabels, product.card_type) }}</el-descriptions-item>
           </template>
           <el-descriptions-item label="面值">{{ money(product.face_value) }}</el-descriptions-item>
           <el-descriptions-item label="售价">{{ money(product.sale_price) }}</el-descriptions-item>

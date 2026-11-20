@@ -17,6 +17,7 @@ use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
 use App\Model\CardBrand;
+use App\Model\CardCategory;
 use App\Model\Product;
 use HyperfTest\HttpTestCase;
 
@@ -32,6 +33,8 @@ class CardBrandControllerTest extends HttpTestCase
 
     private array $brandIds = [];
 
+    private array $categoryIds = [];
+
     private array $productIds = [];
 
     private array $adminIds = [];
@@ -44,6 +47,7 @@ class CardBrandControllerTest extends HttpTestCase
     {
         Product::destroy($this->productIds);
         CardBrand::destroy($this->brandIds);
+        CardCategory::destroy($this->categoryIds);
         AdminUser::destroy($this->adminIds);
         foreach ($this->roleIds as $id) {
             AdminRolePermission::where('role_id', $id)->delete();
@@ -59,15 +63,22 @@ class CardBrandControllerTest extends HttpTestCase
         $token = $this->token(['product.view', 'product.manage']);
         $name = '爱奇艺_' . uniqid();
 
-        $created = $this->json('POST', '/admin/card-brands', $token, ['name' => '  ' . $name . ' ', 'sort' => 5]);
+        $category = $this->createCategory();
+        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => $name])->getStatusCode(), '品牌必须选分类');
+        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => $name, 'category_id' => $this->createCategory('disabled')->id])->getStatusCode(), '停用的分类不能选');
+
+        $created = $this->json('POST', '/admin/card-brands', $token, ['name' => '  ' . $name . ' ', 'sort' => 5, 'category_id' => $category->id]);
         $this->brandIds[] = $created['id'];
         $this->assertSame($name, $created['name']);
+        $this->assertSame($category->id, $created['category_id']);
+        $this->assertSame($category->name, $created['category_name']);
+        $this->assertSame([$created['id']], array_column($this->json('GET', '/admin/card-brands?category_id=' . $category->id, $token), 'id'));
         $this->assertSame('active', $created['status']);
         $this->assertSame(0, $created['product_count']);
 
-        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => $name])->getStatusCode(), '重名');
-        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => ''])->getStatusCode());
-        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => 'x' . uniqid(), 'sort' => -1])->getStatusCode());
+        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => $name, 'category_id' => $category->id])->getStatusCode(), '重名');
+        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => '', 'category_id' => $category->id])->getStatusCode());
+        $this->assertSame(422, $this->request('POST', '/admin/card-brands', $token, ['name' => 'x' . uniqid(), 'sort' => -1, 'category_id' => $category->id])->getStatusCode());
 
         $updated = $this->json('PUT', '/admin/card-brands/' . $created['id'], $token, ['status' => 'disabled', 'sort' => 1]);
         $this->assertSame('disabled', $updated['status']);
@@ -102,6 +113,14 @@ class CardBrandControllerTest extends HttpTestCase
         $this->assertSame(403, $this->request('POST', '/admin/card-brands', $viewer, ['name' => 'x' . uniqid()])->getStatusCode());
         $this->assertSame(401, $this->client->request('GET', '/admin/card-brands')->getStatusCode());
         $this->assertSame(422, $this->request('GET', '/admin/card-brands?status=bogus', $viewer)->getStatusCode());
+    }
+
+    private function createCategory(string $status = 'active'): CardCategory
+    {
+        $category = CardCategory::create(['name' => '分类_' . uniqid('', true), 'sort' => 0, 'status' => $status]);
+        $this->categoryIds[] = $category->id;
+
+        return $category;
     }
 
     private function json(string $method, string $path, string $token, array $data = []): array

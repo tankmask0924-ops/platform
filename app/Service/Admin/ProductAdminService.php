@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace App\Service\Admin;
 
+use App\Dao\CardBrandDao;
 use App\Dao\MerchantLevelDao;
 use App\Dao\ProductDao;
 use App\Dao\ProductLevelRebateDao;
@@ -19,6 +20,7 @@ use App\Dao\SupplierProductDao;
 use App\Model\Product;
 use App\Model\ProductLevelRebate;
 use App\Service\AbstractService;
+use App\Service\Product\CardBrandLookupService;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
@@ -129,10 +131,16 @@ class ProductAdminService extends AbstractService
     #[Inject]
     protected CardBrandAdminService $cardBrandAdminService;
 
+    #[Inject]
+    protected CardBrandLookupService $cardBrandLookup;
+
+    #[Inject]
+    protected CardBrandDao $cardBrandDao;
+
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
      */
-    public function list(int $page, int $perPage, ?string $businessLine, ?string $status, ?int $brandId = null): array
+    public function list(int $page, int $perPage, ?string $businessLine, ?string $status, ?int $brandId = null, ?int $categoryId = null): array
     {
         if ($businessLine !== null) {
             $this->validateBusinessLine($businessLine);
@@ -141,12 +149,14 @@ class ProductAdminService extends AbstractService
             $this->validateStatus($status);
         }
 
-        $products = $this->productDao->paginate($page, $perPage, $businessLine, $status, $brandId);
-        $brandNames = $this->cardBrandAdminService->namesById($products->pluck('brand_id')->filter()->unique()->values()->all());
+        // 按分类筛 = 这个分类下全部品牌的商品；分类下没有品牌时结果为空
+        $brandIds = $categoryId === null ? null : $this->cardBrandDao->idsInCategory($categoryId);
+        $products = $this->productDao->paginate($page, $perPage, $businessLine, $status, $brandId, $brandIds);
+        $brandInfo = $this->cardBrandLookup->infoByBrandIds($products->pluck('brand_id')->all());
 
         return [
-            'data' => $products->map(fn (Product $product) => $this->formatProduct($product, $brandNames))->values()->all(),
-            'total' => $this->productDao->count($businessLine, $status, $brandId),
+            'data' => $products->map(fn (Product $product) => $this->formatProduct($product, $brandInfo))->values()->all(),
+            'total' => $this->productDao->count($businessLine, $status, $brandId, $brandIds),
             'page' => $page,
             'per_page' => $perPage,
         ];
@@ -164,9 +174,9 @@ class ProductAdminService extends AbstractService
     {
         $product = $this->findOrFail($id);
 
-        $brandNames = $product->brand_id === null ? [] : $this->cardBrandAdminService->namesById([(int) $product->brand_id]);
+        $brandInfo = $this->cardBrandLookup->infoByBrandIds([$product->brand_id]);
 
-        return $this->formatProduct($product, $brandNames) + ['level_rebates' => $this->listLevelRebates($product->id)];
+        return $this->formatProduct($product, $brandInfo) + ['level_rebates' => $this->listLevelRebates($product->id)];
     }
 
     /**
@@ -388,9 +398,9 @@ class ProductAdminService extends AbstractService
      * @return array<string, mixed>
      */
     /**
-     * @param array<int, string> $brandNames 品牌 id => 名称
+     * @param array<int, array{brand_name: string, category_id: null|int, category_name: null|string}> $brandInfo CardBrandLookupService::infoByBrandIds()
      */
-    private function formatProduct(Product $product, array $brandNames = []): array
+    private function formatProduct(Product $product, array $brandInfo = []): array
     {
         return [
             'id' => $product->id,
@@ -402,7 +412,7 @@ class ProductAdminService extends AbstractService
             'charge_speed' => $product->charge_speed,
             'card_type' => $product->card_type,
             'brand_id' => $product->brand_id,
-            'brand_name' => $product->brand_id === null ? null : ($brandNames[$product->brand_id] ?? null),
+        ] + CardBrandLookupService::fieldsFor($product->brand_id, $brandInfo) + [
             'face_value' => $product->face_value,
             'sale_price' => $product->sale_price,
             'rebate_amount' => $product->rebate_amount,

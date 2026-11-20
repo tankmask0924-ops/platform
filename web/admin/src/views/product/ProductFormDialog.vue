@@ -99,6 +99,15 @@ const brands = ref<CardBrand[]>([])
 const brandOptions = computed(() =>
   brands.value.filter((b) => b.status === 'active' || b.id === form.brand_id),
 )
+// 按分类分组显示
+const brandGroups = computed(() => {
+  const groups = new Map<string, CardBrand[]>()
+  for (const b of brandOptions.value) {
+    const label = b.category_name ?? '未分类'
+    groups.set(label, [...(groups.get(label) ?? []), b])
+  }
+  return [...groups.entries()].map(([label, items]) => ({ label, items }))
+})
 
 async function loadBrands() {
   brands.value = await cardBrandApi.list()
@@ -194,11 +203,13 @@ async function save() {
         </el-select>
         <div v-if="editingId !== null" class="tip">已关联供应商商品，卡密 / 直充不能再改</div>
       </el-form-item>
-      <el-form-item v-if="form.business_line === 'card'" label="卡券品牌" prop="brand_id">
-        <el-select v-model="form.brand_id" placeholder="请选择" filterable style="width: 240px">
-          <el-option v-for="b in brandOptions" :key="b.id" :value="b.id" :label="b.status === 'active' ? b.name : `${b.name}（已停用）`" />
+      <el-form-item v-if="form.business_line === 'card'" label="分类 / 品牌" prop="brand_id">
+        <el-select v-model="form.brand_id" placeholder="选择品牌（按分类分组）" filterable style="width: 260px">
+          <el-option-group v-for="g in brandGroups" :key="g.label" :label="g.label">
+            <el-option v-for="b in g.items" :key="b.id" :value="b.id" :label="b.status === 'active' ? b.name : `${b.name}（已停用）`" />
+          </el-option-group>
         </el-select>
-        <router-link :to="{ name: 'card-brands' }" target="_blank" class="gap-left tip-link">管理品牌</router-link>
+        <router-link :to="{ name: 'card-brands' }" target="_blank" class="gap-left tip-link">管理分类和品牌</router-link>
       </el-form-item>
       <el-form-item v-if="editingId === null" label="供应商商品" required>
         <div class="goods">

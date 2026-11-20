@@ -12,13 +12,13 @@ declare(strict_types=1);
 
 namespace App\Service\OpenApi;
 
-use App\Dao\CardBrandDao;
 use App\Dao\ProductDao;
 use App\Exception\OpenApiException;
 use App\Model\Merchant;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
 use App\Service\Merchant\SubscriptionService;
+use App\Service\Product\CardBrandLookupService;
 use App\Service\Product\RebateCalculator;
 use Hyperf\Di\Annotation\Inject;
 
@@ -46,7 +46,7 @@ class ProductListService extends AbstractService
     protected ProductDao $productDao;
 
     #[Inject]
-    protected CardBrandDao $cardBrandDao;
+    protected CardBrandLookupService $cardBrandLookup;
 
     #[Inject]
     protected RebateCalculator $rebateCalculator;
@@ -67,7 +67,7 @@ class ProductListService extends AbstractService
         }
 
         $products = $this->productDao->listOnShelfByBusinessLine($businessLine);
-        $brands = $this->cardBrandDao->findMany($products->pluck('brand_id')->filter()->unique()->values()->all());
+        $brands = $this->cardBrandLookup->infoByBrandIds($products->pluck('brand_id')->all());
 
         $result = [];
         foreach ($products as $product) {
@@ -81,9 +81,9 @@ class ProductListService extends AbstractService
                 'charge_speed' => $product->charge_speed,
                 // 卡券专用：direct（直充，下单必传 recharge_account）/ card_secret（卡密，不传）
                 'card_type' => $product->card_type,
-                // 卡券品牌，话费和没设置品牌的卡券为 null
+                // 卡券品牌和所属分类，话费和没设置品牌的卡券为 null
                 'brand_id' => $product->brand_id,
-                'brand_name' => $product->brand_id === null ? null : $brands->get($product->brand_id)?->name,
+            ] + CardBrandLookupService::fieldsFor($product->brand_id, $brands) + [
                 'face_value' => $product->face_value,
                 'sale_price' => $product->sale_price,
                 'rebate' => $this->rebateCalculator->calculate($product, $merchant->level_id),

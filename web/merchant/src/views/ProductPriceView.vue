@@ -98,6 +98,9 @@ onMounted(load)
               </el-table-column>
             </template>
             <template v-else>
+              <el-table-column label="分类" width="110">
+                <template #default="{ row }">{{ row.category_name ?? '-' }}</template>
+              </el-table-column>
               <el-table-column label="品牌" width="120">
                 <template #default="{ row }">{{ row.brand_name ?? '-' }}</template>
               </el-table-column>

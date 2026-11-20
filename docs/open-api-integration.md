@@ -268,6 +268,8 @@ function sign(array $params, string $secret): string
 | `card_type` | string\|null | 卡券：`direct` 直充（下单必传 `recharge_account`）、`card_secret` 卡密（下单不能传）。话费为 `null` |
 | `brand_id` | int\|null | 卡券：品牌 ID（如爱奇艺、腾讯视频），可用来分组展示。话费为 `null` |
 | `brand_name` | string\|null | 卡券：品牌名称。话费为 `null` |
+| `category_id` | int\|null | 卡券：品牌所属分类 ID（如影音会员、游戏点卡）。话费为 `null` |
+| `category_name` | string\|null | 卡券：分类名称。话费为 `null` |
 | `face_value` | string | 面值（元） |
 | `sale_price` | string | 售价（元），下单时按此冻结 |
 | `rebate` | string | 每单返佣（元），订单完成后按平台规定期限到账 |
@@ -287,6 +289,8 @@ function sign(array $params, string $secret): string
       "card_type": null,
       "brand_id": null,
       "brand_name": null,
+      "category_id": null,
+      "category_name": null,
       "face_value": "100.00",
       "sale_price": "99.20",
       "rebate": "0.30"
@@ -300,7 +304,9 @@ function sign(array $params, string $secret): string
       "charge_speed": null,
       "card_type": "card_secret",
       "brand_id": 3,
-      "brand_name": "游戏点卡",
+      "brand_name": "王者荣耀",
+      "category_id": 2,
+      "category_name": "游戏点卡",
       "face_value": "100.00",
       "sale_price": "97.00",
       "rebate": "2.00"
@@ -310,7 +316,7 @@ function sign(array $params, string $secret): string
 ```
 
 - 两条业务线共用这一个接口，用不上的字段返回 `null`。
-- `image_url`、`brand_id`、`brand_name` 是 2026-11-20 新增的字段；图片地址可能随商品调整而变化，建议每次拉列表时以最新值为准，不要长期缓存旧地址。
+- `image_url`、`brand_id`、`brand_name`、`category_id`、`category_name` 是 2026-11-20 新增的字段；卡券按「分类 → 品牌」两级归类，会员等级、时长等区别体现在不同的商品上；图片地址可能随商品调整而变化，建议每次拉列表时以最新值为准，不要长期缓存旧地址。
 - **平台不识别手机号所属运营商**：运营商和省份体现在商品上，请按号码自行选择对应商品。号码和商品运营商不符时充值会失败，冻结金额会解冻。
 - 没开通对应业务线时返回 `42007`。
 

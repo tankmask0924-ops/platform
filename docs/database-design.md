@@ -74,7 +74,8 @@
 | | `supplier_call_logs` | 调用供应商的原始请求/响应日志 |
 | 本地商品 | `products` | 话费、卡券本地商品 |
 | | `product_level_rebates` | 商品单独设置某等级返佣比例 |
-| | `card_brands` | 卡券品牌 |
+| | `card_categories` | 卡券分类（第一级） |
+| | `card_brands` | 卡券品牌（第二级） |
 | | `supplier_goods` | 供应商商品库：供应商那边有哪些商品（同步写入），新增本地商品、添加映射时从这里选 |
 | | `supplier_products` | 商品在各供应商的映射、成本价、优先级 |
 | | `supplier_product_price_history` | 供应商商品成本价变更历史 |
@@ -98,7 +99,7 @@
 | 告警 | `alerts` | 告警记录（对应 [8.3](requirements.md#83-系统管理后台webadmin)"告警"的 7 类场景） |
 | 对账 | `reconciliation_diffs` | 订单对账、返佣对账标出的差异，支持标记处理状态 |
 
-共 41 张表（其中 `movie_showtime_caches` 为可选表）。
+共 42 张表（其中 `movie_showtime_caches` 为可选表）。
 
 ---
 
@@ -488,13 +489,28 @@ erDiagram
 
 索引：`(business_line, status)`。**没有任何启用的供应商映射时不能上架**（应用层在上架校验时检查，不做数据库约束）。
 
-#### `card_brands`
+#### `card_categories`
 
-卡券品牌（爱奇艺、腾讯视频、游戏点卡……），卡券商品按品牌归类。话费不用品牌，运营商在 `products.operator`。
+卡券分类（影音会员、游戏点卡、生活服务……），卡券的第一级，下面挂品牌。会员等级、时长（黄金/白金、月卡/年卡）是商品本身的区别，不做成分类。
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | id | bigint unsigned | 是 | 主键 |
+| name | varchar(64) | 是 | 分类名称，唯一 |
+| sort | int unsigned | 是 | 排序，小的在前，默认 0 |
+| status | varchar(16) | 是 | `active` 启用 / `disabled` 停用（停用后新建、编辑品牌时不能新选这个分类，已有品牌不受影响） |
+| created_at / updated_at | datetime | 是 | |
+
+下面有品牌的分类不能删除，只能停用。
+
+#### `card_brands`
+
+卡券品牌（爱奇艺、腾讯视频……），卡券的第二级，属于一个分类；卡券商品选品牌，分类由品牌带出来。话费不用品牌，运营商在 `products.operator`。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | 是 | 主键 |
+| category_id | bigint unsigned | 否 | 外键 `card_categories.id`。新建品牌必填 |
 | name | varchar(64) | 是 | 品牌名称，唯一 |
 | sort | int unsigned | 是 | 排序，小的在前，默认 0 |
 | status | varchar(16) | 是 | `active` 启用 / `disabled` 停用（停用后新建、编辑卡券商品时不能新选这个品牌，已有商品不受影响） |

@@ -27,14 +27,44 @@ class CardBrandDao extends AbstractDao
     /**
      * 全部品牌，按 sort、id 排。品牌是少量配置行，不分页。
      */
-    public function listAll(?string $status = null): Collection
+    public function listAll(?string $status = null, ?int $categoryId = null): Collection
     {
         $query = $this->newQuery()->orderBy('sort')->orderBy('id');
         if ($status !== null) {
             $query->where('status', $status);
         }
+        if ($categoryId !== null) {
+            $query->where('category_id', $categoryId);
+        }
 
         return $query->get();
+    }
+
+    /**
+     * 某个分类下全部品牌的 id（商品列表按分类筛选用）。
+     *
+     * @return array<int, int>
+     */
+    public function idsInCategory(int $categoryId): array
+    {
+        return $this->newQuery()->where('category_id', $categoryId)->pluck('id')->map(static fn ($id) => (int) $id)->all();
+    }
+
+    /**
+     * 每个分类下有多少个品牌，按分类 id 作键（没有品牌的分类不在结果里）。
+     *
+     * @param array<int, int> $categoryIds
+     * @return array<int, int>
+     */
+    public function countByCategory(array $categoryIds): array
+    {
+        return $this->newQuery()
+            ->whereIn('category_id', $categoryIds)
+            ->groupBy('category_id')
+            ->selectRaw('category_id, count(*) as total')
+            ->pluck('total', 'category_id')
+            ->map(static fn ($total) => (int) $total)
+            ->all();
     }
 
     /**
