@@ -55,8 +55,8 @@
 | 解析回调（含验签） | ✅ `KasushouDriver::parseCallback()` + `App\Supplier\Kasushou\KasushouSigner` | ✅ `App\Service\Order\SupplierCallbackService`（回调入口见第 1 节） | ✅ `KasushouDriverTest` + `KasushouSignerTest` + `NotifySupplierControllerTest` | ✅ |
 | 查询余额 | ✅ `KasushouDriver::queryBalance()` | ✅ `App\Service\Supplier\SupplierBalanceService`（余额监控，见第 9 节） | ✅ `KasushouDriverTest` + `SupplierBalanceServiceTest` | ✅ |
 | 同步商品（成本价/状态/库存） | ✅ `KasushouDriver::parseProductChangeNotification()`（验签见 `KasushouSigner::verifyProductChangeNotification()`）+ `queryProductDetail()` + `syncAllProducts()` | ✅ `App\Service\Supplier\ProductSyncService`：商品变更通知 `POST /notify/{code}/{token}/goods`（`handleNotification()`）+ 每日全量校准（`App\Crontab\SupplierProductSyncCrontab` → `syncAllSuppliers()`），见第 9 节 | ✅ `KasushouSignerTest`（验签，含 id+time 之外字段不参与签名的用例）、`KasushouDriverTest`（三个新方法）、`ProductSyncServiceTest`（映射命中/未命中、价格是否变化触发历史记录）、`SupplierProductDaoTest`（`applySync()` 改价必留痕，Dao 层直接单测）、`NotifySupplierControllerTest`（通知路由 200/403/404） | ✅ |
-| 撤单（异常单处理用，可选） | ✅ `cancelOrder()`（路径 `/api/v1/order/back` 是推断） | ✅ `OrderAdminService::cancelAtSupplier()` | ✅ | ✅ |
-| 提交售后 / 接收售后结果 | ✅ `submitAftersale()` / `parseAftersaleCallback()`（路径 `/api/v1/order/after_sale` 和字段名是推断） | ✅ `App\Service\Admin\DisputeSupplierAftersaleService`（争议里提交，回调 `POST /notify/{code}/{token}/aftersale`） | ✅ `KasushouDriverTest` + `DisputeControllerTest` | ✅ 2026-09-23，见第 8 节「售后处理」说明 |
+| 撤单（异常单处理用，可选） | ✅ `cancelOrder()`（`/api/v1/order/close`，按接口文档原文，2026-11-20 核对） | ✅ `OrderAdminService::cancelAtSupplier()` | ✅ | ✅ |
+| 提交售后 / 接收售后结果 | ✅ `submitAftersale()` / `parseAftersaleCallback()`（`/api/v1/order/complain`，按接口文档原文，2026-11-20 核对） | ✅ `App\Service\Admin\DisputeSupplierAftersaleService`（争议里提交，回调 `POST /notify/{code}/{token}/aftersale`） | ✅ `KasushouDriverTest` + `DisputeControllerTest` | ✅ 2026-09-23，见第 8 节「售后处理」说明 |
 | 错误码映射表 | ✅ `App\Supplier\Kasushou\KasushouStatusMapper`（对应 kasushou.md 第 2 节状态表 + 第 3 节错误处理表，placeOrder/queryOrder 内部共用） | ➖ | ✅ `KasushouDriverTest` 覆盖各状态码分支 | ✅ |
 
 > 本次新增（下单/查询订单/解析回调/查询余额）：`App\Supplier\UnifiedResult`（4 态枚举）、`App\Supplier\DriverResult`（统一结果 DTO，含超出 6.2 字面字段列表的 `cardList` 扩展字段，见类注释）、`App\Supplier\Kasushou\KasushouSigner`（sha1 签名/验签）、`App\Supplier\Kasushou\KasushouStatusMapper`、`App\Supplier\Kasushou\KasushouDriver`。未引入 `DriverInterface`：目前只有卡速售一个驱动实现，云洋/芒果尚未开工，接口形状还没被第二个实现验证过，判断属于过早抽象，留了代码注释提醒等第二个驱动落地后再抽取。（2026-09-29 补：云洋、芒果落地后三个驱动除 `queryBalance()` 外方法集合各不相同，仍不抽接口，由 `SupplierDriverFactory` 按 `driver` 分支，理由见 `YunyangDriver`、`KasushouDriver` 类注释。下面「Service 接入留空」和「尚未开工」等说法均已过时，见各行状态。）Service 接入留空：订单处理/路由 Service 调用这个驱动尚未建立（依赖第 5 节路由与第 6 节话费下单 API，均未开工），且供应商配置从哪里读取（`suppliers.config`）本身也是单独一期的 ⬜ 行，本次驱动构造函数直接接收 baseUrl/userId/apiKey，跟配置来源解耦。
@@ -1127,16 +1127,26 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
   漏掉的由全量校准补上。验签通过后仍只把通知当触发、重新查权威值（原有设计）。
 - **每日全量校准**：每天 04:00（`onOneServer` + `singleton`，锁 1 小时），逐个启用中的供应商翻页拉商品列表（100 条/页）并 `applySync()`；
   遇到空页、不满一页、**跟上一页完全相同**（接口忽略页码）或满 200 页时停止。单个供应商失败只记 `supplier-product-sync` 日志。
-  列表里没出现的映射不动——商品列表接口的字段/分页是猜的，没联调前不据此下架。
+  列表里没出现的映射不动——没联调前不据此下架。
 - 顺带：`SupplierResultQueryCrontab` 的 singleton 锁有效期从默认 60 秒调到 300 秒（一批查询最坏耗时超过 60 秒，锁先过期会叠加执行）。
 - 测试：`ProductSyncServiceTest`（通知入口、翻页的三种停止条件、单个供应商失败不影响其它、停用的不同步）、`NotifySupplierControllerTest`、
   `BackgroundProcessRegistrationTest`。
+
+**卡速售驱动按接口文档原文核对**（2026-11-20，原文 [docs/卡速售2.0API接口文档.md](卡速售2.0API接口文档.md)）：之前驱动的接口路径和大部分字段名是按核对说明推测的，这次逐个对照原文改正。
+- **下单**：路径 `/order/create` → `/order/buy`，商品字段 `goods_id` → `id`（int）；卡密商品不再传空的 `attach`（空数组会编码成 `[]`，文档要求对象）。
+- **订单详情**：路径 `/order/query` → `/order/info`；**响应 `data` 是订单数组**，之前按单个对象读，状态永远读不到、每次都是结果未知——现在按 `external_orderno` 取对应那一条，空数组 = 查不到（明确失败），有数据但没有这一条 = 结果未知。状态也接受数字字符串。
+- **撤单**：路径 `/order/back` → `/order/close`，只认卡速售订单号 `ordersn`、回调参数叫 `callbackUrl`；驱动先按 `external_orderno` 查出 `ordersn` 再撤，调用方不变。
+- **售后**：路径 `/order/after_sale` → `/order/complain`，只认 `ordersn`，截图字段 `screenshot`；卡速售不返回售后单号，用 `ordersn` 当售后单号；回调状态 2/3/4（之前写成 1/2/3），处理说明字段 `content`。
+- **商品**：详情路径 `/goods/detail` → `/goods/info`、字段 `id`；列表分页 `page_size` → `limit`；状态是 1/2/3 数字（之前按字符串猜，真实数据会全部落成"暂停"）；库存 `stock_num`（之前猜 `stock`，库存永远是不限）。
+- **请求体**：改为原样发送签名用的 JSON 字符串，不再交给 Guzzle 用默认参数重新编码（默认会转义 `/` 和中文、不排序，跟签名内容不一致，卡速售若按原始请求体验签会失败）。
+- 签名算法本身跟原文一致：`KasushouSignerTest` 新增用例，用文档「签名规范」的示例原样算出文档给的 sign。
+- 待向卡速售确认：多规格商品（`goods_sku_id`）怎么下单；订单详情查不到时返回空数组还是 400（见 kasushou.md 第 5 节）。
 
 **供应商商品库**（2026-11-20，requirements.md 6.4「运营把本地商品关联到各供应商的商品」）：此前同步只更新已有映射行，没映射的商品直接丢掉，
 后台建映射只能手填供应商商品编码，填错了也没人发现。现在：
 - 新表 `supplier_goods`（`App\Model\SupplierGoods` / `App\Dao\SupplierGoodsDao`）：`ProductSyncService` 把变更通知和全量校准拿到的**每一条**供应商商品都 upsert 进来
   （编码、名称、面值、成本价、状态、库存），再同步到映射了它的**全部**映射行（同一个供应商商品可能被多个本地商品映射，以前只更新第一条）。
-  变更通知对没映射的商品也会查详情，新上的商品能马上在后台选到。卡速售商品的名称、面值字段名是猜的（`goods_name`/`name`、`face_value`/`par_value`），缺了不影响同步。
+  变更通知对没映射的商品也会查详情，新上的商品能马上在后台选到。名称、面值取 `goods_name`、`face_value`（按接口文档原文），缺了不影响同步。
 - `GET /admin/supplier-goods`（`supplier_id` 或 `business_line` 至少一个，`keyword` 名称模糊/编码精确，`status`，分页），每行带 `used_by`（已映射它的本地商品）。权限沿用 `product_mapping.view`。
 - **新增本地商品必须选供应商商品**：`POST /admin/products` 新增必填 `supplier_goods_ids`（有序，至少一个，每个供应商一个，业务线要一致），同一个事务里建商品 + 映射，
   顺序即优先级（0 起）；编码、成本价、状态、库存从供应商商品带过来。已有映射的商品不能再改 `business_line`。

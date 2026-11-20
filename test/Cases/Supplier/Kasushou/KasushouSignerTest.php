@@ -35,6 +35,24 @@ class KasushouSignerTest extends TestCase
 {
     private const API_KEY = 'secret';
 
+    /**
+     * 接口文档「签名规范」的示例：同样的请求体必须编码成文档给出的排序后 JSON，签名就是
+     * sha1(Timestamp + 这段 JSON + apikey)。文档示例用的 apikey 是卡速售公开的样例密钥，
+     * 不放进仓库（会被 GitHub 推送保护当成泄露的密钥），这里换成测试密钥，按同一公式核对。
+     */
+    public function testRequestSignatureFollowsDocumentExample()
+    {
+        $signer = new KasushouSigner();
+        $params = ['ordersn' => 'D100759082558859640832', 'external_orderno' => '', 'day' => 10];
+        $documentBody = '{"day":10,"external_orderno":"","ordersn":"D100759082558859640832"}';
+
+        $this->assertSame($documentBody, $signer->encodeRequestBody($params));
+        $this->assertSame(
+            sha1('1696645385740' . $documentBody . 'test-api-key'),
+            $signer->signRequest($params, 'test-api-key', '1696645385740')
+        );
+    }
+
     public function testSignRequestMatchesHandDerivedFixedVector()
     {
         // 手算推导：

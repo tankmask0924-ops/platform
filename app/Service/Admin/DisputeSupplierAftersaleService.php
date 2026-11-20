@@ -171,8 +171,9 @@ class DisputeSupplierAftersaleService extends AbstractService
     }
 
     /**
-     * 先按售后单号认；提交时卡速售没给单号的，按 `external_orderno`（`订单号-尝试序号`）反查订单再找争议。
-     * 两种都要求争议是提交给这家供应商的。
+     * 先按售后单号认：卡速售不返回售后单号，提交时记下的是卡速售订单号 ordersn，售后处理回调也只带
+     * ordersn（见 KasushouDriver::submitAftersale()）。认不出时再按 `external_orderno`（`订单号-尝试序号`）
+     * 反查订单找争议（卡速售回调目前不带这个字段，留给以后的驱动）。两种都要求争议是提交给这家供应商的。
      */
     private function findDispute(int $supplierId, ?string $aftersaleNo, ?string $externalOrderNo): ?AftersaleDispute
     {

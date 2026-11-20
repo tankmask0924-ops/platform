@@ -22,42 +22,27 @@ use Hyperf\Guzzle\ClientFactory;
 use RuntimeException;
 
 /**
- * 卡速售 2.0 驱动（requirements.md 6.2 统一能力 + kasushou.md 全文），覆盖下单/
- * 查询订单/解析回调/查询余额，以及本次任务新增的商品同步三个方法（商品变更通知
- * 解析、查商品详情、查商品列表一页）。撤单、售后仍是 docs/modules.md 里单独的
- * ⬜ 行，本类不实现。
+ * 卡速售 2.0 驱动（requirements.md 6.2 统一能力 + kasushou.md），覆盖下单、查询订单、
+ * 解析回调、查询余额、撤单、售后，以及商品同步（商品变更通知解析、商品详情、商品列表）。
+ *
+ * 【接口依据】路径、请求字段、响应字段、状态取值一律以 docs/卡速售2.0API接口文档.md
+ * （卡速售提供的接口文档原文）为准，各方法注释写明对应文档里的哪个接口。
  *
  * 【商品同步部分的安全设计：通知只作为触发，绝不信任通知 payload 里的价格/状态/
- * 库存】kasushou.md 第 4 节"商品同步"原文："接收商品变更通知（表单格式，签名只
- * 包含 id 和 time）"——只写了签名覆盖 id 和 time，没有覆盖通知里可能夹带的价格/
- * 状态/库存字段本身。这意味着如果通知表单里真的带了这些字段，它们完全不在签名
- * 保护范围内：任何能打到这个 webhook 地址的人，都可以在 id+time+sign 仍然合法
- * 的前提下伪造任意价格/状态/库存，验签这一步完全拦不住。所以
- * parseProductChangeNotification() 验签通过后只返回 id（供应商商品编码），
- * 调用方（App\Service\Supplier\ProductSyncService::applyNotification()）必须再
- * 调 queryProductDetail() 重新查一次权威值——这跟本类 parseCallback()
- * "card_list/express_list 不参与签名，卡密一律以订单详情接口为准"是完全同一类
- * 问题、同一种解法，特意在这里写清楚，接其它驱动时不要漏掉这个模式。这跟"每天
- * 全量校准"的 syncAllProducts() 不同：全量同步是平台主动发起的出站认证请求，
- * 响应可以直接信任，不需要再重新查一次。
+ * 库存】接口文档「商品变更通知」：签名只覆盖 id 和 time，而通知表单里同时带着
+ * status/goods_price/stock_num——这些字段完全不在签名保护范围内：任何能打到这个
+ * webhook 地址的人，都可以在 id+time+sign 仍然合法的前提下伪造任意价格/状态/库存。
+ * 所以 parseProductChangeNotification() 验签通过后只返回 id（供应商商品编码），
+ * 调用方（App\Service\Supplier\ProductSyncService::applyNotification()）必须再调
+ * queryProductDetail() 重新查一次权威值——这跟本类 parseCallback()
+ * "card_list/express_list 不参与签名，卡密一律以订单详情接口为准"是同一类问题、
+ * 同一种解法。每天全量校准的 syncAllProducts() 不同：那是平台主动发起的出站认证
+ * 请求，响应可以直接信任。
  *
- * 【商品详情/列表接口字段名的免责声明，同类顶部已有的免责声明的延伸】kasushou.md
- * 第 1 节"商品与成本价"一行明确提到了 `goods_price` 这一个字段名（"goods_price
- * 为成本价"），这是文档原文出现过的，不是猜的。除此之外——商品详情/列表接口的
- * 路径、请求参数名（这里猜 `goods_id`，跟 placeOrder() 请求体里已经在用的
- * `goods_id` 保持一致）、响应里商品 id 字段名（这里猜跟商品变更通知的 `id` 字段
- * 同名）、状态字段名和取值（这里猜字段名 `status`，取值猜字符串
- * on/active/normal 表示在售、banned/forbidden 表示禁售，其余一律按"暂停"处理，
- * 见 mapGoodsStatus()）、库存字段名（猜 `stock`，跟 supplier_products.stock 列名
- * 一致）、列表响应的分页外层结构（猜 `{list: [...], total: n}`，`list` 缺失或非
- * 数组时当成空页处理，不当错误）——这些全部是没有真实沙箱/接口文档时按最合理
- * 猜测拼出来的，等实际联调对不上时，只需要改 queryProductDetail()/
- * syncAllProducts()/parseGoodsEntry()/mapGoodsStatus() 这几处，不影响
- * App\Service\Supplier\ProductSyncService 的调用方式。
- *
- * 【100 条/页借用】kasushou.md 只在"对账"一节给过"订单列表接口...每页最多 100
- * 条"这一个明确数字，商品列表接口本身文档没给分页上限。syncAllProducts() 默认
- * 100/页是照订单列表的数字类比借用，不是文档对商品列表的直接规定。
+ * 【撤单、售后要先查出卡速售订单号】撤单（order/close）和售后申请（order/complain）
+ * 都只认卡速售自己的订单号 `ordersn`，不认平台传的 external_orderno。调用方手里只有
+ * external_orderno（`订单号-尝试序号`），而且超时的异常单平台可能根本没拿到过 ordersn，
+ * 所以这两个方法先用订单详情接口按 external_orderno 查出 ordersn 再发请求。
  *
  * 【是否需要一个正式的 DriverInterface？仍然暂不引入，但理由已经从"猜"变成"量过了"】
  * 原先的判断是：只有一个驱动实现，抽接口容易抽错，等第二个驱动落地再说。
@@ -75,44 +60,43 @@ use RuntimeException;
  * 【出站 HTTP 的测试方式】跟 App\Job\NotifyMerchantJob 同一个模式：httpClient() 是
  * 一个可被测试用匿名子类覆盖的 protected 方法，默认实现从容器拿
  * Hyperf\Guzzle\ClientFactory 建一个真实 Guzzle 客户端；单测里全部换成 Mockery 双重，
- * 不发真实网络请求（卡速售没有测试环境域名/账号，kasushou.md 第 5 节原文
- * "域名等信息待实际配置供应商时录入"）。
- *
- * 【请求字段名的免责声明】kasushou.md 目前只是"核对结果"文档，没有给出下单/查询
- * 接口的完整请求体 JSON schema 示例（只提到 external_orderno、safe_price、
- * quantity、attach、url、day 这几个字段名是文档原文出现过的；商品 id 字段名、
- * 订单详情响应里 status/ordersn/has_back_money/total_price/card_list 等字段的
- * 确切拼写，文档没有给出可核对的报文样例）。下面的字段名是按文档行文最合理的猜测
- * 拼出来的，等实际拿到卡速售接口文档/联调时如果字段名对不上，只需要改
- * placeOrder() 里拼请求体的部分和 mapOrderData() 这两处，不影响外部调用方。
+ * 不发真实网络请求。
  */
 class KasushouDriver
 {
-    private const PATH_ORDER_CREATE = '/api/v1/order/create';
+    /** 订单提交接口 */
+    private const PATH_ORDER_CREATE = '/api/v1/order/buy';
 
-    private const PATH_ORDER_QUERY = '/api/v1/order/query';
+    /** 订单详情接口 */
+    private const PATH_ORDER_QUERY = '/api/v1/order/info';
 
+    /** 用户余额查询 */
     private const PATH_USER_INFO = '/api/v1/user/info';
 
-    /** 撤单（kasushou.md 第 1 节"撤单"）。路径是推断，同本类其它路径 */
-    private const PATH_ORDER_BACK = '/api/v1/order/back';
+    /** 订单撤单接口：只认卡速售订单号 ordersn，撤单结果推到 callbackUrl */
+    private const PATH_ORDER_CLOSE = '/api/v1/order/close';
 
-    /**
-     * 售后申请（kasushou.md 第 1 节「售后」：内容、截图、结果回调地址）。【推断】路径、请求字段
-     * （`content`/`images`/`url`）、响应里的售后单号字段名文档都没给样例，集中在 submitAftersale() 和
-     * parseAftersaleCallback() 里，联调时对不上只改这两处。
-     */
-    private const PATH_AFTERSALE_APPLY = '/api/v1/order/after_sale';
+    /** 售后申请接口（提交投诉）：只认 ordersn，处理结果推到 url */
+    private const PATH_AFTERSALE_APPLY = '/api/v1/order/complain';
 
-    /** 售后处理回调的状态（处理中 / 处理完成 / 终止），数字和中文都认 */
+    /** 售后处理回调的状态：2=正在处理，3=处理完成，4=终止处理（数字和中文都认） */
     private const AFTERSALE_STATUS_MAP = [
-        '1' => 'processing', '处理中' => 'processing',
-        '2' => 'completed', '处理完成' => 'completed',
-        '3' => 'terminated', '终止' => 'terminated',
+        '2' => 'processing', '正在处理' => 'processing',
+        '3' => 'completed', '处理完成' => 'completed',
+        '4' => 'terminated', '终止处理' => 'terminated',
     ];
 
-    private const PATH_GOODS_DETAIL = '/api/v1/goods/detail';
+    /** 商品状态：1=销售，2=暂停，3=禁售 */
+    private const GOODS_STATUS_MAP = [
+        1 => 'active',
+        2 => 'paused',
+        3 => 'banned',
+    ];
 
+    /** 商品详情接口 */
+    private const PATH_GOODS_DETAIL = '/api/v1/goods/info';
+
+    /** 商品列表接口，每页最多 100 条（limit 不传默认 100） */
     private const PATH_GOODS_LIST = '/api/v1/goods/list';
 
     /**
@@ -122,7 +106,7 @@ class KasushouDriver
         self::PATH_ORDER_CREATE => 'place_order',
         self::PATH_ORDER_QUERY => 'query',
         self::PATH_USER_INFO => 'query_balance',
-        self::PATH_ORDER_BACK => 'cancel',
+        self::PATH_ORDER_CLOSE => 'cancel',
         self::PATH_AFTERSALE_APPLY => 'submit_aftersale',
         self::PATH_GOODS_DETAIL => 'goods_detail',
         self::PATH_GOODS_LIST => 'goods_list',
@@ -147,16 +131,17 @@ class KasushouDriver
     }
 
     /**
-     * 下单。quantity 一期固定传 1（kasushou.md："话费、卡券固定为 1"），
-     * attach 是商品映射配置好的下单模板字段（如 recharge_account），由调用方组装好
-     * 传进来（商品映射不在本次任务范围内，见任务说明"OUT of scope"）。
+     * 下单（订单提交接口 order/buy）。quantity 一期固定传 1（kasushou.md："话费、卡券固定为 1"），
+     * attach 是商品映射配置好的下单模板字段（如 recharge_account），由调用方组装好传进来；
+     * 卡密商品不传 attach（文档：卡密商品不用传此参数），空数组也不传——PHP 空数组会编码成
+     * `[]`，而 attach 要求是对象。
      *
      * HTTP 200：按返回的订单状态映射（kasushou.md 第 2 节）。
      * HTTP 400：不能直接判定失败，必须用 external_orderno 查一次订单详情：查不到才是
      *           明确失败，查到就按查到的状态处理——这两种情况正好就是 queryOrder()
      *           的返回值本身，所以直接把 queryOrder() 的结果原样返回。
      * HTTP 500 / 网络异常（超时等）/ 响应体解析不出 {code,msg,data} 结构：结果未知，
-     *           绝不当成明确失败。
+     *           绝不当成明确失败（文档：下单接口如果请求超时，请调用订单详情接口确认下单结果）。
      *
      * @param array<string, mixed> $attach
      */
@@ -170,13 +155,16 @@ class KasushouDriver
         bool $isCardProduct = false
     ): DriverResult {
         $body = [
+            // 文档里商品 ID 是 int；编码不是纯数字时原样传字符串，让卡速售自己报错
+            'id' => ctype_digit($supplierGoodsId) ? (int) $supplierGoodsId : $supplierGoodsId,
             'external_orderno' => $externalOrderNo,
-            'goods_id' => $supplierGoodsId,
             'safe_price' => $safePrice,
             'quantity' => $quantity,
-            'attach' => $attach,
             'url' => $notifyUrl,
         ];
+        if ($attach !== []) {
+            $body['attach'] = $attach;
+        }
 
         $response = $this->sendSigned(self::PATH_ORDER_CREATE, $body);
 
@@ -202,61 +190,69 @@ class KasushouDriver
     }
 
     /**
-     * 查询订单详情。day 恒传 0（文档："默认只查近 30 天，day=0 查全部"，查全部
-     * 才能保证异常单不会因为跨月漏查）。
+     * 查询订单详情（订单详情接口 order/info）。day 恒传 0（文档：默认近 30 天，查全部传 0，
+     * 查全部才能保证异常单不会因为跨月漏查）。
      *
+     * 响应 data 是订单数组（external_orderno 可以逗号拼多个），这里只查一个，按
+     * external_orderno 找出对应那一条。
      * 查询本身返回 400/500/超时：结果未知，继续查询（kasushou.md 第 3 节）。
-     * 查询成功但找不到匹配的订单：明确失败（对应 placeOrder 400 之后"查不到订单"
-     * 的场景，也是 queryOrder 自身作为独立能力时的合理语义——没有这笔订单）。
+     * 查询成功但返回空数组：明确失败（对应 placeOrder 400 之后"查不到订单"的场景）。
+     * 返回了订单但没有一条是这个 external_orderno：拿不准，结果未知。
      * 查到订单：按 KasushouStatusMapper 映射状态码。
      */
     public function queryOrder(string $externalOrderNo, bool $isCardProduct = false): DriverResult
     {
-        $body = [
-            'external_orderno' => $externalOrderNo,
-            'day' => 0,
-        ];
+        $lookup = $this->lookupOrder($externalOrderNo);
 
-        $response = $this->sendSigned(self::PATH_ORDER_QUERY, $body);
-
-        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
-            return new DriverResult(
-                result: UnifiedResult::Unknown,
-                failReason: $this->describeNonSuccessHttp($response['httpStatus']),
-                rawRequest: $body,
-                rawResponse: $response['raw'],
-            );
-        }
-
-        if ($response['data'] === []) {
+        if ($lookup['state'] === 'not_found') {
             return new DriverResult(
                 result: UnifiedResult::DefiniteFailure,
                 failReason: 'kasushou: order not found for external_orderno=' . $externalOrderNo,
-                rawRequest: $body,
-                rawResponse: $response['raw'],
+                rawRequest: $lookup['request'],
+                rawResponse: $lookup['raw'],
             );
         }
 
-        return $this->mapOrderData($response['data'], $body, $response['raw'], $isCardProduct);
+        if ($lookup['state'] !== 'found') {
+            return new DriverResult(
+                result: UnifiedResult::Unknown,
+                failReason: $lookup['reason'],
+                rawRequest: $lookup['request'],
+                rawResponse: $lookup['raw'],
+            );
+        }
+
+        return $this->mapOrderData($lookup['entry'], $lookup['request'], $lookup['raw'], $isCardProduct);
     }
 
     /**
-     * 发起撤单（kasushou.md 第 1 节：撤单接口 + 撤单结果回调，异常单由客服发起）。
+     * 发起撤单（订单撤单接口 order/close，kasushou.md 第 1 节：异常单由客服发起）。
+     * 撤单接口只认卡速售订单号，先按 external_orderno 查出 ordersn（见类注释）。
      *
-     * 只表示"卡速售受理了撤单申请"，**不是撤单成功**：结果通过撤单结果回调（`$notifyUrl`，跟下单回调同一个地址，
-     * 走同一个回调入口）或者之后查询订单详情的状态 4/5 + 退款金额得知，由调用方据此推进订单，这里不改任何状态。
-     * 商品不支持撤单（`can_back`）、订单已经成功等情况卡速售返回 400 + 文案，原样带回给客服看。
+     * 只表示"卡速售受理了撤单申请"，**不是撤单成功**（文档：订单撤单不代表订单退款）：结果通过
+     * 撤单结果回调（`$notifyUrl` 作为 callbackUrl，跟下单回调同一个地址，回调里带 external_orderno，
+     * 走同一个回调入口回查订单详情）或者之后查询订单详情的状态 4/5 + 退款金额得知，由调用方据此
+     * 推进订单，这里不改任何状态。商品不支持撤单、订单已经成功等情况卡速售返回 400 + 文案，原样带回给客服看。
      *
      * @return array{accepted: bool, message: string}
      */
     public function cancelOrder(string $externalOrderNo, ?string $notifyUrl = null): array
     {
-        $body = ['external_orderno' => $externalOrderNo];
-        if ($notifyUrl !== null) {
-            $body['url'] = $notifyUrl;
+        $lookup = $this->lookupOrder($externalOrderNo);
+        if ($lookup['state'] === 'not_found') {
+            return ['accepted' => false, 'message' => '卡速售查不到这笔订单（' . $externalOrderNo . '）'];
+        }
+        $ordersn = $lookup['state'] === 'found' ? $this->toStringOrNull($lookup['entry']['ordersn'] ?? null) : null;
+        if ($ordersn === null || $ordersn === '') {
+            return ['accepted' => false, 'message' => '查不到卡速售订单号，请稍后重试：' . $lookup['reason']];
         }
 
-        $response = $this->sendSigned(self::PATH_ORDER_BACK, $body);
+        $body = ['ordersn' => $ordersn];
+        if ($notifyUrl !== null) {
+            $body['callbackUrl'] = $notifyUrl;
+        }
+
+        $response = $this->sendSigned(self::PATH_ORDER_CLOSE, $body);
         $decoded = json_decode((string) ($response['raw']['body'] ?? ''), true);
         $message = is_array($decoded) ? (string) ($decoded['msg'] ?? '') : '';
 
@@ -271,20 +267,33 @@ class KasushouDriver
     }
 
     /**
-     * 提交售后申请（requirements.md 7.7「供应商支持售后接口时，客服可直接通过接口提交给供应商」）。
-     * 按 `external_orderno`（平台尝试单号）指定订单，处理结果推到 `$notifyUrl`。
+     * 提交售后申请（售后申请接口 order/complain，requirements.md 7.7「供应商支持售后接口时，客服可直接
+     * 通过接口提交给供应商」）。售后接口只认卡速售订单号，先按 external_orderno 查出 ordersn（见类注释）；
+     * 截图链接逗号拼成一个 screenshot 字符串，处理结果推到 `$notifyUrl`。
+     *
+     * 卡速售不返回售后单号，售后处理回调里也只带 ordersn，所以 `aftersale_no` 返回的就是 ordersn——
+     * 一笔卡速售订单同时只有一个售后，回调按它找回争议（见 parseAftersaleCallback()）。
      *
      * `unknown = true`：网络失败或响应解析不了，卡速售可能已经受理，调用方要提示客服先去卡速售后台确认，
-     * 不能当"提交失败"马上重提。
+     * 不能当"提交失败"马上重提。查 ordersn 时结果未知也算 unknown（还没提交，但没法确定订单在不在）。
      *
      * @param list<string> $images 截图链接
      * @return array{accepted: bool, unknown: bool, aftersale_no: null|string, message: string}
      */
     public function submitAftersale(string $externalOrderNo, string $content, array $images, string $notifyUrl): array
     {
-        $body = ['external_orderno' => $externalOrderNo, 'content' => $content, 'url' => $notifyUrl];
+        $lookup = $this->lookupOrder($externalOrderNo);
+        if ($lookup['state'] === 'not_found') {
+            return ['accepted' => false, 'unknown' => false, 'aftersale_no' => null, 'message' => '卡速售查不到这笔订单（' . $externalOrderNo . '）'];
+        }
+        $ordersn = $lookup['state'] === 'found' ? $this->toStringOrNull($lookup['entry']['ordersn'] ?? null) : null;
+        if ($ordersn === null || $ordersn === '') {
+            return ['accepted' => false, 'unknown' => true, 'aftersale_no' => null, 'message' => '查不到卡速售订单号：' . $lookup['reason']];
+        }
+
+        $body = ['ordersn' => $ordersn, 'content' => $content, 'url' => $notifyUrl];
         if ($images !== []) {
-            $body['images'] = implode(',', $images);
+            $body['screenshot'] = implode(',', $images);
         }
 
         $response = $this->sendSigned(self::PATH_AFTERSALE_APPLY, $body);
@@ -303,23 +312,15 @@ class KasushouDriver
             return ['accepted' => false, 'unknown' => false, 'aftersale_no' => null, 'message' => $message !== '' ? $message : ('http ' . $response['httpStatus'])];
         }
 
-        $data = $response['data'] ?? [];
-        $aftersaleNo = null;
-        foreach (['id', 'after_sale_id', 'aftersale_id', 'sn'] as $key) {
-            if (isset($data[$key]) && (is_string($data[$key]) || is_int($data[$key])) && (string) $data[$key] !== '') {
-                $aftersaleNo = (string) $data[$key];
-
-                break;
-            }
-        }
-
-        return ['accepted' => true, 'unknown' => false, 'aftersale_no' => $aftersaleNo, 'message' => $message];
+        return ['accepted' => true, 'unknown' => false, 'aftersale_no' => $ordersn, 'message' => $message];
     }
 
     /**
-     * 售后处理回调。**跟订单回调同一套签名**（`sha1(time + JSON + apikey)`），验签失败返回 null，
-     * 调用方回 403。签名通过的状态和说明可以信；但"处理完成"不等于"确认未到账"——结论由客服看说明后在
-     * 争议里驳回或确认，这里只返回卡速售说了什么。
+     * 售后处理回调。签名：除 sign 外全部参数排序编码，sha1(time + JSON + apikey)，跟订单回调同一套
+     * （KasushouSigner::verifyCallback()），验签失败返回 null，调用方回 403。回调字段：ordersn、
+     * status（2=正在处理，3=处理完成，4=终止处理）、content（处理内容）、screenshot、time、sign。
+     * 签名通过的状态和说明可以信；但"处理完成"不等于"确认未到账"——结论由客服看说明后在争议里驳回
+     * 或确认，这里只返回卡速售说了什么。`aftersale_no` 是 ordersn（见 submitAftersale()）。
      *
      * @param array<string, mixed> $payload
      * @return null|array{aftersale_no: null|string, external_orderno: null|string, status: null|string, reply: null|string}
@@ -334,10 +335,10 @@ class KasushouDriver
         $status = $string($payload['status'] ?? null);
 
         return [
-            'aftersale_no' => $string($payload['id'] ?? $payload['after_sale_id'] ?? $payload['aftersale_id'] ?? null),
+            'aftersale_no' => $string($payload['ordersn'] ?? null),
             'external_orderno' => $string($payload['external_orderno'] ?? null),
             'status' => $status === null ? null : (self::AFTERSALE_STATUS_MAP[$status] ?? null),
-            'reply' => $string($payload['result'] ?? $payload['remark'] ?? $payload['msg'] ?? $payload['content'] ?? null),
+            'reply' => $string($payload['content'] ?? null),
         ];
     }
 
@@ -416,8 +417,7 @@ class KasushouDriver
     }
 
     /**
-     * 查单个供应商商品的权威详情（成本价/状态/库存）。请求字段名 `goods_id` 沿用
-     * placeOrder() 已经在用的同名字段（猜测，见类注释免责声明）。
+     * 查单个供应商商品的权威详情（商品详情接口 goods/info，请求字段 `id`，文档里是 int）。
      *
      * HTTP 失败/响应解析不出结构/关键字段缺失：一律抛 RuntimeException，不返回
      * null——跟 queryBalance() 是同一个"这个方法要么给权威值、要么让调用方知道
@@ -428,7 +428,7 @@ class KasushouDriver
      */
     public function queryProductDetail(string $supplierProductCode): array
     {
-        $body = ['goods_id' => $supplierProductCode];
+        $body = ['id' => ctype_digit($supplierProductCode) ? (int) $supplierProductCode : $supplierProductCode];
         $response = $this->sendSigned(self::PATH_GOODS_DETAIL, $body);
 
         if ($response['httpStatus'] !== 200 || $response['data'] === null) {
@@ -447,9 +447,9 @@ class KasushouDriver
     }
 
     /**
-     * 查商品列表的一页（100/页借用订单列表的分页数字，见类注释）。这里只做单次
-     * HTTP 调用，翻页循环、"翻到空页就停"的逻辑都留给调用方（未来的每日全量校准
-     * 定时任务，本次任务范围之外，见类注释）。
+     * 查商品列表的一页（商品列表接口 goods/list，`page` + `limit`，每页最多 100）。
+     * 这里只做单次 HTTP 调用，翻页循环、"翻到空页就停"留给调用方
+     * （App\Service\Supplier\ProductSyncService::syncSupplier()）。
      *
      * HTTP 失败/响应解析不出结构：抛 RuntimeException，跟 queryProductDetail() 一致。
      * 响应里 `list` 缺失、非数组，或者某一条商品条目缺 id/goods_price：不当成
@@ -460,7 +460,7 @@ class KasushouDriver
      */
     public function syncAllProducts(int $page = 1, int $pageSize = 100): array
     {
-        $body = ['page' => $page, 'page_size' => $pageSize];
+        $body = ['limit' => $pageSize, 'page' => $page];
         $response = $this->sendSigned(self::PATH_GOODS_LIST, $body);
 
         if ($response['httpStatus'] !== 200 || $response['data'] === null) {
@@ -496,7 +496,7 @@ class KasushouDriver
     }
 
     /**
-     * 统一发起一次带签名的 POST 请求，返回 [httpStatus, data, raw]。
+     * 统一发起一次带签名的 POST 请求（文档「签名规范」），返回 [httpStatus, data, raw]。
      * httpStatus 为 null 表示网络异常/超时（连请求都没送达或没收到响应）。
      * data 为 null 表示响应体不是可解析的 {code,msg,data} 结构（data 键不是数组）。
      *
@@ -515,9 +515,10 @@ class KasushouDriver
                     'Sign' => $sign,
                     'Timestamp' => $timestamp,
                     'UserId' => $this->userId,
-                    'Content-Type' => 'application/json',
+                    'Content-Type' => 'application/json; charset=utf-8',
                 ],
-                'json' => $body,
+                // 原样发送签名用的那个字符串（排序、不转义斜杠和中文），不交给 Guzzle 再编码一次
+                'body' => $this->signer->encodeRequestBody($body),
                 'timeout' => 10,
                 'connect_timeout' => 5,
                 // 跟 NotifyMerchantJob 一样：关掉 Guzzle 对 4xx/5xx 自动抛异常，
@@ -567,6 +568,36 @@ class KasushouDriver
     }
 
     /**
+     * 按 external_orderno 查订单详情，找出对应的那一条（订单详情接口 data 是数组）。
+     * state：found（entry 是那条订单）/ not_found（返回空数组）/ unknown（请求失败、
+     * 结构解析不了、或者返回的订单里没有这个 external_orderno），reason 说明 unknown 的原因。
+     *
+     * @return array{state: string, entry: null|array<string, mixed>, reason: string, request: array<string, mixed>, raw: array<string, mixed>}
+     */
+    private function lookupOrder(string $externalOrderNo): array
+    {
+        $body = ['day' => 0, 'external_orderno' => $externalOrderNo];
+        $response = $this->sendSigned(self::PATH_ORDER_QUERY, $body);
+        $result = ['state' => 'unknown', 'entry' => null, 'reason' => '', 'request' => $body, 'raw' => $response['raw']];
+
+        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
+            return ['reason' => $this->describeNonSuccessHttp($response['httpStatus'])] + $result;
+        }
+
+        if ($response['data'] === []) {
+            return ['state' => 'not_found'] + $result;
+        }
+
+        foreach ($response['data'] as $entry) {
+            if (is_array($entry) && $this->toStringOrNull($entry['external_orderno'] ?? null) === $externalOrderNo) {
+                return ['state' => 'found', 'entry' => $entry] + $result;
+            }
+        }
+
+        return ['reason' => 'kasushou: order list does not contain external_orderno=' . $externalOrderNo] + $result;
+    }
+
+    /**
      * 把订单详情/下单响应里的 data 部分（已假定是 {status, ordersn, has_back_money,
      * total_price, card_list, ...} 结构）转成 DriverResult。下单响应和查询响应
      * 共用同一套状态映射表（kasushou.md 第 2 节没有区分"下单响应"和"查询响应"
@@ -579,6 +610,10 @@ class KasushouDriver
     private function mapOrderData(array $data, array $rawRequest, array $rawResponse, bool $isCardProduct): DriverResult
     {
         $status = $data['status'] ?? null;
+        // 文档里是 int；数字字符串（如 "3"、"-1"）也认，其它一律拿不准
+        if (is_string($status) && preg_match('/^-?\d+$/', $status) === 1) {
+            $status = (int) $status;
+        }
         if (! is_int($status)) {
             // 状态字段本身缺失或类型不对：解析不出权威状态，拿不准，按结果未知处理
             return new DriverResult(
@@ -635,7 +670,8 @@ class KasushouDriver
     }
 
     /**
-     * 把商品详情/列表条目的原始数组解析成统一的小结构。id/goods_price 缺失或类型
+     * 把商品详情/列表条目的原始数组（id、goods_name、face_value、goods_price、status、stock_num）
+     * 解析成统一的小结构。id/goods_price 缺失或类型
      * 不对：解析失败，返回 null（调用方决定是抛异常还是跳过这一条，见
      * queryProductDetail()/syncAllProducts() 的不同处理）。
      *
@@ -654,24 +690,22 @@ class KasushouDriver
             return null;
         }
 
-        // 名称、面值只用来在后台选供应商商品时辨认，缺了不影响同步。字段名是猜的
-        // （kasushou.md 只说"商品只有名称、面值"）：名称认 goods_name/name，面值认 face_value/par_value。
-        $name = $raw['goods_name'] ?? $raw['name'] ?? null;
-        $faceValue = $raw['face_value'] ?? $raw['par_value'] ?? null;
+        // 名称、面值只用来在后台选供应商商品时辨认，缺了不影响同步
+        $name = $raw['goods_name'] ?? null;
+        $faceValue = $raw['face_value'] ?? null;
 
         return [
             'supplier_product_code' => (string) $id,
             'cost_price' => $costPrice,
             'status' => $this->mapGoodsStatus($raw['status'] ?? null),
-            'stock' => $this->toNullableInt($raw['stock'] ?? null),
+            'stock' => $this->toNullableInt($raw['stock_num'] ?? null),
             'name' => is_string($name) && trim($name) !== '' ? mb_substr(trim($name), 0, 128) : null,
             'face_value' => is_numeric($faceValue) && bccomp((string) $faceValue, '0', 2) >= 0 ? bcadd((string) $faceValue, '0', 2) : null,
         ];
     }
 
     /**
-     * 把供应商原始 status 字段映射成平台 supplier_products.status 的三态
-     * （active/paused/banned）。字段名和取值都是猜的（见类注释免责声明）。
+     * 商品状态（1=销售，2=暂停，3=禁售）映射成平台的 active/paused/banned。
      *
      * 缺字段、类型不对、或者不认识的取值：一律按 paused（暂停）处理，不猜 active——
      * 猜错成"暂停"顶多是路由跳过这个供应商商品，猜错成"在售"却可能把已经下架/
@@ -680,20 +714,11 @@ class KasushouDriver
      */
     private function mapGoodsStatus(mixed $raw): string
     {
-        if (is_string($raw)) {
-            $normalized = strtolower($raw);
-            if (in_array($normalized, ['active', 'on', 'on_sale', 'normal'], true)) {
-                return 'active';
-            }
-            if (in_array($normalized, ['banned', 'ban', 'forbidden'], true)) {
-                return 'banned';
-            }
-            if (in_array($normalized, ['paused', 'pause', 'off'], true)) {
-                return 'paused';
-            }
+        if (is_string($raw) && ctype_digit($raw)) {
+            $raw = (int) $raw;
         }
 
-        return 'paused';
+        return is_int($raw) ? (self::GOODS_STATUS_MAP[$raw] ?? 'paused') : 'paused';
     }
 
     private function toNullableInt(mixed $value): ?int

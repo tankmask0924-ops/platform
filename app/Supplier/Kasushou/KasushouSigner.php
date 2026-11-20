@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace App\Supplier\Kasushou;
 
 /**
- * 卡速售 2.0 的签名算法（kasushou.md 第 1 节"签名"行），跟平台开放 API 用的
+ * 卡速售 2.0 的签名算法（docs/卡速售2.0API接口文档.md「签名规范」及各回调的 php demo），跟平台开放 API 用的
  * `App\Signature\SignatureSigner`（HMAC-SHA256 + k=v&k=v 拼接）是完全不同的两套
  * 算法，不要混用：卡速售这边是 sha1 + JSON 编码拼接，且请求签名和回调验签用的
  * JSON 编码 flag、参与签名的字段范围都不一样，所以分别提供两个方法。
@@ -32,23 +32,15 @@ namespace App\Supplier\Kasushou;
  *   - time 字段本身仍然留在参与签名的 JSON 里（文档原文是"除 sign 外参数"），
  *     只是 sign / card_list / express_list 三个字段被排除
  *
- * 商品变更通知验签（第三套签名作用域，kasushou.md 第 4 节"商品同步"：
- * "接收商品变更通知（表单格式，签名只包含 id 和 time）"）：
- *   - 【本方法公式是推断，不是文档直接给出的字符串】文档只说了"签名只包含 id 和
- *     time"这一句话，没有像上面回调验签那样给出完整的 "sha1(time + JSON + apikey)"
- *     公式原文。这里按本类另外两个方法共用的通用形状——sha1(时间 + 排序后 JSON
- *     编码 + apikey)——收窄到只对 {id, time} 这两个字段计算，是本次实现按"同一
- *     供应商同一套签名家族"做的合理推断，不是对文档原文的直接引用。等实际联调
- *     验证不通过时，只需要改 verifyProductChangeNotification() 这一个方法，
- *     不影响 KasushouDriver::parseProductChangeNotification() 的调用方式
- *   - 但"参与签名的字段只有 id + time"这件事本身是文档明确写出来的，不是推断——
- *     这是一个白名单（只有这两个字段参与），跟回调验签的黑名单（除 sign/card_list/
- *     express_list 外全部参与）方向相反：即使通知表单里还夹带了价格/状态/库存等
- *     字段，这里也完全不读取它们参与签名，调用方同样不能信任这些字段本身
- *     （见 KasushouDriver::parseProductChangeNotification() 类注释里的安全说明）
- *   - JSON 编码 flag 沿用回调验签同款的 JSON_UNESCAPED_UNICODE（不用
- *     UNESCAPED_SLASHES）——两者同属"供应商 -> 平台"方向的推送/通知，跟"平台 ->
- *     供应商"方向的请求签名（用 UNESCAPED_SLASHES | UNESCAPED_UNICODE）分开处理
+ * 商品变更通知验签（docs/卡速售2.0API接口文档.md「商品变更通知」的 php demo）：
+ *   sha1(time + json_encode(ksort({id, time}), JSON_UNESCAPED_UNICODE) + apikey)
+ *   - 只有 id、time 两个字段参与签名，是白名单——跟回调验签的黑名单（除 sign/card_list/
+ *     express_list 外全部参与）方向相反：通知表单里的 status/goods_price/stock_num 不受签名
+ *     保护，调用方不能信任它们（见 KasushouDriver::parseProductChangeNotification()）
+ *   - 通知是表单格式（application/x-www-form-urlencoded），id、time 都按收到的字符串参与编码
+ *
+ * 请求体必须原样发送签名时编码出来的那个字符串（见 encodeRequestBody()）：让 HTTP 客户端
+ * 自己再编码一次的话，键顺序和转义（`\/`、`\uXXXX`）都可能跟签名用的不一样。
  */
 class KasushouSigner
 {
@@ -61,11 +53,22 @@ class KasushouSigner
     }
 
     /**
+     * 请求体的 JSON 字符串：顶层键排序，JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE，空请求体为 `{}`。
+     * 签名和实际发送的请求体都用它，保证两边一字不差。
+     *
+     * @param array<string, mixed> $params 请求体的顶层参数（不含 Timestamp/UserId，那两个走 Header）
+     */
+    public function encodeRequestBody(array $params): string
+    {
+        return $this->encodeSorted($params, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * @param array<string, mixed> $params 请求体的顶层参数（不含 Timestamp/UserId，那两个走 Header）
      */
     public function signRequest(array $params, string $apiKey, string $timestamp): string
     {
-        return sha1($timestamp . $this->encodeSorted($params, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . $apiKey);
+        return sha1($timestamp . $this->encodeRequestBody($params) . $apiKey);
     }
 
     /**

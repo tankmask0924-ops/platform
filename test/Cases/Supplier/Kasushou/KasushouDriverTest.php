@@ -121,15 +121,15 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/create$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/buy$#'), Mockery::type('array'))
             ->andReturn(new Response(400, [], json_encode(['code' => 400, 'msg' => 'unknown error', 'data' => []])));
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/query$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => ['status' => 3, 'ordersn' => 'KS1'],
+                'data' => [['external_orderno' => 'EO-1', 'status' => 3, 'ordersn' => 'KS1']],
             ])));
 
         $driver = $this->makeDriver($client);
@@ -144,11 +144,11 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/create$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/buy$#'), Mockery::type('array'))
             ->andReturn(new Response(400, [], json_encode(['code' => 400, 'msg' => 'safe_price too low', 'data' => []])));
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/query$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
             ->andReturn(new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => []])));
 
         $driver = $this->makeDriver($client);
@@ -177,7 +177,7 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->andThrow(new ConnectException('timed out', new Request('POST', self::BASE_URL . '/api/v1/order/create')));
+            ->andThrow(new ConnectException('timed out', new Request('POST', self::BASE_URL . '/api/v1/order/buy')));
 
         $driver = $this->makeDriver($client);
         $result = $driver->placeOrder('EO-4', 'GOODS-1', '10.00', 'https://merchant.example.com/notify');
@@ -205,15 +205,16 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/query$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => [
+                'data' => [[
+                    'external_orderno' => 'EO-1',
                     'status' => 3,
                     'ordersn' => 'KS1',
                     'card_list' => [['card_no' => '1111', 'card_password' => '2222']],
-                ],
+                ]],
             ])));
 
         $driver = $this->makeDriver($client);
@@ -287,7 +288,7 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->andThrow(new ConnectException('timed out', new Request('POST', self::BASE_URL . '/api/v1/order/query')));
+            ->andThrow(new ConnectException('timed out', new Request('POST', self::BASE_URL . '/api/v1/order/info')));
 
         $driver = $this->makeDriver($client);
         $result = $driver->queryOrder('EO-1');
@@ -379,11 +380,11 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/query$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => ['status' => 3, 'ordersn' => 'KS1', 'card_list' => [['card_no' => 'authoritative', 'card_password' => 'authoritative']]],
+                'data' => [['external_orderno' => 'EO-1', 'status' => 3, 'ordersn' => 'KS1', 'card_list' => [['card_no' => 'authoritative', 'card_password' => 'authoritative']]]],
             ])));
 
         $driver = $this->makeDriver($client);
@@ -488,17 +489,20 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/goods/detail$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/goods/info$#'), Mockery::on(function (array $options) {
+                // 文档：商品 ID 是 int
+                return json_decode($options['body'], true) === ['id' => 2909];
+            }))
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100],
+                'data' => ['id' => 2909, 'goods_name' => '移动 100 元快充', 'goods_type' => 2, 'face_value' => '100.00', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100],
             ])));
 
         $driver = $this->makeDriver($client);
-        $detail = $driver->queryProductDetail('GOODS-1');
+        $detail = $driver->queryProductDetail('2909');
 
-        $this->assertSame('GOODS-1', $detail['supplier_product_code']);
+        $this->assertSame('2909', $detail['supplier_product_code']);
         $this->assertSame('8.50', $detail['cost_price']);
         $this->assertSame('active', $detail['status']);
         $this->assertSame(100, $detail['stock']);
@@ -512,7 +516,7 @@ class KasushouDriverTest extends TestCase
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'some-unknown-code', 'stock' => null],
+                'data' => ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 9],
             ])));
 
         $driver = $this->makeDriver($client);
@@ -542,14 +546,17 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/goods/list$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/goods/list$#'), Mockery::on(function (array $options) {
+                return json_decode($options['body'], true) === ['limit' => 100, 'page' => 1];
+            }))
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
                 'data' => [
                     'list' => [
-                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100, 'goods_name' => '移动 10 元快充', 'face_value' => '10'],
-                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 'banned', 'stock' => 0, 'face_value' => 'n/a'],
+                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100, 'goods_name' => '移动 10 元快充', 'face_value' => '10'],
+                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 3, 'stock_num' => 0, 'face_value' => 'n/a'],
+                        ['id' => 'GOODS-3', 'goods_price' => '9.90', 'status' => '2', 'stock_num' => '5'],
                     ],
                     'total' => 2,
                 ],
@@ -558,8 +565,11 @@ class KasushouDriverTest extends TestCase
         $driver = $this->makeDriver($client);
         $entries = $driver->syncAllProducts(1, 100);
 
-        $this->assertCount(2, $entries);
+        $this->assertCount(3, $entries);
         $this->assertSame('GOODS-1', $entries[0]['supplier_product_code']);
+        $this->assertSame(100, $entries[0]['stock']);
+        $this->assertSame('paused', $entries[2]['status']);
+        $this->assertSame(5, $entries[2]['stock']);
         $this->assertSame('active', $entries[0]['status']);
         $this->assertSame('GOODS-2', $entries[1]['supplier_product_code']);
         $this->assertSame('banned', $entries[1]['status']);
@@ -596,81 +606,149 @@ class KasushouDriverTest extends TestCase
     }
 
     /**
-     * 撤单（kasushou.md 第 1 节）：按 external_orderno 撤、带回调地址；200 是受理，400 带回卡速售的文案给客服看。
+     * 撤单（订单撤单接口）：先按 external_orderno 查出卡速售订单号，再按 ordersn 撤、带 callbackUrl；
+     * 200 是受理，400 带回卡速售的文案给客服看；查不到订单不发撤单请求。
      */
-    public function testCancelOrderReportsAcceptanceAndSupplierMessage()
+    public function testCancelOrderLooksUpOrdersnThenClosesByIt()
     {
         $sent = [];
         $client = Mockery::mock(ClientInterface::class);
-        $client->shouldReceive('request')->twice()->andReturnUsing(function (string $method, string $url, array $options) use (&$sent) {
-            $sent[] = [$url, $options['json']];
+        $client->shouldReceive('request')->times(5)->andReturnUsing(function (string $method, string $url, array $options) use (&$sent) {
+            $sent[] = [$url, json_decode($options['body'], true)];
 
-            return count($sent) === 1
-                ? new Response(200, [], json_encode(['code' => 200, 'msg' => '撤单申请已提交', 'data' => []]))
-                : new Response(400, [], json_encode(['code' => 400, 'msg' => '该商品不支持撤单']));
+            return match (count($sent)) {
+                1, 3 => new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => [['external_orderno' => 'R1-1', 'ordersn' => 'D100759274105949519872', 'status' => 2]]])),
+                2 => new Response(200, [], json_encode(['code' => 200, 'msg' => '撤单成功'])),
+                4 => new Response(400, [], json_encode(['code' => 400, 'msg' => '该商品不支持撤单'])),
+                default => new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => []])),
+            };
         });
         $driver = $this->makeDriver($client);
 
-        $this->assertSame(['accepted' => true, 'message' => '撤单申请已提交'], $driver->cancelOrder('R1-1', 'https://platform.example/notify/k/t'));
-        $this->assertSame(['accepted' => false, 'message' => '该商品不支持撤单'], $driver->cancelOrder('R1-1'));
+        $this->assertSame(['accepted' => true, 'message' => '撤单成功'], $driver->cancelOrder('R1-1', 'https://platform.example/notify/k/t'));
+        $this->assertStringEndsWith('/api/v1/order/info', $sent[0][0]);
+        $this->assertSame(['day' => 0, 'external_orderno' => 'R1-1'], $sent[0][1]);
+        $this->assertStringEndsWith('/api/v1/order/close', $sent[1][0]);
+        $this->assertSame(['callbackUrl' => 'https://platform.example/notify/k/t', 'ordersn' => 'D100759274105949519872'], $sent[1][1]);
 
-        $this->assertStringEndsWith('/api/v1/order/back', $sent[0][0]);
-        $this->assertSame(['external_orderno' => 'R1-1', 'url' => 'https://platform.example/notify/k/t'], $sent[0][1]);
-        $this->assertArrayNotHasKey('url', $sent[1][1]);
+        $this->assertSame(['accepted' => false, 'message' => '该商品不支持撤单'], $driver->cancelOrder('R1-1'));
+        $this->assertArrayNotHasKey('callbackUrl', $sent[3][1]);
+
+        $notFound = $driver->cancelOrder('R1-1');
+        $this->assertFalse($notFound['accepted']);
+        $this->assertStringContainsString('查不到', $notFound['message']);
+        $this->assertCount(5, $sent, '查不到订单就不发撤单请求');
     }
 
     public function testSubmitAftersaleOutcomes()
     {
         $sent = [];
+        $lookup = new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => [['external_orderno' => 'R1-1', 'ordersn' => 'D0622285344446634000384', 'status' => 3]]]));
         $client = Mockery::mock(ClientInterface::class);
-        $client->shouldReceive('request')->times(3)->andReturnUsing(function (string $method, string $url, array $options) use (&$sent) {
-            $sent[] = [$url, $options['json']];
+        $client->shouldReceive('request')->times(6)->andReturnUsing(function (string $method, string $url, array $options) use (&$sent, $lookup) {
+            $sent[] = [$url, json_decode($options['body'], true)];
 
             return match (count($sent)) {
-                1 => new Response(200, [], json_encode(['code' => 200, 'msg' => '提交成功', 'data' => ['id' => 88]])),
-                2 => new Response(400, [], json_encode(['code' => 400, 'msg' => '订单已超过售后期'])),
+                1, 3, 5 => $lookup,
+                2 => new Response(200, [], json_encode(['code' => 200, 'msg' => '操作成功'])),
+                4 => new Response(400, [], json_encode(['code' => 400, 'msg' => '订单已超过售后期'])),
                 default => new Response(500, [], json_encode(['code' => 500, 'msg' => '系统繁忙'])),
             };
         });
         $driver = $this->makeDriver($client);
 
+        // 卡速售不给售后单号，用 ordersn 当售后单号（回调只带 ordersn）
         $this->assertSame(
-            ['accepted' => true, 'unknown' => false, 'aftersale_no' => '88', 'message' => '提交成功'],
-            $driver->submitAftersale('R1-1', '用户称未到账', ['https://img.example/1.png'], 'https://platform.example/notify/k/t/aftersale')
+            ['accepted' => true, 'unknown' => false, 'aftersale_no' => 'D0622285344446634000384', 'message' => '操作成功'],
+            $driver->submitAftersale('R1-1', '用户称未到账', ['https://img.example/1.png', 'https://img.example/2.png'], 'https://platform.example/notify/k/t/aftersale')
         );
-        $this->assertStringEndsWith('/api/v1/order/after_sale', $sent[0][0]);
+        $this->assertStringEndsWith('/api/v1/order/complain', $sent[1][0]);
         $this->assertSame([
-            'external_orderno' => 'R1-1', 'content' => '用户称未到账', 'url' => 'https://platform.example/notify/k/t/aftersale', 'images' => 'https://img.example/1.png',
-        ], $sent[0][1]);
+            'content' => '用户称未到账',
+            'ordersn' => 'D0622285344446634000384',
+            'screenshot' => 'https://img.example/1.png,https://img.example/2.png',
+            'url' => 'https://platform.example/notify/k/t/aftersale',
+        ], $sent[1][1]);
 
         $refused = $driver->submitAftersale('R1-1', 'x', [], 'https://platform.example/notify/k/t/aftersale');
         $this->assertFalse($refused['accepted']);
         $this->assertFalse($refused['unknown']);
         $this->assertSame('订单已超过售后期', $refused['message']);
-        $this->assertArrayNotHasKey('images', $sent[1][1]);
+        $this->assertArrayNotHasKey('screenshot', $sent[3][1]);
 
         $this->assertTrue($driver->submitAftersale('R1-1', 'x', [], 'https://platform.example/notify/k/t/aftersale')['unknown'], '500 是未知错误，不当拒绝');
 
         $timeout = Mockery::mock(ClientInterface::class);
         $timeout->shouldReceive('request')->once()->andThrow(new ConnectException('timeout', new Request('POST', self::BASE_URL)));
-        $this->assertTrue($this->makeDriver($timeout)->submitAftersale('R1-1', 'x', [], 'https://p.example/a')['unknown']);
+        $this->assertTrue($this->makeDriver($timeout)->submitAftersale('R1-1', 'x', [], 'https://p.example/a')['unknown'], '查订单号超时也是结果未知');
     }
 
     public function testParseAftersaleCallbackVerifiesSignature()
     {
-        $time = '1700000000';
-        $signed = ['id' => 88, 'external_orderno' => 'R1-1', 'status' => 2, 'result' => '已核实，号码已到账', 'time' => $time];
+        $time = '1695072521534';
+        $signed = ['ordersn' => 'D0622285344446634000384', 'status' => '3', 'content' => '已核实，号码已到账', 'screenshot' => '', 'time' => $time];
         ksort($signed);
         $payload = $signed + ['sign' => sha1($time . json_encode($signed, JSON_UNESCAPED_UNICODE) . self::API_KEY)];
         $driver = $this->makeDriver(Mockery::mock(ClientInterface::class));
 
         $this->assertSame(
-            ['aftersale_no' => '88', 'external_orderno' => 'R1-1', 'status' => 'completed', 'reply' => '已核实，号码已到账'],
+            ['aftersale_no' => 'D0622285344446634000384', 'external_orderno' => null, 'status' => 'completed', 'reply' => '已核实，号码已到账'],
             $driver->parseAftersaleCallback($payload)
         );
 
-        $payload['result'] = '伪造：未到账';
+        $payload['content'] = '伪造：未到账';
         $this->assertNull($driver->parseAftersaleCallback($payload), '内容被改过，验签失败');
+    }
+
+    /**
+     * 下单请求体按文档：商品字段是 `id`（int），卡密商品不传 attach；实际发送的请求体就是签名用的字符串。
+     */
+    public function testPlaceOrderBodyMatchesDocAndIsSentExactlyAsSigned()
+    {
+        $captured = [];
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')->twice()->andReturnUsing(function (string $method, string $url, array $options) use (&$captured) {
+            $captured[] = $options;
+
+            return new Response(200, [], json_encode(['code' => 200, 'msg' => '下单成功', 'data' => ['ordersn' => 'API1', 'status' => 1]]));
+        });
+        $driver = $this->makeDriver($client);
+
+        $driver->placeOrder('EO-1', '2909', '99.20', 'https://platform.example/notify/k/t', ['recharge_account' => '13800000000']);
+        $driver->placeOrder('EO-2', '2909', '99.20', 'https://platform.example/notify/k/t', [], isCardProduct: true);
+
+        $this->assertSame(
+            '{"attach":{"recharge_account":"13800000000"},"external_orderno":"EO-1","id":2909,"quantity":1,"safe_price":"99.20","url":"https://platform.example/notify/k/t"}',
+            $captured[0]['body']
+        );
+        $this->assertArrayNotHasKey('json', $captured[0]);
+        $headers = $captured[0]['headers'];
+        $this->assertSame(sha1($headers['Timestamp'] . $captured[0]['body'] . self::API_KEY), $headers['Sign']);
+        $this->assertArrayNotHasKey('attach', json_decode($captured[1]['body'], true));
+    }
+
+    /**
+     * 订单详情返回的是数组：按 external_orderno 取对应那条；有数据但没有这一条时拿不准，不能当查不到。
+     */
+    public function testQueryOrderPicksMatchingEntryAndTreatsMismatchAsUnknown()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')->twice()->andReturn(
+            new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => [
+                ['external_orderno' => 'EO-other', 'status' => 5, 'has_back_money' => '1', 'total_price' => '1'],
+                ['external_orderno' => 'EO-1', 'status' => '3', 'ordersn' => 'D1'],
+            ]])),
+            new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => [
+                ['external_orderno' => 'EO-other', 'status' => 3],
+            ]])),
+        );
+        $driver = $this->makeDriver($client);
+
+        $found = $driver->queryOrder('EO-1');
+        $this->assertSame(UnifiedResult::Success, $found->result);
+        $this->assertSame('D1', $found->supplierOrderNo);
+
+        $this->assertSame(UnifiedResult::Unknown, $driver->queryOrder('EO-1')->result);
     }
 
     private function placeOrderWithOrderResponse(int $httpStatus, array $orderData, bool $isCardProduct = false): DriverResult
@@ -678,7 +756,7 @@ class KasushouDriverTest extends TestCase
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/create$#'), Mockery::type('array'))
+            ->with('POST', Mockery::pattern('#/api/v1/order/buy$#'), Mockery::type('array'))
             ->andReturn(new Response($httpStatus, [], json_encode(['code' => $httpStatus, 'msg' => '', 'data' => $orderData])));
 
         $driver = $this->makeDriver($client);
@@ -691,15 +769,16 @@ class KasushouDriverTest extends TestCase
      */
     private function queryOrderWithResponse(array $orderData, bool $isCardProduct = false): DriverResult
     {
+        $externalOrderNo = 'EO-' . uniqid('', true);
         $client = Mockery::mock(ClientInterface::class);
         $client->shouldReceive('request')
             ->once()
-            ->with('POST', Mockery::pattern('#/api/v1/order/query$#'), Mockery::type('array'))
-            ->andReturn(new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => $orderData])));
+            ->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
+            ->andReturn(new Response(200, [], json_encode(['code' => 200, 'msg' => '', 'data' => [['external_orderno' => $externalOrderNo] + $orderData]])));
 
         $driver = $this->makeDriver($client);
 
-        return $driver->queryOrder('EO-' . uniqid('', true), $isCardProduct);
+        return $driver->queryOrder($externalOrderNo, $isCardProduct);
     }
 
     private function makeDriver(ClientInterface $client, ?Closure $callRecorder = null): KasushouDriver
