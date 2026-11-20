@@ -78,7 +78,14 @@ onMounted(load)
 
           <el-table :data="rows" border empty-text="暂无在售商品">
             <el-table-column prop="id" label="商品 ID" width="90" />
-            <el-table-column prop="name" label="商品" min-width="200" />
+            <el-table-column label="商品" min-width="240">
+              <template #default="{ row }">
+                <div class="product">
+                  <el-image v-if="row.image_url" :src="row.image_url" fit="cover" class="thumb" />
+                  <span>{{ row.name }}</span>
+                </div>
+              </template>
+            </el-table-column>
             <template v-if="result.business_line === 'recharge'">
               <el-table-column label="运营商" width="80">
                 <template #default="{ row }">{{ labelOf(operatorLabels, row.operator) }}</template>
@@ -110,6 +117,19 @@ onMounted(load)
 </template>
 
 <style scoped>
+.product {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+}
+
 .body {
   min-height: 120px;
 }

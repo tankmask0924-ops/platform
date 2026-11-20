@@ -36,10 +36,10 @@ use App\OpenApi\ErrorCode;
  * 之前执行——跟话费商品校验不通过时的既有约定一致：不创建任何 Order 行，直接抛
  * `OpenApiException(ErrorCode::InvalidParams)`。
  *
- * 【`isCardProduct: true`】卡速售驱动的 `placeOrder()`/`queryOrder()`/
- * `parseCallback()` 都要求这个业务线传 `true`（`KasushouStatusMapper` 内部靠它
- * 决定"卡密类商品必须等 `card_list` 真的到了才算成功"），由
- * `SupplierRouter`/`SupplierCallbackService` 按 `orders.business_line === 'card'` 传入。
+ * 【`isCardProduct`】卡速售驱动的 `placeOrder()`/`queryOrder()`/`parseCallback()` 对
+ * `card_secret` 商品传 `true`（`KasushouStatusMapper` 内部靠它决定"卡密类商品必须等
+ * `card_list` 真的到了才算成功"），`direct` 商品传 `false`（没有卡密，状态 3 即成功），
+ * 由 `SupplierRouter::isCardSecretOrder()` 按商品的 `card_type` 统一判断。
  *
  * 【卡密落库】`direct` 类商品没有卡密（跟话费一样，只有 `recharge_account`）；
  * `card_secret` 类商品的卡号/卡密由 `App\Service\Order\OrderResultApplier::

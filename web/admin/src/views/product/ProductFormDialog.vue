@@ -2,8 +2,9 @@
 import { money, StatusTag, toOptions } from '@platform/shared'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { reactive, ref, watch } from 'vue'
-import { type Product, productApi, type ProductForm, type SupplierGoods } from '@/api/admin'
-import { cardTypeLabels, chargeSpeedLabels, mappingStatusLabels, operatorLabels, productBusinessLineLabels } from '@/labels'
+import { type Product, productApi, type ProductForm, requiredGoodsType, type SupplierGoods } from '@/api/admin'
+import { cardTypeLabels, chargeSpeedLabels, mappingStatusLabels, operatorLabels, productBusinessLineLabels, supplierGoodsTypeLabels } from '@/labels'
+import ImageUpload from './ImageUpload.vue'
 import SupplierGoodsPicker from './SupplierGoodsPicker.vue'
 
 const emit = defineEmits<{ saved: [id: number, created: boolean] }>()
@@ -16,6 +17,7 @@ const formRef = ref<FormInstance>()
 const empty = () => ({
   business_line: 'recharge' as Product['business_line'],
   name: '',
+  image_url: null as string | null,
   operator: '',
   province: '',
   charge_speed: '',
@@ -32,10 +34,16 @@ const goods = ref<SupplierGoods[]>([])
 const picker = ref<InstanceType<typeof SupplierGoodsPicker>>()
 
 function openPicker() {
+  if (form.business_line === 'card' && !form.card_type) {
+    ElMessage.warning('请先选择卡券类型：卡密商品只能配卡密，直充只能配直充')
+    return
+  }
+  const goodsType = requiredGoodsType(form.business_line, form.card_type || null)
   picker.value?.open({
     businessLine: form.business_line,
+    goodsType,
     excludeSupplierIds: goods.value.map((g) => g.supplier_id),
-    title: `选择供应商商品（${productBusinessLineLabels[form.business_line]?.label ?? form.business_line}）`,
+    title: `选择供应商商品（${productBusinessLineLabels[form.business_line]?.label ?? form.business_line} · ${supplierGoodsTypeLabels[goodsType].label}）`,
   })
 }
 
@@ -61,9 +69,9 @@ function moveGoods(index: number, delta: number) {
   ;[list[index], list[target]] = [list[target], list[index]]
 }
 
-// 换业务线后已选的供应商商品都对不上了
+// 换业务线或卡券类型后，已选的供应商商品都对不上了
 watch(
-  () => form.business_line,
+  () => [form.business_line, form.card_type],
   () => {
     if (editingId.value === null) {
       goods.value = []
@@ -92,6 +100,7 @@ function open(product?: Product) {
     Object.assign(form, {
       business_line: product.business_line,
       name: product.name,
+      image_url: product.image_url,
       operator: product.operator ?? '',
       province: product.province ?? '',
       charge_speed: product.charge_speed ?? '',
@@ -118,6 +127,7 @@ async function save() {
   }
   const data: ProductForm = {
     name: form.name.trim(),
+    image_url: form.image_url,
     province: form.province.trim() || null,
     face_value: form.face_value,
     sale_price: form.sale_price,
@@ -159,6 +169,12 @@ async function save() {
           <el-radio-button v-for="o in toOptions(productBusinessLineLabels)" :key="o.value" :value="o.value">{{ o.label }}</el-radio-button>
         </el-radio-group>
       </el-form-item>
+      <el-form-item v-if="form.business_line === 'card'" label="卡券类型" prop="card_type">
+        <el-select v-model="form.card_type" placeholder="请选择" :disabled="editingId !== null">
+          <el-option v-for="o in toOptions(cardTypeLabels)" :key="o.value" :value="o.value" :label="o.label" />
+        </el-select>
+        <div v-if="editingId !== null" class="tip">已关联供应商商品，卡密 / 直充不能再改</div>
+      </el-form-item>
       <el-form-item v-if="editingId === null" label="供应商商品" required>
         <div class="goods">
           <el-table v-if="goods.length" :data="goods" border size="small">
@@ -170,6 +186,12 @@ async function save() {
             </el-table-column>
             <el-table-column label="商品" min-width="160">
               <template #default="{ row }">{{ row.name ?? '-' }}<span class="muted">（{{ row.code }}）</span></template>
+            </el-table-column>
+            <el-table-column label="类型" width="65">
+              <template #default="{ row }">
+                <StatusTag v-if="row.goods_type" :map="supplierGoodsTypeLabels" :value="row.goods_type" />
+                <span v-else class="muted">未知</span>
+              </template>
             </el-table-column>
             <el-table-column label="成本价" width="85" align="right">
               <template #default="{ row }">{{ money(row.cost_price) }}</template>
@@ -192,6 +214,9 @@ async function save() {
       <el-form-item label="名称" prop="name">
         <el-input v-model="form.name" maxlength="128" />
       </el-form-item>
+      <el-form-item label="商品图片">
+        <ImageUpload v-model="form.image_url" />
+      </el-form-item>
       <template v-if="form.business_line === 'recharge'">
         <el-form-item label="运营商" prop="operator">
           <el-select v-model="form.operator" placeholder="请选择">
@@ -207,11 +232,6 @@ async function save() {
           <el-input v-model="form.province" maxlength="32" placeholder="留空表示全国" />
         </el-form-item>
       </template>
-      <el-form-item v-else label="卡券类型" prop="card_type">
-        <el-select v-model="form.card_type" placeholder="请选择">
-          <el-option v-for="o in toOptions(cardTypeLabels)" :key="o.value" :value="o.value" :label="o.label" />
-        </el-select>
-      </el-form-item>
       <el-form-item label="面值" prop="face_value">
         <el-input v-model="form.face_value"><template #prepend>¥</template></el-input>
       </el-form-item>

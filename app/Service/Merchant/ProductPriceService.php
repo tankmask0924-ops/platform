@@ -62,6 +62,7 @@ class ProductPriceService extends AbstractService
                 ->map(fn (Product $product) => [
                     'id' => $product->id,
                     'name' => $product->name,
+                    'image_url' => $product->image_url,
                     'operator' => $product->operator,
                     'province' => $product->province,
                     'charge_speed' => $product->charge_speed,

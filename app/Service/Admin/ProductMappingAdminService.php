@@ -51,6 +51,11 @@ class ProductMappingAdminService extends AbstractService
 {
     private const ALLOWED_STATUSES = ['active', 'paused', 'banned'];
 
+    private const GOODS_TYPE_LABELS = [
+        SupplierGoods::TYPE_CARD_SECRET => '卡密',
+        SupplierGoods::TYPE_VIRTUAL => '直充',
+    ];
+
     #[Inject]
     protected SupplierProductDao $supplierProductDao;
 
@@ -110,7 +115,7 @@ class ProductMappingAdminService extends AbstractService
         $product = $this->findProductOrFail($productId);
 
         $goodsId = $this->requiredPositiveInt($data, 'supplier_goods_id', 'supplier_goods_id 不能为空');
-        $goods = $this->resolveGoods($product->business_line, [$goodsId])[0];
+        $goods = $this->resolveGoods($product->business_line, $product->card_type, [$goodsId])[0];
         $priority = $this->requiredNonNegativeInt($data, 'priority', 'priority 必须是非负整数');
         $status = array_key_exists('status', $data) ? $this->validateStatus($data['status']) : null;
 
@@ -137,14 +142,23 @@ class ProductMappingAdminService extends AbstractService
     }
 
     /**
-     * 按 id 取一批供应商商品并校验能不能给某条业务线的本地商品用：都要存在、所属
-     * 供应商的业务线一致、同一个供应商只能选一个（`(product_id, supplier_id)` 唯一）。
-     * 返回顺序跟传入的 id 顺序一致（新增商品时这个顺序就是优先级顺序）。
+     * 本地商品要配哪种供应商商品：卡券里的卡密商品配卡密，话费和卡券直充都配虚拟商品（直充）。
+     * 卡密和直充配反了一定下单失败或者拿不到卡密。
+     */
+    public static function requiredGoodsType(string $businessLine, ?string $cardType): string
+    {
+        return $businessLine === 'card' && $cardType !== 'direct' ? SupplierGoods::TYPE_CARD_SECRET : SupplierGoods::TYPE_VIRTUAL;
+    }
+
+    /**
+     * 按 id 取一批供应商商品并校验能不能给这个本地商品用：都要存在、所属供应商的业务线一致、
+     * 商品类型对得上（requiredGoodsType()；供应商没给类型的不拦）、同一个供应商只能选一个
+     * （`(product_id, supplier_id)` 唯一）。返回顺序跟传入的 id 顺序一致（新增商品时这个顺序就是优先级顺序）。
      *
      * @param array<int, int> $goodsIds
      * @return array<int, SupplierGoods>
      */
-    public function resolveGoods(string $businessLine, array $goodsIds): array
+    public function resolveGoods(string $businessLine, ?string $cardType, array $goodsIds): array
     {
         $goodsById = $this->supplierGoodsDao->findMany($goodsIds);
         $suppliers = $this->supplierDao->findMany($goodsById->pluck('supplier_id')->unique()->values()->all());
@@ -164,6 +178,7 @@ class ProductMappingAdminService extends AbstractService
             if ($supplier->business_line !== $businessLine) {
                 throw new HttpException(422, '供应商业务线与本地商品业务线不一致，无法映射');
             }
+            $this->assertGoodsTypeMatches($goods, $businessLine, $cardType);
             if (isset($seenSuppliers[$goods->supplier_id])) {
                 throw new HttpException(422, '同一个供应商只能选一个商品：' . $supplier->name);
             }
@@ -268,6 +283,8 @@ class ProductMappingAdminService extends AbstractService
             if ($goods->supplier_id !== $mapping->supplier_id) {
                 throw new HttpException(422, '只能换成同一个供应商的商品');
             }
+            $product = $this->findProductOrFail((int) $mapping->product_id);
+            $this->assertGoodsTypeMatches($goods, $product->business_line, $product->card_type);
             $attributes['supplier_product_code'] = $goods->code;
             $attributes['status'] = $goods->status;
             $attributes['stock'] = $goods->stock;
@@ -296,6 +313,19 @@ class ProductMappingAdminService extends AbstractService
         });
 
         return $mapping;
+    }
+
+    private function assertGoodsTypeMatches(SupplierGoods $goods, string $businessLine, ?string $cardType): void
+    {
+        $required = self::requiredGoodsType($businessLine, $cardType);
+        if ($goods->goods_type !== null && $goods->goods_type !== $required) {
+            throw new HttpException(422, sprintf(
+                '供应商商品「%s」是%s商品，这个本地商品要配%s商品',
+                $goods->name ?? $goods->code,
+                self::GOODS_TYPE_LABELS[$goods->goods_type] ?? $goods->goods_type,
+                self::GOODS_TYPE_LABELS[$required]
+            ));
+        }
     }
 
     private function findProductOrFail(int $productId): Product
@@ -334,6 +364,7 @@ class ProductMappingAdminService extends AbstractService
                 'id' => $goods->id,
                 'name' => $goods->name,
                 'face_value' => $goods->face_value,
+                'goods_type' => $goods->goods_type,
             ],
             'cost_price' => $mapping->cost_price,
             'priority' => $mapping->priority,

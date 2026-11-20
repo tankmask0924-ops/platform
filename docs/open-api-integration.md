@@ -1,7 +1,7 @@
 # 开放 API 对接文档
 
 > 适用对象：接入平台开放 API 的商户（下游）技术人员
-> 更新日期：2026-10-06
+> 更新日期：2026-11-20
 
 平台通过一套开放 API 提供 **话费、卡券、电影票、快递** 四条业务线的服务。你只需要对接这一套接口，就能使用账户已开通的全部业务。
 
@@ -261,6 +261,7 @@ function sign(array $params, string $secret): string
 |---|---|---|
 | `id` | int | 商品 ID，下单时作为 `product_id` |
 | `name` | string | 商品名称 |
+| `image_url` | string\|null | 商品图片地址（https），没有图片时为 `null` |
 | `operator` | string\|null | 话费：运营商，`mobile` 移动、`unicom` 联通、`telecom` 电信。卡券为 `null` |
 | `province` | string\|null | 话费：限定省份，`null` 表示全国。卡券为 `null` |
 | `charge_speed` | string\|null | 话费：到账速度，`fast` 快充、`slow` 慢充。卡券为 `null` |
@@ -277,6 +278,7 @@ function sign(array $params, string $secret): string
     {
       "id": 12,
       "name": "移动 100 元快充",
+      "image_url": "https://img.example.com/uploads/images/20261120/3f9c1b0e8a4d4f6c9b2e7a1d5c8f0e42.png",
       "operator": "mobile",
       "province": null,
       "charge_speed": "fast",
@@ -288,6 +290,7 @@ function sign(array $params, string $secret): string
     {
       "id": 31,
       "name": "游戏点卡 100 元",
+      "image_url": null,
       "operator": null,
       "province": null,
       "charge_speed": null,
@@ -301,6 +304,7 @@ function sign(array $params, string $secret): string
 ```
 
 - 两条业务线共用这一个接口，用不上的字段返回 `null`。
+- `image_url` 是 2026-11-20 新增的字段；图片地址可能随商品调整而变化，建议每次拉列表时以最新值为准，不要长期缓存旧地址。
 - **平台不识别手机号所属运营商**：运营商和省份体现在商品上，请按号码自行选择对应商品。号码和商品运营商不符时充值会失败，冻结金额会解冻。
 - 没开通对应业务线时返回 `42007`。
 

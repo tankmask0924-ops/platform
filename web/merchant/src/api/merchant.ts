@@ -249,6 +249,8 @@ export const subscriptionApi = {
 export interface PricedProduct {
   id: number
   name: string
+  /** 商品图片，没有为 null */
+  image_url: string | null
   operator: string | null
   province: string | null
   charge_speed: string | null

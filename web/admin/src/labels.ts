@@ -44,6 +44,12 @@ export const supplierStatusLabels: LabelMap = {
   disabled: { label: '停用', type: 'info' },
 }
 
+/** supplier_goods.goods_type：卡速售 goods_type 1=卡密，2=虚拟（直充） */
+export const supplierGoodsTypeLabels: LabelMap = {
+  card_secret: { label: '卡密', type: 'warning' },
+  virtual: { label: '直充', type: 'info' },
+}
+
 export const mappingStatusLabels: LabelMap = {
   active: { label: '启用', type: 'success' },
   paused: { label: '暂停', type: 'warning' },

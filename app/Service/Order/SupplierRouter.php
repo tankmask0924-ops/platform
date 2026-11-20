@@ -262,6 +262,27 @@ class SupplierRouter extends AbstractService
         $this->orderResultApplier->apply($order, $failure, $failedSupplierId);
     }
 
+    /**
+     * 这笔订单买的是不是卡密商品——卡速售驱动据此决定"交易成功但还没拿到 card_list"算不算成功
+     * （KasushouStatusMapper）。只有卡券业务线里 `card_type = card_secret` 的商品是；卡券直充
+     * （`direct`，如视频会员直充）跟话费一样没有卡密，按卡密处理的话状态 3 永远等不到卡密，订单会一直卡在处理中。
+     *
+     * 只有明确是 `direct` 才不按卡密（跟 CardOrderPlacementService 校验下单参数的口径一致）；
+     * 找不到订单明细或商品时也按卡密处理：宁可多等卡密（订单停在处理中，最后转异常单人工看），
+     * 也不能把一笔卡密订单在没拿到卡密时就判成功扣款。下单、定时查询、回调三处共用。
+     */
+    public function isCardSecretOrder(Order $order): bool
+    {
+        if ($order->business_line !== 'card') {
+            return false;
+        }
+
+        $detail = $this->orderRechargeDao->find((int) $order->id);
+        $product = $detail === null ? null : $this->productDao->find((int) $detail->product_id);
+
+        return $product === null || $product->card_type !== 'direct';
+    }
+
     public function switchDurationMinutes(): int
     {
         $value = $this->systemSettingDao->getValue(self::SWITCH_DURATION_SETTING_KEY, self::DEFAULT_SWITCH_DURATION_MINUTES);
@@ -301,7 +322,7 @@ class SupplierRouter extends AbstractService
                 return false;
             }
 
-            $result = $this->callSupplier($order, $mapping, $supplier, $rechargeAccount, $attemptNo);
+            $result = $this->callSupplier($order, $product, $mapping, $supplier, $rechargeAccount, $attemptNo);
             $this->reactToSupplierSideSignals((int) $supplier->id, $result, $order);
             $attempt->fill([
                 'result' => self::RESULT_MAP[$result->result->name],
@@ -322,6 +343,7 @@ class SupplierRouter extends AbstractService
 
     private function callSupplier(
         Order $order,
+        Product $product,
         SupplierProduct $mapping,
         Supplier $supplier,
         ?string $rechargeAccount,
@@ -339,7 +361,7 @@ class SupplierRouter extends AbstractService
                 notifyUrl: $this->notifyAddressService->orderNotifyUrl($supplier),
                 attach: $rechargeAccount !== null ? [$this->resolveAttachField($mapping) => $rechargeAccount] : [],
                 quantity: 1,
-                isCardProduct: $order->business_line === 'card',
+                isCardProduct: $this->isCardSecretProduct($order, $product),
             );
         } catch (Throwable $e) {
             // 驱动构造/解密失败（比如供应商配置损坏）：拿不准一律按结果未知，
@@ -356,6 +378,14 @@ class SupplierRouter extends AbstractService
      * 把最后一次尝试的结果落到订单上。先预置这家映射行的成本价（只改内存，
      * OrderResultApplier::apply() 统一 save()；成功且驱动给了实际成本时会被覆盖）。
      */
+    /**
+     * 下单时商品已经在手上，不用再查一次（规则同 isCardSecretOrder()）。
+     */
+    private function isCardSecretProduct(Order $order, Product $product): bool
+    {
+        return $order->business_line === 'card' && $product->card_type !== 'direct';
+    }
+
     private function finalize(Order $order, Product $product, SupplierProduct $mapping, DriverResult $result): void
     {
         $order->fill(['cost_price' => $mapping->cost_price]);

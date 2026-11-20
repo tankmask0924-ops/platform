@@ -58,7 +58,8 @@ use Hyperf\Logger\LoggerFactory;
  * 同一个失败回调）按 `attempt_no`/供应商跟最新一次尝试对不上来识别，只回复 `ok`，
  * 不再应用——否则同一笔订单会被重复切换，或者被旧结果覆盖。
  *
- * 【卡券订单按卡券解析】卡速售驱动需要知道是不是卡密商品（卡密没到不算成功）。
+ * 【卡密订单按卡密解析】卡速售驱动需要知道是不是卡密商品（卡密没到不算成功），由
+ * SupplierRouter::isCardSecretOrder() 按商品的 card_type 判断（卡券直充不算）。
  * 验签之前先用回调里原始的 `external_orderno` 找到订单，只用来决定 `isCardProduct`；
  * 验签后驱动查询得到的权威单号必须指向同一笔订单，否则按找不到订单处理。
  *
@@ -147,7 +148,7 @@ class SupplierCallbackService extends AbstractService
         // 未验签的单号只用来选择解析方式，不据此做任何状态变更
         $claimed = $this->findOrderByExternalOrderNo($payload['external_orderno'] ?? null);
 
-        $result = $driver->parseCallback($payload, $headers, $claimed?->business_line === 'card');
+        $result = $driver->parseCallback($payload, $headers, $claimed !== null && $this->supplierRouter->isCardSecretOrder($claimed));
         if ($result === null) {
             throw new InvalidSupplierCallbackSignatureException(
                 'SupplierCallbackService: callback signature verification failed for supplier "' . $supplierCode . '".'

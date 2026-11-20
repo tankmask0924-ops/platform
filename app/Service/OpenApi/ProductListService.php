@@ -69,6 +69,8 @@ class ProductListService extends AbstractService
             $result[] = [
                 'id' => $product->id,
                 'name' => $product->name,
+                // 商品图片，没有上传时为 null
+                'image_url' => $product->image_url,
                 'operator' => $product->operator,
                 'province' => $product->province,
                 'charge_speed' => $product->charge_speed,

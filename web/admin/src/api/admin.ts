@@ -144,6 +144,8 @@ export interface Product {
   id: number
   business_line: 'recharge' | 'card'
   name: string
+  /** 商品图片（上传到云存储后的地址），没有为 null */
+  image_url: string | null
   operator: string | null
   province: string | null
   charge_speed: string | null
@@ -186,6 +188,8 @@ export interface SupplierGoods {
   code: string
   name: string | null
   face_value: string | null
+  /** card_secret 卡密 / virtual 直充；null 表示供应商没给 */
+  goods_type: 'card_secret' | 'virtual' | null
   cost_price: string
   status: string
   stock: number | null
@@ -194,8 +198,22 @@ export interface SupplierGoods {
   used_by: { id: number; name: string | null }[]
 }
 
+/** 本地商品要配哪种供应商商品：卡券卡密配卡密，话费和卡券直充配直充（同 ProductMappingAdminService::requiredGoodsType） */
+export function requiredGoodsType(businessLine: string, cardType: string | null): 'card_secret' | 'virtual' {
+  return businessLine === 'card' && cardType !== 'direct' ? 'card_secret' : 'virtual'
+}
+
 export const supplierGoodsApi = {
   list: (params: Query) => http.get<Paged<SupplierGoods>>('/admin/supplier-goods', params),
+}
+
+/** 后台上传图片到云存储：App\Controller\Admin\UploadController */
+export const uploadApi = {
+  image: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return http.post<{ url: string; key: string }>('/admin/uploads/image', form)
+  },
 }
 
 /** 商品映射：App\Controller\Admin\ProductMappingController */
@@ -207,7 +225,7 @@ export interface ProductMapping {
   supplier_code: string | null
   supplier_product_code: string
   /** 关联的供应商商品；供应商商品库里找不到时为 null（上线前手填编码的老映射） */
-  supplier_goods: { id: number; name: string | null; face_value: string | null } | null
+  supplier_goods: { id: number; name: string | null; face_value: string | null; goods_type: SupplierGoods['goods_type'] } | null
   cost_price: string
   priority: number
   status: string

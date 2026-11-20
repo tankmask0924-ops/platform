@@ -113,6 +113,23 @@ class SupplierGoodsControllerTest extends HttpTestCase
         $this->assertSame(['C-' . $mark], array_column($body['data'], 'code'));
     }
 
+    public function testGoodsTypeFilterKeepsUnknownTypeRows()
+    {
+        $supplier = $this->createSupplier('card');
+        $this->createGoods($supplier->id, ['code' => 'S-1', 'goods_type' => 'card_secret']);
+        $this->createGoods($supplier->id, ['code' => 'V-1', 'goods_type' => 'virtual']);
+        $this->createGoods($supplier->id, ['code' => 'U-1', 'goods_type' => null]);
+
+        $body = $this->get(['supplier_id' => $supplier->id, 'goods_type' => 'card_secret']);
+        $this->assertSame(['S-1', 'U-1'], array_column($body['data'], 'code'));
+        $this->assertSame('card_secret', $body['data'][0]['goods_type']);
+        $this->assertNull($body['data'][1]['goods_type']);
+
+        $token = $this->loginAs($this->createAdminWithPermissions(['product_mapping.view']));
+        $response = $this->client->request('GET', '/admin/supplier-goods?supplier_id=' . $supplier->id . '&goods_type=bogus', ['headers' => ['Authorization' => 'Bearer ' . $token]]);
+        $this->assertSame(422, $response->getStatusCode());
+    }
+
     public function testListMatchingNothingReturnsEmpty()
     {
         $supplier = $this->createSupplier('recharge');

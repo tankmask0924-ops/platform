@@ -42,6 +42,7 @@ class SupplierGoodsController extends AbstractController
         $businessLine = $this->request->input('business_line');
         $keyword = $this->request->input('keyword');
         $status = $this->request->input('status');
+        $goodsType = $this->request->input('goods_type');
 
         return $this->supplierGoodsAdminService->list(
             (int) $this->request->input('page', 1),
@@ -49,7 +50,8 @@ class SupplierGoodsController extends AbstractController
             $supplierId !== null && $supplierId !== '' ? (int) $supplierId : null,
             $businessLine !== null && $businessLine !== '' ? (string) $businessLine : null,
             $keyword !== null ? (string) $keyword : null,
-            $status !== null && $status !== '' ? (string) $status : null
+            $status !== null && $status !== '' ? (string) $status : null,
+            $goodsType !== null && $goodsType !== '' ? (string) $goodsType : null
         );
     }
 }

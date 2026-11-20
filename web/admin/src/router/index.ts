@@ -162,6 +162,12 @@ const router = createRouter({
           meta: { title: '系统参数' },
         },
         {
+          path: 'system/storage',
+          name: 'storage-settings',
+          component: () => import('@/views/system/StorageSettingView.vue'),
+          meta: { title: '云存储' },
+        },
+        {
           path: 'system/operation-logs',
           name: 'operation-logs',
           component: () => import('@/views/system/OperationLogView.vue'),

@@ -4,7 +4,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { mappingApi, productApi, type ProductDetail, type ProductMapping, type SupplierGoods } from '@/api/admin'
+import { mappingApi, productApi, type ProductDetail, type ProductMapping, requiredGoodsType, type SupplierGoods } from '@/api/admin'
 import { useLevels } from '@/composables/useLevels'
 import {
   cardTypeLabels,
@@ -153,10 +153,11 @@ function openPicker() {
   if (!product.value) {
     return
   }
+  const goodsType = requiredGoodsType(product.value.business_line, product.value.card_type)
   picker.value?.open(
     m
-      ? { businessLine: product.value.business_line, supplierId: m.supplier_id, title: `更换供应商商品（${m.supplier_name ?? `#${m.supplier_id}`}）` }
-      : { businessLine: product.value.business_line, excludeSupplierIds: mappings.value.map((x) => x.supplier_id) },
+      ? { businessLine: product.value.business_line, goodsType, supplierId: m.supplier_id, title: `更换供应商商品（${m.supplier_name ?? `#${m.supplier_id}`}）` }
+      : { businessLine: product.value.business_line, goodsType, excludeSupplierIds: mappings.value.map((x) => x.supplier_id) },
   )
 }
 
@@ -241,7 +242,11 @@ onMounted(() => {
           </div>
         </template>
         <el-descriptions :column="3" border>
-          <el-descriptions-item label="ID">{{ product.id }}</el-descriptions-item>
+          <el-descriptions-item label="商品图片" :span="3">
+            <el-image v-if="product.image_url" :src="product.image_url" :preview-src-list="[product.image_url]" fit="cover" class="thumb" />
+            <span v-else class="muted">没有图片，点「编辑」上传</span>
+          </el-descriptions-item>
+                    <el-descriptions-item label="ID">{{ product.id }}</el-descriptions-item>
           <el-descriptions-item label="业务线">{{ labelOf(productBusinessLineLabels, product.business_line) }}</el-descriptions-item>
           <el-descriptions-item label="状态"><StatusTag :map="productStatusLabels" :value="product.status" /></el-descriptions-item>
           <template v-if="product.business_line === 'recharge'">
@@ -404,6 +409,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: 4px;
+}
+
 .muted {
   color: #909399;
 }

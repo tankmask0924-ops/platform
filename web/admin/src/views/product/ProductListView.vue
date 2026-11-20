@@ -60,6 +60,12 @@ onMounted(list.load)
       <el-table-column label="业务" width="70">
         <template #default="{ row }">{{ labelOf(productBusinessLineLabels, row.business_line) }}</template>
       </el-table-column>
+      <el-table-column label="图片" width="70">
+        <template #default="{ row }">
+          <el-image v-if="row.image_url" :src="row.image_url" fit="cover" class="thumb" />
+          <span v-else class="muted">-</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="name" label="名称" min-width="180" />
       <el-table-column label="规格" min-width="130">
         <template #default="{ row }">{{ spec(row as Product) }}</template>
@@ -102,6 +108,16 @@ onMounted(list.load)
 </template>
 
 <style scoped>
+.thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+}
+
+.muted {
+  color: #909399;
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;

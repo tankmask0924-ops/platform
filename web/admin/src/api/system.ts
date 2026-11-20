@@ -79,6 +79,38 @@ export const settingApi = {
   update: (key: string, value: string | number | null) => http.put<Setting[]>(`/admin/settings/${key}`, { value }),
 }
 
+/** 系统设置 - 云存储：App\Controller\Admin\StorageSettingController */
+export interface StorageSetting {
+  configured: boolean
+  driver: 'aliyun_oss' | 'tencent_cos' | null
+  bucket: string | null
+  region: string | null
+  access_key_id: string | null
+  /** AccessKey Secret 只写不读，这里只告诉有没有设置过 */
+  access_key_secret_set: boolean
+  domain: string | null
+  path_prefix: string
+  updated_by: string | null
+  updated_at: string | null
+}
+
+export interface StorageSettingForm {
+  driver: 'aliyun_oss' | 'tencent_cos'
+  bucket: string
+  region: string
+  access_key_id: string
+  /** 留空表示不改 */
+  access_key_secret: string
+  domain: string
+  path_prefix: string
+}
+
+export const storageSettingApi = {
+  get: () => http.get<StorageSetting>('/admin/storage-settings'),
+  update: (data: StorageSettingForm) => http.put<StorageSetting>('/admin/storage-settings', data),
+  test: () => http.post<{ uploaded: boolean; public_readable: boolean; url: string; message: string }>('/admin/storage-settings/test'),
+}
+
 /** 操作日志：App\Controller\Admin\OperationLogController */
 export interface OperationLog {
   id: number

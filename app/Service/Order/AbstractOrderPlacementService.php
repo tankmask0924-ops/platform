@@ -53,7 +53,7 @@ use RuntimeException;
  * 【路由】按优先级选供应商、明确失败换下一家、切换时长、尝试记录都在
  * `App\Service\Order\SupplierRouter`，异步回调失败后的继续切换也走它；本类只负责
  * 下单前预检（没有可用供应商直接拒绝，不冻结），建单冻结后交给 SupplierOrderDispatcher（默认入队异步路由）。卡速售驱动
- * 需要的 `isCardProduct` 由路由按 `orders.business_line` 决定。
+ * 需要的 `isCardProduct` 由路由按商品的 `card_type` 决定（`SupplierRouter::isCardSecretOrder()`）。
  *
  * 【`orderNoPrefix()`】只是为了保留 `RechargeOrderPlacementService` 原有的
  * `'R'` 前缀完全不变（回归要求），卡券另起一个 `'C'` 前缀，纯粹为了人工在数据库/

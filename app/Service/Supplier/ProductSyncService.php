@@ -193,7 +193,7 @@ class ProductSyncService extends AbstractService
      * 见类注释）。这批数据本身来自平台主动发起的出站认证请求，不是入站通知，
      * 可以直接信任，不需要再逐条 queryProductDetail()。
      *
-     * @param array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string}> $productDetails
+     * @param array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string, goods_type?: null|string}> $productDetails
      */
     public function applyFullSyncPage(int $supplierId, array $productDetails): void
     {
@@ -211,7 +211,7 @@ class ProductSyncService extends AbstractService
      * 一条供应商商品的权威值：写进供应商商品库，再同步到映射了它的全部映射行。
      * 同一个供应商商品可能被多个本地商品映射（`supplier_product_code` 不唯一），全部都要更新。
      *
-     * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string} $detail
+     * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string, goods_type?: null|string} $detail
      */
     private function applyDetail(int $supplierId, array $detail): void
     {

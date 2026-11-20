@@ -14,7 +14,7 @@ import {
   type SupplierStats,
   type SupplierStatsRow,
 } from '@/api/admin'
-import { driverLabels, mappingStatusLabels, supplierCallActionLabels, supplierStatusLabels } from '@/labels'
+import { driverLabels, mappingStatusLabels, supplierCallActionLabels, supplierGoodsTypeLabels, supplierStatusLabels } from '@/labels'
 import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
@@ -372,6 +372,12 @@ onMounted(() => {
         <el-table-column prop="code" label="编码" min-width="110" />
         <el-table-column label="名称" min-width="180">
           <template #default="{ row }">{{ row.name ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="70">
+          <template #default="{ row }">
+            <StatusTag v-if="row.goods_type" :map="supplierGoodsTypeLabels" :value="row.goods_type" />
+            <span v-else class="muted">未知</span>
+          </template>
         </el-table-column>
         <el-table-column label="面值" width="90" align="right">
           <template #default="{ row }">{{ money(row.face_value) }}</template>

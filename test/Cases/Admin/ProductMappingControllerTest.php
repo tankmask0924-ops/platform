@@ -162,6 +162,32 @@ class ProductMappingControllerTest extends HttpTestCase
         $this->assertSame(0, SupplierProduct::where('product_id', $product->id)->count());
     }
 
+    public function testCreateAndRebindRejectGoodsOfWrongType()
+    {
+        $product = $this->createProduct(['business_line' => 'card', 'card_type' => 'card_secret']);
+        $supplier = $this->createSupplier(['business_line' => 'card']);
+        $virtual = $this->createGoods($supplier->id, ['goods_type' => 'virtual']);
+        $secret = $this->createGoods($supplier->id, ['goods_type' => 'card_secret']);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+
+        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+            'product_id' => $product->id, 'supplier_goods_id' => $virtual->id, 'priority' => 0,
+        ]);
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('卡密', (string) $response->getBody());
+
+        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+            'product_id' => $product->id, 'supplier_goods_id' => $secret->id, 'priority' => 0,
+        ]);
+        $this->assertSame(200, $response->getStatusCode());
+        $mappingId = json_decode((string) $response->getBody(), true)['id'];
+        $this->mappingIds[] = $mappingId;
+
+        $response = $this->jsonRequest('PUT', '/admin/product-mappings/' . $mappingId, $token, ['supplier_goods_id' => $virtual->id]);
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame($secret->code, SupplierProduct::find($mappingId)->supplier_product_code);
+    }
+
     public function testCreateWithMismatchedBusinessLineReturns422AndCreatesNoRow()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);

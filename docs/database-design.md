@@ -472,6 +472,7 @@ erDiagram
 | id | bigint unsigned | 是 | 主键 |
 | business_line | varchar(16) | 是 | `recharge` 话费 / `card` 卡券 |
 | name | varchar(128) | 是 | 商品名称，如"移动 100 元快充" |
+| image_url | varchar(512) | 否 | 商品图片地址（后台上传到云存储后的公开地址），开放 API 商品列表原样返回 |
 | operator | varchar(16) | 否 | 运营商，话费专用：`mobile`/`unicom`/`telecom` |
 | province | varchar(32) | 否 | 适用省份，话费可能按省份区分 |
 | charge_speed | varchar(16) | 否 | 话费专用：`fast` 快充 / `slow` 慢充 |
@@ -508,6 +509,7 @@ erDiagram
 | code | varchar(64) | 是 | 供应商侧商品编码 |
 | name | varchar(128) | 否 | 供应商侧商品名称；同步没返回时保留上次的值 |
 | face_value | decimal(10,2) | 否 | 面值；同步没返回时保留上次的值 |
+| goods_type | varchar(16) | 否 | `card_secret` 卡密 / `virtual` 虚拟（直充）；为空表示供应商没给。卡券卡密商品只能配卡密，话费和卡券直充只能配虚拟商品 |
 | cost_price | decimal(10,2) | 是 | 成本价（供应商最新值，历史记在映射行的 `supplier_product_price_history`） |
 | status | varchar(16) | 是 | `active` 在售 / `paused` 暂停 / `banned` 禁售 |
 | stock | int | 否 | 库存，为空表示不限 |
@@ -535,7 +537,7 @@ erDiagram
 
 索引：`(product_id, priority)`、`(supplier_id, status)`；`(product_id, supplier_id)` 唯一。路由时按 `(product_id, priority)` 取启用且未熔断、未禁售、库存非 0 的供应商。
 
-**一致性校验**（应用层，不做数据库约束）：新增/编辑映射时要检查 `suppliers.business_line` 与 `products.business_line` 一致——供应商现在单选业务线，不能把一个话费商品映射到一条只开通了卡券的供应商记录上。新增本地商品时必须同时选至少一个供应商商品（每个供应商一个），在同一个事务里建好映射行；已有映射的商品不能再改业务线。
+**一致性校验**（应用层，不做数据库约束）：新增/编辑映射时要检查 `suppliers.business_line` 与 `products.business_line` 一致——供应商现在单选业务线，不能把一个话费商品映射到一条只开通了卡券的供应商记录上。新增本地商品时必须同时选至少一个供应商商品（每个供应商一个），在同一个事务里建好映射行；供应商商品的 `goods_type` 要跟本地商品对得上（卡密配卡密，话费和卡券直充配虚拟商品，类型未知的不拦）；已有映射的商品不能再改业务线和卡券类型。
 
 #### `supplier_product_price_history`
 
@@ -889,6 +891,20 @@ erDiagram
 | `express_complete_fallback_days` | 快递完成兜底天数 | 15 |
 
 以上 key 和默认值以 `App\Service\Admin\SystemSettingAdminService::DEFINITIONS` 为准（后台「系统参数」页就是按它列出的）。
+
+另有一行结构化配置 `cloud_storage`（后台「系统设置 - 云存储」，`App\Service\Admin\StorageSettingAdminService`），value 是 JSON：
+
+| 字段 | 说明 |
+|---|---|
+| `driver` | `aliyun_oss` 阿里云 OSS / `tencent_cos` 腾讯云 COS |
+| `bucket` | 存储空间名；腾讯云要带 APPID，如 `images-1250000000` |
+| `region` | 地域，如 `cn-hangzhou`、`ap-guangzhou` |
+| `access_key_id` | AccessKey ID / SecretId |
+| `access_key_secret` | AccessKey Secret / SecretKey，**Encryptor 加密后存储**，接口不返回、操作日志不记录 |
+| `domain` | 对外访问域名（自定义域名或 CDN），为空用存储空间默认域名 |
+| `path_prefix` | 对象路径前缀，默认 `uploads`；图片存在 `前缀/images/年月日/随机串.扩展名` |
+
+没有这一行时后台不能上传图片。
 
 **不做成系统参数**（写死在代码里）：
 

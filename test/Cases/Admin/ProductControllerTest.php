@@ -202,6 +202,70 @@ class ProductControllerTest extends HttpTestCase
         $this->assertSame('recharge', Product::find($body['id'])->business_line);
     }
 
+    public function testCreateRejectsSupplierGoodsOfWrongType()
+    {
+        // 卡券直充只能配虚拟商品（直充），卡密只能配卡密，话费配虚拟；类型未知的不拦
+        $cases = [
+            ['card', 'direct', 'card_secret', 422],
+            ['card', 'card_secret', 'virtual', 422],
+            ['recharge', null, 'card_secret', 422],
+            ['card', 'card_secret', 'card_secret', 200],
+            ['card', 'direct', 'virtual', 200],
+            ['card', 'card_secret', null, 200],
+        ];
+        foreach ($cases as [$businessLine, $cardType, $goodsType, $expected]) {
+            $payload = $businessLine === 'card' ? $this->cardPayload() : $this->rechargePayload();
+            if ($cardType !== null) {
+                $payload['card_type'] = $cardType;
+            }
+            $payload['supplier_goods_ids'] = [$this->createGoods($this->createSupplier($businessLine)->id, ['goods_type' => $goodsType])->id];
+
+            $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+            $label = $businessLine . '/' . ($cardType ?? '-') . ' + ' . ($goodsType ?? 'unknown');
+            $this->assertSame($expected, $response->getStatusCode(), $label);
+            if ($expected === 200) {
+                $this->productIds[] = json_decode((string) $response->getBody(), true)['id'];
+            } else {
+                $this->assertStringContainsString('商品', (string) $response->getBody(), $label);
+            }
+        }
+    }
+
+    public function testUpdateCardTypeRejectedOnceSupplierGoodsLinked()
+    {
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $this->cardPayload());
+        $body = json_decode((string) $response->getBody(), true);
+        $this->productIds[] = $body['id'];
+
+        $unchanged = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['card_type' => 'direct', 'name' => '改个名字']);
+        $this->assertSame(200, $unchanged->getStatusCode(), '卡券类型没变的编辑照常保存');
+
+        $response = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['card_type' => 'card_secret']);
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('不能修改卡券类型', (string) $response->getBody());
+        $this->assertSame('direct', Product::find($body['id'])->card_type);
+    }
+
+    public function testImageUrlIsSavedValidatedAndClearable()
+    {
+        $payload = $this->rechargePayload();
+        $payload['image_url'] = 'https://img.example.com/uploads/images/20261120/a.png';
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->productIds[] = $body['id'];
+        $this->assertSame('https://img.example.com/uploads/images/20261120/a.png', $body['image_url']);
+
+        foreach (['javascript:alert(1)', 'img.example.com/a.png', 'https://img.example.com/a.png" onerror="x'] as $bad) {
+            $response = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['image_url' => $bad]);
+            $this->assertSame(422, $response->getStatusCode(), $bad);
+        }
+
+        $response = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['image_url' => '']);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertNull(Product::find($body['id'])->image_url);
+    }
+
     public function testCreateWithInvalidBusinessLineReturns422()
     {
         $payload = $this->rechargePayload();

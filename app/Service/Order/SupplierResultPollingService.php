@@ -128,7 +128,7 @@ class SupplierResultPollingService extends AbstractService
         }
 
         $result = $this->supplierDriverFactory->build($supplier)
-            ->queryOrder($order->order_no . '-' . $attempt->attempt_no, $order->business_line === 'card');
+            ->queryOrder($order->order_no . '-' . $attempt->attempt_no, $this->supplierRouter->isCardSecretOrder($order));
 
         // 查询期间可能已经有回调推进了订单或切到了下一家
         $order->refresh();

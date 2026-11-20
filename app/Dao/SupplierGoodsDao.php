@@ -59,9 +59,9 @@ class SupplierGoodsDao extends AbstractDao
 
     /**
      * 同步写入一条供应商商品：`(supplier_id, code)` 已存在就更新，不存在就新建。
-     * 供应商没返回名称、面值时保留库里原来的值，不拿 null 覆盖。
+     * 供应商没返回名称、面值、商品类型时保留库里原来的值，不拿 null 覆盖。
      *
-     * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string} $detail
+     * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string, goods_type?: null|string} $detail
      */
     public function upsertFromSync(int $supplierId, array $detail): SupplierGoods
     {
@@ -71,7 +71,7 @@ class SupplierGoodsDao extends AbstractDao
             'stock' => $detail['stock'],
             'synced_at' => date('Y-m-d H:i:s'),
         ];
-        foreach (['name', 'face_value'] as $field) {
+        foreach (['name', 'face_value', 'goods_type'] as $field) {
             if (($detail[$field] ?? null) !== null) {
                 $attributes[$field] = $detail[$field];
             }
@@ -88,10 +88,11 @@ class SupplierGoodsDao extends AbstractDao
      * 后台选供应商商品用的分页列表，按供应商、编码排序。
      *
      * @param array<int, int> $supplierIds 限定在这些供应商里（按业务线筛选时由调用方算好）
+     * @param null|string $goodsType card_secret/virtual；类型未知的也会列出来
      */
-    public function paginate(int $page, int $perPage, array $supplierIds, ?string $keyword, ?string $status): Collection
+    public function paginate(int $page, int $perPage, array $supplierIds, ?string $keyword, ?string $status, ?string $goodsType = null): Collection
     {
-        return $this->filteredQuery($supplierIds, $keyword, $status)
+        return $this->filteredQuery($supplierIds, $keyword, $status, $goodsType)
             ->orderBy('supplier_id')
             ->orderBy('code')
             ->forPage($page, $perPage)
@@ -101,15 +102,15 @@ class SupplierGoodsDao extends AbstractDao
     /**
      * @param array<int, int> $supplierIds
      */
-    public function count(array $supplierIds, ?string $keyword, ?string $status): int
+    public function count(array $supplierIds, ?string $keyword, ?string $status, ?string $goodsType = null): int
     {
-        return $this->filteredQuery($supplierIds, $keyword, $status)->count();
+        return $this->filteredQuery($supplierIds, $keyword, $status, $goodsType)->count();
     }
 
     /**
      * @param array<int, int> $supplierIds
      */
-    private function filteredQuery(array $supplierIds, ?string $keyword, ?string $status): Builder
+    private function filteredQuery(array $supplierIds, ?string $keyword, ?string $status, ?string $goodsType): Builder
     {
         $query = $this->newQuery()->whereIn('supplier_id', $supplierIds);
 
@@ -122,6 +123,13 @@ class SupplierGoodsDao extends AbstractDao
 
         if ($status !== null) {
             $query->where('status', $status);
+        }
+
+        // 按类型筛时，类型未知（供应商没给）的也列出来，让运营自己判断
+        if ($goodsType !== null) {
+            $query->where(function (Builder $q) use ($goodsType) {
+                $q->where('goods_type', $goodsType)->orWhereNull('goods_type');
+            });
         }
 
         return $query;

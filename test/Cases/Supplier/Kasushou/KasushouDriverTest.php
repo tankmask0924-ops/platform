@@ -554,8 +554,8 @@ class KasushouDriverTest extends TestCase
                 'msg' => '',
                 'data' => [
                     'list' => [
-                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100, 'goods_name' => '移动 10 元快充', 'face_value' => '10'],
-                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 3, 'stock_num' => 0, 'face_value' => 'n/a'],
+                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100, 'goods_name' => '移动 10 元快充', 'face_value' => '10', 'goods_type' => 2],
+                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 3, 'stock_num' => 0, 'face_value' => 'n/a', 'goods_type' => '1'],
                         ['id' => 'GOODS-3', 'goods_price' => '9.90', 'status' => '2', 'stock_num' => '5'],
                     ],
                     'total' => 2,
@@ -569,6 +569,10 @@ class KasushouDriverTest extends TestCase
         $this->assertSame('GOODS-1', $entries[0]['supplier_product_code']);
         $this->assertSame(100, $entries[0]['stock']);
         $this->assertSame('paused', $entries[2]['status']);
+        // 商品类型：1=卡密，2=虚拟；没给或不认识就是 null
+        $this->assertSame('virtual', $entries[0]['goods_type']);
+        $this->assertSame('card_secret', $entries[1]['goods_type']);
+        $this->assertNull($entries[2]['goods_type']);
         $this->assertSame(5, $entries[2]['stock']);
         $this->assertSame('active', $entries[0]['status']);
         $this->assertSame('GOODS-2', $entries[1]['supplier_product_code']);

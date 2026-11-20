@@ -93,6 +93,12 @@ class KasushouDriver
         3 => 'banned',
     ];
 
+    /** 商品类型：1=卡密商品，2=虚拟商品（直充） */
+    private const GOODS_TYPE_MAP = [
+        1 => 'card_secret',
+        2 => 'virtual',
+    ];
+
     /** 商品详情接口 */
     private const PATH_GOODS_DETAIL = '/api/v1/goods/info';
 
@@ -424,7 +430,7 @@ class KasushouDriver
      * 失败了"的处理原则，不做"结果未知"这种订单类方法才有的三态语义（这不是订单
      * 操作，没有 UnifiedResult 概念可用）。
      *
-     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}
+     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}
      */
     public function queryProductDetail(string $supplierProductCode): array
     {
@@ -456,7 +462,7 @@ class KasushouDriver
      * 错误，跳过那一条（或整页返回空），因为这是"取一页数据"的语义，不是"取一个
      * 确定存在的商品详情"，容忍个别脏数据不影响其它条目正常同步。
      *
-     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}>
+     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}>
      */
     public function syncAllProducts(int $page = 1, int $pageSize = 100): array
     {
@@ -670,13 +676,13 @@ class KasushouDriver
     }
 
     /**
-     * 把商品详情/列表条目的原始数组（id、goods_name、face_value、goods_price、status、stock_num）
+     * 把商品详情/列表条目的原始数组（id、goods_name、goods_type、face_value、goods_price、status、stock_num）
      * 解析成统一的小结构。id/goods_price 缺失或类型
      * 不对：解析失败，返回 null（调用方决定是抛异常还是跳过这一条，见
      * queryProductDetail()/syncAllProducts() 的不同处理）。
      *
      * @param array<string, mixed> $raw
-     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}
+     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}
      */
     private function parseGoodsEntry(array $raw): ?array
     {
@@ -701,6 +707,7 @@ class KasushouDriver
             'stock' => $this->toNullableInt($raw['stock_num'] ?? null),
             'name' => is_string($name) && trim($name) !== '' ? mb_substr(trim($name), 0, 128) : null,
             'face_value' => is_numeric($faceValue) && bccomp((string) $faceValue, '0', 2) >= 0 ? bcadd((string) $faceValue, '0', 2) : null,
+            'goods_type' => $this->mapGoodsType($raw['goods_type'] ?? null),
         ];
     }
 
@@ -719,6 +726,19 @@ class KasushouDriver
         }
 
         return is_int($raw) ? (self::GOODS_STATUS_MAP[$raw] ?? 'paused') : 'paused';
+    }
+
+    /**
+     * 商品类型（1=卡密，2=虚拟）映射成 card_secret/virtual；不认识的取值返回 null（不猜），
+     * 后台选商品时就不按类型拦。
+     */
+    private function mapGoodsType(mixed $raw): ?string
+    {
+        if (is_string($raw) && ctype_digit($raw)) {
+            $raw = (int) $raw;
+        }
+
+        return is_int($raw) ? (self::GOODS_TYPE_MAP[$raw] ?? null) : null;
     }
 
     private function toNullableInt(mixed $value): ?int

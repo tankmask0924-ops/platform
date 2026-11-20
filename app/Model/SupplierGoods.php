@@ -27,6 +27,7 @@ use Carbon\Carbon;
  * @property string $code
  * @property null|string $name
  * @property null|string $face_value
+ * @property null|string $goods_type card_secret 卡密 / virtual 虚拟（直充、话费）；为空表示供应商没给
  * @property string $cost_price
  * @property string $status 取值 active/paused/banned
  * @property null|int $stock 为空表示不限
@@ -36,6 +37,10 @@ use Carbon\Carbon;
  */
 class SupplierGoods extends Model
 {
+    public const TYPE_CARD_SECRET = 'card_secret';
+
+    public const TYPE_VIRTUAL = 'virtual';
+
     protected ?string $table = 'supplier_goods';
 
     protected array $fillable = [
@@ -43,6 +48,7 @@ class SupplierGoods extends Model
         'code',
         'name',
         'face_value',
+        'goods_type',
         'cost_price',
         'status',
         'stock',

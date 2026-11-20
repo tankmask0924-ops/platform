@@ -302,6 +302,31 @@ class SupplierRouterTest extends TestCase
     /**
      * @return array{0: Merchant, 1: Product, 2: Supplier, 3: Supplier}
      */
+    /**
+     * 卡密与否按商品的 card_type 判断：卡券直充跟话费一样不等卡密；找不到商品时按卡密处理（宁可多等）。
+     * 定时查询和回调都靠它决定 isCardProduct。
+     */
+    public function testIsCardSecretOrderFollowsProductCardType()
+    {
+        $merchant = $this->createMerchant('0.00', '10.00');
+        $supplier = $this->createSupplier();
+        $router = $this->getContainer()->get(SupplierRouter::class);
+
+        $recharge = $this->createAcceptedOrder($merchant, $this->createProduct('10.00'), $supplier, '9.00');
+        $this->assertFalse($router->isCardSecretOrder($recharge));
+
+        foreach (['direct' => false, 'card_secret' => true] as $cardType => $expected) {
+            $product = $this->createProduct('10.00');
+            $product->fill(['business_line' => 'card', 'operator' => null, 'charge_speed' => null, 'card_type' => $cardType])->save();
+            $order = $this->createAcceptedOrder($merchant, $product, $supplier, '9.00');
+            $order->fill(['business_line' => 'card'])->save();
+            $this->assertSame($expected, $router->isCardSecretOrder($order), $cardType);
+        }
+
+        OrderRecharge::where('order_id', $order->id)->delete();
+        $this->assertTrue($router->isCardSecretOrder($order), '找不到商品时按卡密处理');
+    }
+
     private function setUpTwoSuppliers(): array
     {
         $merchant = $this->createMerchant('90.00', '10.00');

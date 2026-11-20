@@ -1142,6 +1142,26 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - 签名算法本身跟原文一致：`KasushouSignerTest` 新增用例，用文档「签名规范」的示例原样算出文档给的 sign。
 - 待向卡速售确认：多规格商品（`goods_sku_id`）怎么下单；订单详情查不到时返回空数组还是 400（见 kasushou.md 第 5 节）。
 
+**云存储与商品图片**（2026-11-20）：
+- **系统设置 - 云存储**：`GET/PUT /admin/storage-settings`、`POST /admin/storage-settings/test`（权限沿用 `setting.view` / `setting.manage`），后台页面 `views/system/StorageSettingView.vue`。
+  可选阿里云 OSS 或腾讯云 COS，填存储空间、地域、AccessKey、访问域名、路径前缀；配置存 `system_settings.cloud_storage`（JSON），AccessKey Secret 加密存储、只写不读，留空表示不改，换云厂商或换 AccessKey ID 必须重填。
+  「测试连接」真的上传一个小文件、用公开地址读一次再删掉，能看出密钥权限和存储空间是否公共读。
+- **上传**：`POST /admin/uploads/image`（multipart 字段 `file`，权限 `product.manage`），只认 jpg/png/gif/webp（按文件内容判断）、最大 2MB；对象 key 由平台生成 `前缀/images/年月日/随机串.扩展名`。
+  Swoole 请求体上限从默认 2MB 调到 4MB（`config/autoload/server.php` 的 `package_max_length`）。
+- **实现**：`App\Storage\CloudStorageClient`（PutObject / DeleteObject，走 Hyperf Guzzle，不引两家 SDK），签名在 `AliyunOssSigner`（OSS V4，V1 阿里云在推动下线）和 `TencentCosSigner`，
+  `CloudStorageSignerTest` 用两家官方文档的签名示例核对（文档把最终签名打了码，能核对的中间值全部对上）。
+- **商品图片**：`products.image_url`，后台新增/编辑商品时上传，商品列表、详情显示缩略图；开放 API 商品列表和商户后台「商品价格」返回/显示 `image_url`（已更新 `open-api-integration.md`）。
+  不直接用供应商（卡速售 `goods_img`）的图片地址：地址在供应商域名下，会把供应商暴露给商户。
+- 测试：`CloudStorageSignerTest`、`CloudStorageClientTest`、`CloudStorageControllerTest`（配置、校验、权限、测试连接、上传）、`ProductControllerTest::testImageUrlIsSavedValidatedAndClearable`、`OpenApi\ProductControllerTest`。
+- 未做：没有接真实的 OSS/COS 联调过（需要管理员填真实账号后点「测试连接」）；没有图片裁剪/压缩；没有 STS 临时凭证和前端直传（目前经后端中转，2MB 以内够用）。
+
+**卡券直充按直充处理、映射校验商品类型**（2026-11-20）：
+- 下单、定时查询、回调之前只要是卡券业务线就按卡密商品处理（`isCardProduct = business_line === 'card'`），卡券直充（如视频会员直充）没有卡密，卡速售返回交易成功也一直等不到 `card_list`，订单会卡在处理中直到转异常单。
+  现在统一由 `SupplierRouter::isCardSecretOrder()` 按商品 `card_type` 判断：只有明确是 `direct` 才不等卡密，找不到商品时按卡密处理（宁可多等，不能没拿到卡密就扣款）。
+- 供应商商品库新增 `goods_type`（卡速售 `goods_type` 1=卡密 → `card_secret`，2=虚拟 → `virtual`）。新增商品、添加/更换映射时校验类型：卡券卡密配卡密，话费和卡券直充配虚拟商品；供应商没给类型的不拦。
+  `GET /admin/supplier-goods` 新增 `goods_type` 筛选（类型未知的也列出来），后台选择器按本地商品自动筛；新增卡券商品要先选卡券类型。已有映射的商品不能再改 `card_type`。
+- 测试：`SupplierRouterTest::testIsCardSecretOrderFollowsProductCardType`、`CardOrderPlacementServiceTest`（直充下单传 `isCardProduct=false`、卡密传 `true`）、`ProductControllerTest`、`ProductMappingControllerTest`、`SupplierGoodsControllerTest`、`KasushouDriverTest`。
+
 **供应商商品库**（2026-11-20，requirements.md 6.4「运营把本地商品关联到各供应商的商品」）：此前同步只更新已有映射行，没映射的商品直接丢掉，
 后台建映射只能手填供应商商品编码，填错了也没人发现。现在：
 - 新表 `supplier_goods`（`App\Model\SupplierGoods` / `App\Dao\SupplierGoodsDao`）：`ProductSyncService` 把变更通知和全量校准拿到的**每一条**供应商商品都 upsert 进来

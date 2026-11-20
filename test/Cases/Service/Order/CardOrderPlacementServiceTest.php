@@ -122,7 +122,8 @@ class CardOrderPlacementServiceTest extends TestCase
         $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-DIRECT-1', '8.00', 1);
 
         $driver = Mockery::mock(KasushouDriver::class);
-        $driver->shouldReceive('placeOrder')->once()->andReturn(new DriverResult(
+        // 直充没有卡密：不能按卡密商品下单，否则状态 3 会一直等 card_list
+        $driver->shouldReceive('placeOrder')->once()->withArgs(static fn (...$args) => ($args['isCardProduct'] ?? $args[6] ?? null) === false)->andReturn(new DriverResult(
             result: UnifiedResult::Success,
             supplierOrderNo: 'SUP-CARD-DIRECT-1',
             actualCost: '8.00',
@@ -188,7 +189,7 @@ class CardOrderPlacementServiceTest extends TestCase
         $this->createSupplierProduct($product->id, $supplier->id, 'GOODS-SECRET-1', '8.00', 1);
 
         $driver = Mockery::mock(KasushouDriver::class);
-        $driver->shouldReceive('placeOrder')->once()->andReturn(new DriverResult(
+        $driver->shouldReceive('placeOrder')->once()->withArgs(static fn (...$args) => ($args['isCardProduct'] ?? $args[6] ?? null) === true)->andReturn(new DriverResult(
             result: UnifiedResult::Success,
             supplierOrderNo: 'SUP-CARD-SECRET-1',
             actualCost: '8.00',

@@ -41,6 +41,8 @@ return [
         Constant::OPTION_MAX_REQUEST => 100000,
         Constant::OPTION_SOCKET_BUFFER_SIZE => 2 * 1024 * 1024,
         Constant::OPTION_BUFFER_OUTPUT_SIZE => 2 * 1024 * 1024,
+        // 请求体上限（Swoole 默认 2MB）：后台上传商品图片最大 2MB，加上 multipart 开销要留余量
+        Constant::OPTION_PACKAGE_MAX_LENGTH => 4 * 1024 * 1024,
     ],
     'callbacks' => [
         Event::ON_WORKER_START => [Hyperf\Framework\Bootstrap\WorkerStartCallback::class, 'onWorkerStart'],

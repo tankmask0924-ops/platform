@@ -2,7 +2,7 @@
 import { money, StatusTag, usePagedList } from '@platform/shared'
 import { ref } from 'vue'
 import { type SupplierGoods, supplierGoodsApi } from '@/api/admin'
-import { mappingStatusLabels } from '@/labels'
+import { mappingStatusLabels, supplierGoodsTypeLabels } from '@/labels'
 
 /**
  * 从供应商商品库里选一个供应商商品。每次 open() 选一个，选中即关闭；
@@ -14,15 +14,17 @@ const visible = ref(false)
 const title = ref('选择供应商商品')
 const excluded = ref<number[]>([])
 
-const list = usePagedList<SupplierGoods, { business_line: string; supplier_id: number | ''; keyword: string }>(
+const list = usePagedList<SupplierGoods, { business_line: string; supplier_id: number | ''; goods_type: string; keyword: string }>(
   supplierGoodsApi.list,
-  { business_line: '', supplier_id: '', keyword: '' },
+  { business_line: '', supplier_id: '', goods_type: '', keyword: '' },
   10,
 )
 const { rows, total, page, perPage, loading, filters } = list
 
-function open(options: { businessLine: string; supplierId?: number; excludeSupplierIds?: number[]; title?: string }) {
+/** goodsType：只列这种类型（类型未知的也会列出来） */
+function open(options: { businessLine: string; goodsType?: string; supplierId?: number; excludeSupplierIds?: number[]; title?: string }) {
   filters.business_line = options.businessLine
+  filters.goods_type = options.goodsType ?? ''
   filters.supplier_id = options.supplierId ?? ''
   filters.keyword = ''
   excluded.value = options.excludeSupplierIds ?? []
@@ -57,6 +59,12 @@ function pick(row: SupplierGoods) {
       <el-table-column prop="code" label="编码" min-width="110" />
       <el-table-column label="名称" min-width="180">
         <template #default="{ row }">{{ row.name ?? '-' }}</template>
+      </el-table-column>
+      <el-table-column label="类型" width="70">
+        <template #default="{ row }">
+          <StatusTag v-if="row.goods_type" :map="supplierGoodsTypeLabels" :value="row.goods_type" />
+          <span v-else class="muted">未知</span>
+        </template>
       </el-table-column>
       <el-table-column label="面值" width="90" align="right">
         <template #default="{ row }">{{ money(row.face_value) }}</template>

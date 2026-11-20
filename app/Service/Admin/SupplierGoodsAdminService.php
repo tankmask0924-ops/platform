@@ -34,6 +34,8 @@ class SupplierGoodsAdminService extends AbstractService
 {
     private const ALLOWED_STATUSES = ['active', 'paused', 'banned'];
 
+    private const ALLOWED_GOODS_TYPES = [SupplierGoods::TYPE_CARD_SECRET, SupplierGoods::TYPE_VIRTUAL];
+
     private const MAX_PER_PAGE = 100;
 
     #[Inject]
@@ -50,7 +52,8 @@ class SupplierGoodsAdminService extends AbstractService
 
     /**
      * `supplier_id` 和 `business_line` 至少给一个：前者看一家供应商的商品，后者给某条
-     * 业务线的本地商品选供应商商品（只列这条业务线的供应商）。
+     * 业务线的本地商品选供应商商品（只列这条业务线的供应商）。`goods_type`（card_secret/virtual）
+     * 按商品类型筛，类型未知的也会列出来。
      *
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
      */
@@ -60,13 +63,17 @@ class SupplierGoodsAdminService extends AbstractService
         ?int $supplierId,
         ?string $businessLine,
         ?string $keyword,
-        ?string $status
+        ?string $status,
+        ?string $goodsType = null
     ): array {
         $page = max(1, $page);
         $perPage = min(max(1, $perPage), self::MAX_PER_PAGE);
 
         if ($status !== null && ! in_array($status, self::ALLOWED_STATUSES, true)) {
             throw new HttpException(422, 'status 必须是以下之一：' . implode('/', self::ALLOWED_STATUSES));
+        }
+        if ($goodsType !== null && ! in_array($goodsType, self::ALLOWED_GOODS_TYPES, true)) {
+            throw new HttpException(422, 'goods_type 必须是以下之一：' . implode('/', self::ALLOWED_GOODS_TYPES));
         }
 
         if ($supplierId !== null) {
@@ -87,7 +94,7 @@ class SupplierGoodsAdminService extends AbstractService
         $supplierIds = $suppliers->keys()->all();
         $keyword = $keyword !== null && trim($keyword) !== '' ? trim($keyword) : null;
 
-        $rows = $this->supplierGoodsDao->paginate($page, $perPage, $supplierIds, $keyword, $status);
+        $rows = $this->supplierGoodsDao->paginate($page, $perPage, $supplierIds, $keyword, $status, $goodsType);
         $usedBy = $this->usedBy($rows->all());
 
         return [
@@ -99,7 +106,7 @@ class SupplierGoodsAdminService extends AbstractService
                 ))
                 ->values()
                 ->all(),
-            'total' => $this->supplierGoodsDao->count($supplierIds, $keyword, $status),
+            'total' => $this->supplierGoodsDao->count($supplierIds, $keyword, $status, $goodsType),
             'page' => $page,
             'per_page' => $perPage,
         ];
@@ -149,6 +156,7 @@ class SupplierGoodsAdminService extends AbstractService
             'code' => $goods->code,
             'name' => $goods->name,
             'face_value' => $goods->face_value,
+            'goods_type' => $goods->goods_type,
             'cost_price' => $goods->cost_price,
             'status' => $goods->status,
             'stock' => $goods->stock,

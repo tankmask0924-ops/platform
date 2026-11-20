@@ -90,6 +90,11 @@ class ProductAdminService extends AbstractService
     private const NAME_MAX_LENGTH = 128;
 
     /**
+     * products.image_url 列宽 512。
+     */
+    private const IMAGE_URL_MAX_LENGTH = 512;
+
+    /**
      * products.province 列宽 32。
      */
     private const PROVINCE_MAX_LENGTH = 32;
@@ -166,6 +171,7 @@ class ProductAdminService extends AbstractService
     {
         $businessLine = $this->validateBusinessLine($data['business_line'] ?? null);
         $name = $this->validateName($data['name'] ?? null);
+        $imageUrl = $this->validateImageUrl($data['image_url'] ?? null);
         $faceValue = $this->requiredNonNegativeDecimal($data, 'face_value');
         $salePrice = $this->requiredNonNegativeDecimal($data, 'sale_price');
         $rebateAmount = $this->requiredNonNegativeDecimal($data, 'rebate_amount');
@@ -180,6 +186,7 @@ class ProductAdminService extends AbstractService
         $conditionalFields = $this->resolveConditionalFields($businessLine, $data, true);
         $goodsList = $this->productMappingAdminService->resolveGoods(
             $businessLine,
+            $conditionalFields['card_type'] ?? null,
             $this->validateSupplierGoodsIds($data['supplier_goods_ids'] ?? null)
         );
 
@@ -193,11 +200,13 @@ class ProductAdminService extends AbstractService
             $applicableRegion,
             $status,
             $conditionalFields,
-            $goodsList
+            $goodsList,
+            $imageUrl
         ) {
             $product = $this->productDao->create(array_merge([
                 'business_line' => $businessLine,
                 'name' => $name,
+                'image_url' => $imageUrl,
                 'province' => $province,
                 'face_value' => $faceValue,
                 'sale_price' => $salePrice,
@@ -248,6 +257,10 @@ class ProductAdminService extends AbstractService
             $attributes['name'] = $this->validateName($data['name']);
         }
 
+        if (array_key_exists('image_url', $data)) {
+            $attributes['image_url'] = $this->validateImageUrl($data['image_url']);
+        }
+
         if (array_key_exists('face_value', $data)) {
             $attributes['face_value'] = $this->requiredNonNegativeDecimal($data, 'face_value');
         }
@@ -277,6 +290,13 @@ class ProductAdminService extends AbstractService
         }
 
         $attributes = array_merge($attributes, $this->resolveConditionalFields($businessLine, $data, false));
+
+        // 卡密 / 直充决定了要配哪种供应商商品，已经配好的映射会全部对不上
+        if (array_key_exists('card_type', $attributes)
+            && $attributes['card_type'] !== $product->card_type
+            && $this->supplierProductDao->listForProduct((int) $product->id)->isNotEmpty()) {
+            throw new HttpException(422, '商品已经关联了供应商商品，不能修改卡券类型');
+        }
 
         if ($attributes !== []) {
             $product->fill($attributes)->save();
@@ -363,6 +383,7 @@ class ProductAdminService extends AbstractService
             'id' => $product->id,
             'business_line' => $product->business_line,
             'name' => $product->name,
+            'image_url' => $product->image_url,
             'operator' => $product->operator,
             'province' => $product->province,
             'charge_speed' => $product->charge_speed,
@@ -540,6 +561,20 @@ class ProductAdminService extends AbstractService
         }
 
         return $name;
+    }
+
+    /**
+     * 商品图片：留空表示没有图片；有就必须是 http(s) 地址（一般是后台上传到云存储后拿到的地址），
+     * 不接受 javascript: 之类会在商户后台渲染出问题的地址。
+     */
+    private function validateImageUrl(mixed $value): ?string
+    {
+        $value = $this->nullableString($value, 'image_url', self::IMAGE_URL_MAX_LENGTH);
+        if ($value !== null && preg_match('#^https?://[^\s"\'<>]+$#i', $value) !== 1) {
+            throw new HttpException(422, 'image_url 必须是 http(s) 图片地址');
+        }
+
+        return $value;
     }
 
     private function nullableString(mixed $value, string $field, int $maxLength): ?string

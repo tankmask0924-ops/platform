@@ -23,6 +23,7 @@ use Carbon\Carbon;
  * @property int $id
  * @property string $business_line
  * @property string $name
+ * @property null|string $image_url 商品图片（后台上传到云存储，见 App\Service\Storage\CloudStorageService）
  * @property null|string $operator
  * @property null|string $province
  * @property null|string $charge_speed
@@ -42,6 +43,7 @@ class Product extends Model
     protected array $fillable = [
         'business_line',
         'name',
+        'image_url',
         'operator',
         'province',
         'charge_speed',
