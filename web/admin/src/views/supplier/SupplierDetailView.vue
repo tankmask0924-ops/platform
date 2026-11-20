@@ -1,10 +1,20 @@
 <script setup lang="ts">
 import { businessLineLabels, copyText, labelOf, money, StatusTag, toOptions, usePagedList } from '@platform/shared'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { type CircuitBreakerRow, type CircuitBreakerStatus, type SupplierCallLog, supplierApi, type SupplierDetail, type SupplierStats, type SupplierStatsRow } from '@/api/admin'
-import { driverLabels, supplierCallActionLabels, supplierStatusLabels } from '@/labels'
+import {
+  type CircuitBreakerRow,
+  type CircuitBreakerStatus,
+  type SupplierCallLog,
+  supplierApi,
+  type SupplierDetail,
+  type SupplierGoods,
+  supplierGoodsApi,
+  type SupplierStats,
+  type SupplierStatsRow,
+} from '@/api/admin'
+import { driverLabels, mappingStatusLabels, supplierCallActionLabels, supplierStatusLabels } from '@/labels'
 import { usePermissionStore } from '@/stores/permission'
 
 const route = useRoute()
@@ -50,7 +60,7 @@ async function syncProducts() {
     ElMessage.success(
       supplier.value?.driver === 'mango'
         ? '已开始同步城市、区县和影院，过程可在下方调用日志查看'
-        : '已开始同步，完成后商品映射的同步时间会更新，过程可在下方调用日志查看',
+        : '已开始同步，完成后刷新下方「供应商商品」查看，过程可在调用日志查看',
     )
   } finally {
     syncing.value = false
@@ -156,6 +166,30 @@ function duration(seconds: number | null): string {
 function rateDanger(row: SupplierStatsRow): boolean {
   return row.success_rate !== null && row.success_rate < 90 && row.success_count + row.failed_count >= 10
 }
+
+// 供应商商品库（商品同步写入，新增本地商品时从这里选）
+const canViewGoods = computed(() => permission.can('product_mapping.view'))
+const goods = usePagedList<SupplierGoods, { supplier_id: number; keyword: string }>(
+  supplierGoodsApi.list,
+  { supplier_id: id, keyword: '' },
+  20,
+)
+const goodsRows = goods.rows
+const goodsTotal = goods.total
+const goodsPage = goods.page
+const goodsPerPage = goods.perPage
+const goodsLoading = goods.loading
+const goodsFilters = goods.filters
+// 权限可能在页面挂载之后才拿到，有权限时再加载
+watch(
+  canViewGoods,
+  (can) => {
+    if (can) {
+      goods.load()
+    }
+  },
+  { immediate: true },
+)
 
 // 调用日志
 const initial = { action: '', order_no: '', created_from: '', created_to: '' }
@@ -322,6 +356,56 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
+    </el-card>
+
+    <el-card v-if="canViewGoods && supplier && supplier.driver === 'kasushou'" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <span>供应商商品（同步得到，新增本地商品时从这里选）</span>
+          <el-form inline class="inline-form" @submit.prevent="goods.search">
+            <el-input v-model="goodsFilters.keyword" clearable placeholder="名称关键字或商品编码" style="width: 220px" @clear="goods.search" />
+            <el-button native-type="submit" class="gap-left">搜索</el-button>
+          </el-form>
+        </div>
+      </template>
+      <el-table v-loading="goodsLoading" :data="goodsRows" border size="small" empty-text="还没有同步到商品，点上方「同步商品」">
+        <el-table-column prop="code" label="编码" min-width="110" />
+        <el-table-column label="名称" min-width="180">
+          <template #default="{ row }">{{ row.name ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column label="面值" width="90" align="right">
+          <template #default="{ row }">{{ money(row.face_value) }}</template>
+        </el-table-column>
+        <el-table-column label="成本价" width="90" align="right">
+          <template #default="{ row }">{{ money(row.cost_price) }}</template>
+        </el-table-column>
+        <el-table-column label="状态" width="70">
+          <template #default="{ row }"><StatusTag :map="mappingStatusLabels" :value="row.status" /></template>
+        </el-table-column>
+        <el-table-column label="库存" width="70">
+          <template #default="{ row }">{{ row.stock ?? '不限' }}</template>
+        </el-table-column>
+        <el-table-column label="已用于本地商品" min-width="180">
+          <template #default="{ row }">
+            <span v-if="row.used_by.length === 0" class="muted">未使用</span>
+            <template v-for="(p, i) in (row as SupplierGoods).used_by" :key="p.id">
+              <span v-if="i > 0">、</span>
+              <router-link :to="{ name: 'product-detail', params: { id: p.id } }">{{ p.name ?? `#${p.id}` }}</router-link>
+            </template>
+          </template>
+        </el-table-column>
+        <el-table-column label="同步时间" width="170">
+          <template #default="{ row }">{{ row.synced_at ?? '-' }}</template>
+        </el-table-column>
+      </el-table>
+      <el-pagination
+        v-model:current-page="goodsPage"
+        v-model:page-size="goodsPerPage"
+        class="pagination"
+        layout="total, prev, pager, next"
+        :total="goodsTotal"
+        @current-change="goods.load"
+      />
     </el-card>
 
     <el-card shadow="never" header="统计">
@@ -505,6 +589,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.inline-form {
+  display: flex;
+  align-items: center;
+}
+
 .page {
   display: flex;
   flex-direction: column;

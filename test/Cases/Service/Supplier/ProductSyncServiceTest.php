@@ -15,6 +15,7 @@ namespace HyperfTest\Cases\Service\Supplier;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
 use App\Model\Supplier;
+use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\Model\SupplierProductPriceHistory;
 use App\Service\Supplier\ProductSyncService;
@@ -45,8 +46,15 @@ class ProductSyncServiceTest extends TestCase
 
     private array $supplierIds = [];
 
+    /** 本用例在固定的 SUPPLIER_ID 下用过的编码，tearDown 只删这些供应商商品 */
+    private array $codes = [];
+
     protected function tearDown(): void
     {
+        SupplierGoods::where('supplier_id', self::SUPPLIER_ID)->whereIn('code', $this->codes)->delete();
+        SupplierGoods::whereIn('supplier_id', $this->supplierIds)->delete();
+        $this->codes = [];
+
         foreach ($this->productIds as $id) {
             SupplierProductPriceHistory::where('supplier_product_id', $id)->delete();
             SupplierProduct::destroy($id);
@@ -129,19 +137,50 @@ class ProductSyncServiceTest extends TestCase
         $this->assertTrue(true);
     }
 
-    public function testApplyNotificationUnmappedProductCodeIsNoOp()
+    public function testApplyNotificationUnmappedProductStillQueriesDetailAndFillsGoodsCatalog()
     {
         $code = $this->uniqueCode();
 
         $driver = Mockery::mock(KasushouDriver::class);
         $driver->shouldReceive('parseProductChangeNotification')->once()->andReturn($code);
-        // 没有配置映射行，不应该再去查供应商详情。
-        $driver->shouldNotReceive('queryProductDetail');
+        // 没有映射也要查详情：供应商商品库收录供应商的全部商品
+        $driver->shouldReceive('queryProductDetail')->once()->with($code)->andReturn([
+            'supplier_product_code' => $code,
+            'cost_price' => '48.00',
+            'status' => 'active',
+            'stock' => null,
+            'name' => '爱奇艺月卡',
+            'face_value' => '50.00',
+        ]);
 
         $service = $this->getContainer()->get(ProductSyncService::class);
-
         $service->applyNotification(self::SUPPLIER_ID, $driver, ['id' => $code, 'time' => '1700000000', 'sign' => 'x']);
-        $this->assertTrue(true);
+
+        $goods = SupplierGoods::where('supplier_id', self::SUPPLIER_ID)->where('code', $code)->first();
+        $this->assertNotNull($goods);
+        $this->assertSame('爱奇艺月卡', $goods->name);
+        $this->assertSame('50.00', $goods->face_value);
+        $this->assertSame('48.00', $goods->cost_price);
+        $this->assertSame('active', $goods->status);
+        $this->assertNotNull($goods->synced_at);
+    }
+
+    public function testApplyNotificationUpdatesEveryMappingOfTheSameSupplierGoods()
+    {
+        $code = $this->uniqueCode();
+        $a = $this->createProduct($code, costPrice: '10.00');
+        $b = $this->createProduct($code, costPrice: '10.00');
+
+        $driver = Mockery::mock(KasushouDriver::class);
+        $driver->shouldReceive('parseProductChangeNotification')->once()->andReturn($code);
+        $driver->shouldReceive('queryProductDetail')->once()->andReturn([
+            'supplier_product_code' => $code, 'cost_price' => '10.50', 'status' => 'active', 'stock' => null,
+        ]);
+
+        $this->service()->applyNotification(self::SUPPLIER_ID, $driver, ['id' => $code, 'time' => '1700000000', 'sign' => 'x']);
+
+        $this->assertSame('10.50', $a->refresh()->cost_price);
+        $this->assertSame('10.50', $b->refresh()->cost_price);
     }
 
     public function testApplyFullSyncPageAppliesMappedEntriesWithPriceHistoryOnlyWhenChanged()
@@ -169,16 +208,26 @@ class ProductSyncServiceTest extends TestCase
         $this->assertCount(0, SupplierProductPriceHistory::where('supplier_product_id', $productUnchanged->id)->get());
     }
 
-    public function testApplyFullSyncPageUnmappedEntryIsNoOpAndDoesNotThrow()
+    public function testApplyFullSyncPageUpsertsGoodsCatalogKeepingKnownNameWhenMissing()
     {
-        $driver = Mockery::mock(KasushouDriver::class);
+        $code = $this->uniqueCode();
 
         $service = $this->getContainer()->get(ProductSyncService::class);
         $service->applyFullSyncPage(self::SUPPLIER_ID, [
-            ['supplier_product_code' => 'does-not-exist-' . uniqid('', true), 'cost_price' => '1.00', 'status' => 'active', 'stock' => 1],
+            ['supplier_product_code' => $code, 'cost_price' => '1.00', 'status' => 'active', 'stock' => 1, 'name' => '移动 100 元快充', 'face_value' => '100.00'],
+        ]);
+        // 第二次没带名称、面值：保留上次的，价格状态库存照常更新
+        $service->applyFullSyncPage(self::SUPPLIER_ID, [
+            ['supplier_product_code' => $code, 'cost_price' => '1.20', 'status' => 'paused', 'stock' => 0, 'name' => null, 'face_value' => null],
         ]);
 
-        $this->assertTrue(true);
+        $rows = SupplierGoods::where('supplier_id', self::SUPPLIER_ID)->where('code', $code)->get();
+        $this->assertCount(1, $rows);
+        $this->assertSame('移动 100 元快充', $rows[0]->name);
+        $this->assertSame('100.00', $rows[0]->face_value);
+        $this->assertSame('1.20', $rows[0]->cost_price);
+        $this->assertSame('paused', $rows[0]->status);
+        $this->assertSame(0, $rows[0]->stock);
     }
 
     public function testHandleNotificationResolvesSupplierByCode()
@@ -346,7 +395,7 @@ class ProductSyncServiceTest extends TestCase
 
     private function uniqueCode(): string
     {
-        return 'GOODS-' . uniqid('', true);
+        return $this->codes[] = 'GOODS-' . uniqid('', true);
     }
 
     private function createProduct(string $code, string $costPrice, int $supplierId = self::SUPPLIER_ID): SupplierProduct

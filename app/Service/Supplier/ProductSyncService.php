@@ -13,6 +13,7 @@ declare(strict_types=1);
 namespace App\Service\Supplier;
 
 use App\Dao\SupplierDao;
+use App\Dao\SupplierGoodsDao;
 use App\Dao\SupplierProductDao;
 use App\Exception\InvalidSupplierCallbackSignatureException;
 use App\Exception\SupplierNotFoundException;
@@ -41,7 +42,11 @@ use Throwable;
  *   -> syncSupplier() 翻页 -> applyFullSyncPage()（kasushou.md 第 4 节"每天用商品列表
  *   全量校准一次，防止漏收通知"）。
  *
- * 【全量校准不下架列表里没出现的映射】商品列表接口的分页参数、外层结构都是按文档
+ * 【落库分两处】每条供应商商品都写进供应商商品库（`supplier_goods`，不管平台有没有
+ * 用到——后台新增本地商品、添加映射时要从这里选）；如果有本地商品映射了它，再把
+ * 成本价/状态/库存同步到这些映射行（`supplier_products`，改价留历史）。
+ *
+ * 【全量校准不下架列表里没出现的商品】商品列表接口的分页参数、外层结构都是按文档
  * 行文猜的（见 KasushouDriver 类注释），在没联调之前，"列表里没出现"不足以说明
  * 供应商真的下架了这个商品，贸然暂停映射可能让整个商品无货可路由。只更新出现的，
  * 没出现的保持原样。
@@ -57,6 +62,9 @@ class ProductSyncService extends AbstractService
 
     #[Inject]
     protected SupplierProductDao $supplierProductDao;
+
+    #[Inject]
+    protected SupplierGoodsDao $supplierGoodsDao;
 
     #[Inject]
     protected SupplierDao $supplierDao;
@@ -91,10 +99,9 @@ class ProductSyncService extends AbstractService
     }
 
     /**
-     * 处理一条商品变更通知。验签失败、或者验签通过但这个供应商商品在平台上还没
-     * 配置映射行（`supplier_products` 找不到对应行）：都是 no-op，不抛异常——
-     * 前者是"通知不可信，忽略"，后者是"平台还没配置，没有可更新的行"（详见
-     * 任务范围说明：商品映射创建行不在本次任务范围内）。
+     * 处理一条商品变更通知。验签失败是 no-op，不抛异常（"通知不可信，忽略"）。
+     * 验签通过后不管平台有没有映射这个商品都重新查一次详情：供应商商品库要收录
+     * 供应商的全部商品，新上的商品也要能在后台选到。
      *
      * @return bool 验签是否通过（false 时什么都没做）
      */
@@ -108,20 +115,10 @@ class ProductSyncService extends AbstractService
             return false;
         }
 
-        $mapping = $this->supplierProductDao->findBySupplierAndCode($supplierId, $code);
-        if ($mapping === null) {
-            $this->logger()->info('supplier product change notification for unmapped product, skipped', [
-                'supplier_id' => $supplierId,
-                'supplier_product_code' => $code,
-            ]);
-            return true;
-        }
-
         // 通知本身不可信任何价格/状态/库存字段（见 KasushouDriver 类注释的安全
         // 设计说明），验签通过后只当成"该查一下这个商品了"的触发信号，权威值
         // 一律重新查一次。
-        $detail = $driver->queryProductDetail($code);
-        $this->supplierProductDao->applySync($mapping, $detail['cost_price'], $detail['status'], $detail['stock']);
+        $this->applyDetail($supplierId, $driver->queryProductDetail($code));
 
         return true;
     }
@@ -196,7 +193,7 @@ class ProductSyncService extends AbstractService
      * 见类注释）。这批数据本身来自平台主动发起的出站认证请求，不是入站通知，
      * 可以直接信任，不需要再逐条 queryProductDetail()。
      *
-     * @param array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}> $productDetails
+     * @param array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string}> $productDetails
      */
     public function applyFullSyncPage(int $supplierId, array $productDetails): void
     {
@@ -206,15 +203,22 @@ class ProductSyncService extends AbstractService
                 continue;
             }
 
-            $mapping = $this->supplierProductDao->findBySupplierAndCode($supplierId, $code);
-            if ($mapping === null) {
-                $this->logger()->info('full sync entry for unmapped product, skipped', [
-                    'supplier_id' => $supplierId,
-                    'supplier_product_code' => $code,
-                ]);
-                continue;
-            }
+            $this->applyDetail($supplierId, $detail);
+        }
+    }
 
+    /**
+     * 一条供应商商品的权威值：写进供应商商品库，再同步到映射了它的全部映射行。
+     * 同一个供应商商品可能被多个本地商品映射（`supplier_product_code` 不唯一），全部都要更新。
+     *
+     * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string} $detail
+     */
+    private function applyDetail(int $supplierId, array $detail): void
+    {
+        $this->supplierGoodsDao->upsertFromSync($supplierId, $detail);
+
+        $mappings = $this->supplierProductDao->listBySupplierCodes([$supplierId], [$detail['supplier_product_code']]);
+        foreach ($mappings as $mapping) {
             $this->supplierProductDao->applySync($mapping, $detail['cost_price'], $detail['status'], $detail['stock']);
         }
     }

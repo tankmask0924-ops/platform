@@ -15,9 +15,11 @@ namespace App\Service\Admin;
 use App\Dao\MerchantLevelDao;
 use App\Dao\ProductDao;
 use App\Dao\ProductLevelRebateDao;
+use App\Dao\SupplierProductDao;
 use App\Model\Product;
 use App\Model\ProductLevelRebate;
 use App\Service\AbstractService;
+use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
@@ -49,9 +51,10 @@ use Hyperf\HttpMessage\Exception\HttpException;
  *   跟 MerchantLevelAdminService 排除同样理由，没有后台前端来展示这些"提示"，
  *   而且是建议性质，不是硬性校验规则；
  * - 不含操作日志：这个代码库目前没有任何操作日志基础设施，是独立的后续工作；
- * - 不含 supplier_products/商品映射：那是已经建好的独立功能
- *   （App\Controller\Admin\ProductMappingController，commit 67c555b），本 Service
- *   只管本地 Product 实体本身和它的等级比例覆盖。
+ * - 新建商品时必须选至少一个供应商商品（`supplier_goods_ids`，按优先级排好序），
+ *   在同一个事务里建好映射行，本地商品从一开始就关联着供应商那边真实存在的商品；
+ *   选择的校验和映射行的写法交给 App\Service\Admin\ProductMappingAdminService，
+ *   之后增改映射也走那边（App\Controller\Admin\ProductMappingController）。
  *
  * requirements.md 5.3「修改商品返佣金额、商品单独设置的比例或等级比例，只影响
  * 之后下的订单」在这个代码库里天然成立，不需要额外实现：下单时
@@ -112,6 +115,12 @@ class ProductAdminService extends AbstractService
     #[Inject]
     protected MerchantLevelDao $merchantLevelDao;
 
+    #[Inject]
+    protected SupplierProductDao $supplierProductDao;
+
+    #[Inject]
+    protected ProductMappingAdminService $productMappingAdminService;
+
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
      */
@@ -169,17 +178,41 @@ class ProductAdminService extends AbstractService
         );
 
         $conditionalFields = $this->resolveConditionalFields($businessLine, $data, true);
+        $goodsList = $this->productMappingAdminService->resolveGoods(
+            $businessLine,
+            $this->validateSupplierGoodsIds($data['supplier_goods_ids'] ?? null)
+        );
 
-        $product = $this->productDao->create(array_merge([
-            'business_line' => $businessLine,
-            'name' => $name,
-            'province' => $province,
-            'face_value' => $faceValue,
-            'sale_price' => $salePrice,
-            'rebate_amount' => $rebateAmount,
-            'applicable_region' => $applicableRegion,
-            'status' => $status,
-        ], $conditionalFields));
+        $product = Db::transaction(function () use (
+            $businessLine,
+            $name,
+            $province,
+            $faceValue,
+            $salePrice,
+            $rebateAmount,
+            $applicableRegion,
+            $status,
+            $conditionalFields,
+            $goodsList
+        ) {
+            $product = $this->productDao->create(array_merge([
+                'business_line' => $businessLine,
+                'name' => $name,
+                'province' => $province,
+                'face_value' => $faceValue,
+                'sale_price' => $salePrice,
+                'rebate_amount' => $rebateAmount,
+                'applicable_region' => $applicableRegion,
+                'status' => $status,
+            ], $conditionalFields));
+
+            // 选择的先后顺序就是优先级（0 最先尝试），跟商品详情里「添加映射」的默认值一致
+            foreach ($goodsList as $priority => $goods) {
+                $this->productMappingAdminService->createFromGoods((int) $product->id, $goods, $priority);
+            }
+
+            return $product;
+        });
 
         return $this->detail($product->id);
     }
@@ -203,6 +236,11 @@ class ProductAdminService extends AbstractService
         $businessLine = $product->business_line;
         if (array_key_exists('business_line', $data)) {
             $businessLine = $this->validateBusinessLine($data['business_line']);
+            // 已经映射的供应商都属于原业务线，改了业务线这些映射就全对不上了
+            if ($businessLine !== $product->business_line
+                && $this->supplierProductDao->listForProduct((int) $product->id)->isNotEmpty()) {
+                throw new HttpException(422, '商品已经关联了供应商商品，不能修改业务线');
+            }
             $attributes['business_line'] = $businessLine;
         }
 
@@ -453,6 +491,32 @@ class ProductAdminService extends AbstractService
         }
 
         return $value;
+    }
+
+    /**
+     * 新建商品要选的供应商商品 id 列表：非空、都是正整数、不重复，保持传入顺序。
+     *
+     * @return array<int, int>
+     */
+    private function validateSupplierGoodsIds(mixed $value): array
+    {
+        if (! is_array($value) || $value === [] || ! array_is_list($value)) {
+            throw new HttpException(422, '请至少选择一个供应商商品（supplier_goods_ids）');
+        }
+
+        $ids = [];
+        foreach ($value as $id) {
+            if (! is_numeric($id) || (int) $id != $id || (int) $id <= 0) {
+                throw new HttpException(422, 'supplier_goods_ids 必须是供应商商品 id 列表');
+            }
+            $ids[] = (int) $id;
+        }
+
+        if (count(array_unique($ids)) !== count($ids)) {
+            throw new HttpException(422, 'supplier_goods_ids 不能重复');
+        }
+
+        return $ids;
     }
 
     private function validateBusinessLine(mixed $businessLine): string

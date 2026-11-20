@@ -14,12 +14,15 @@ namespace App\Service\Admin;
 
 use App\Dao\ProductDao;
 use App\Dao\SupplierDao;
+use App\Dao\SupplierGoodsDao;
 use App\Dao\SupplierProductDao;
 use App\Model\Product;
 use App\Model\Supplier;
+use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\Service\AbstractService;
 use Hyperf\Database\Exception\QueryException;
+use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
 
@@ -34,6 +37,11 @@ use Hyperf\HttpMessage\Exception\HttpException;
  * 事务逻辑（`SupplierProductDao::applySync()`/`updateCostPriceManually()` 都转发到
  * 同一个私有 `writeCostPrice()`），不可能出现某条改价路径漏记历史。
  *
+ * 映射一律从供应商商品库（`supplier_goods`）里选：供应商商品编码、成本价、状态、
+ * 库存都从选中的供应商商品带过来，不再手填编码，保证本地商品关联的是供应商那边
+ * 真实存在的商品。新增本地商品时一并选好（App\Service\Admin\ProductAdminService::create()
+ * 调本类的 resolveGoods()/createFromGoods()），之后在商品详情里还能再加。
+ *
  * 路由跳过（供应商商品暂停/禁售/库存为 0 时不参与路由，requirements.md 6.5）、
  * `sale_restrictions` 字段具体结构的校验/业务逻辑，均不在本次任务范围——本 Service
  * 对 `sale_restrictions` 只做"透传 JSON 对象"处理，不解释其内容（见
@@ -42,8 +50,6 @@ use Hyperf\HttpMessage\Exception\HttpException;
 class ProductMappingAdminService extends AbstractService
 {
     private const ALLOWED_STATUSES = ['active', 'paused', 'banned'];
-
-    private const DEFAULT_STATUS = 'active';
 
     #[Inject]
     protected SupplierProductDao $supplierProductDao;
@@ -54,11 +60,15 @@ class ProductMappingAdminService extends AbstractService
     #[Inject]
     protected SupplierDao $supplierDao;
 
+    #[Inject]
+    protected SupplierGoodsDao $supplierGoodsDao;
+
     /**
      * 某个本地商品的全部供应商映射，按 `priority` 升序（跟 SupplierProductDao::listForProduct()
-     * 的排序含义一致）。每行附带 supplier 的 name/code，方便前端展示，不用为每一行
+     * 的排序含义一致）。每行附带 supplier 的 name/code 和关联的供应商商品（名称、面值；
+     * 供应商商品库里找不到时为 null，比如上线前手填编码建的老映射），方便前端展示，不用为每一行
      * 再单独查一次供应商——这里用"先查映射再按 supplier_id 批量查供应商"的方式，
-     * 一次列表只发两条 SQL，不会随映射行数增长而 N+1。
+     * 一次列表只发三条 SQL，不会随映射行数增长而 N+1。
      *
      * @return array<int, array<string, mixed>>
      */
@@ -68,23 +78,30 @@ class ProductMappingAdminService extends AbstractService
 
         $mappings = $this->supplierProductDao->listForProduct($productId);
 
-        $suppliers = $this->supplierDao->newQuery()
-            ->whereIn('id', $mappings->pluck('supplier_id')->unique()->values()->all())
-            ->get()
-            ->keyBy('id');
+        $supplierIds = $mappings->pluck('supplier_id')->unique()->values()->all();
+        $suppliers = $this->supplierDao->findMany($supplierIds);
+        $goods = $this->supplierGoodsDao->listBySupplierCodes(
+            $supplierIds,
+            $mappings->pluck('supplier_product_code')->unique()->values()->all()
+        )->keyBy(fn (SupplierGoods $g) => $g->supplier_id . ':' . $g->code);
 
         return $mappings
-            ->map(fn (SupplierProduct $mapping) => $this->format($mapping, $suppliers->get($mapping->supplier_id)))
+            ->map(fn (SupplierProduct $mapping) => $this->format(
+                $mapping,
+                $suppliers->get($mapping->supplier_id),
+                $goods->get($mapping->supplier_id . ':' . $mapping->supplier_product_code)
+            ))
             ->values()
             ->all();
     }
 
     /**
-     * 创建一条映射行。业务线一致性校验（"movie-only 供应商不能映射到 recharge 商品"）
-     * 是本方法最核心的校验，直接源自 6.1「供应商只属于一条业务线」+ 6.4「本地商品
-     * 关联到各供应商的商品」这两个概念的自然推论——6.4 原文没有逐字写出这条规则，
-     * 但允许一个业务线不匹配的映射通过等于允许一个永远不可能真正下单成功的路由
-     * 目标存在，属于本 Service 判断要在创建时就拒绝，而不是留到未来路由阶段才发现。
+     * 给本地商品添加一条映射：从供应商商品库里选一个供应商商品（`supplier_goods_id`），
+     * 编码、成本价、库存从它带过来；`status` 不传时也跟它一致。
+     *
+     * 业务线一致性校验（"话费商品不能映射到卡券供应商"）直接源自 6.1「供应商只属于
+     * 一条业务线」+ 6.4「本地商品关联到各供应商的商品」——允许业务线不匹配的映射等于
+     * 允许一个永远不可能下单成功的路由目标存在，在创建时就拒绝（见 resolveGoods()）。
      *
      * @param array<string, mixed> $data
      */
@@ -92,43 +109,88 @@ class ProductMappingAdminService extends AbstractService
     {
         $product = $this->findProductOrFail($productId);
 
-        $supplierId = $this->requiredPositiveInt($data, 'supplier_id', 'supplier_id 不能为空');
-        $supplier = $this->supplierDao->find($supplierId);
-        if (! $supplier) {
-            throw new HttpException(422, 'supplier_id 必须对应一个存在的供应商');
-        }
-
-        if ($supplier->business_line !== $product->business_line) {
-            throw new HttpException(422, '供应商业务线与本地商品业务线不一致，无法映射');
-        }
-
-        $supplierProductCode = $this->requiredString($data, 'supplier_product_code', 'supplier_product_code 不能为空');
-        $costPrice = $this->requiredNonNegativeDecimal($data, 'cost_price', 'cost_price 必须是非负数');
+        $goodsId = $this->requiredPositiveInt($data, 'supplier_goods_id', 'supplier_goods_id 不能为空');
+        $goods = $this->resolveGoods($product->business_line, [$goodsId])[0];
         $priority = $this->requiredNonNegativeInt($data, 'priority', 'priority 必须是非负整数');
-        $status = $this->validateStatus($data['status'] ?? self::DEFAULT_STATUS);
+        $status = array_key_exists('status', $data) ? $this->validateStatus($data['status']) : null;
 
-        // 唯一性预检查：跟 App\Service\Merchant\AuthService::register()、
-        // App\Service\Admin\SupplierAdminService::create() 对唯一字段的处理一样，
-        // 先查一遍尽量给出干净的 422，下面 create() 里再 catch 一次数据库唯一约束
-        // 异常作为并发场景下的兜底防线（(product_id, supplier_id) 唯一）。
-        if ($this->supplierProductDao->newQuery()
-            ->where('product_id', $productId)
-            ->where('supplier_id', $supplierId)
-            ->exists()) {
+        // 唯一性预检查：先查一遍尽量给出干净的 422，createFromGoods() 里再 catch 一次
+        // 数据库唯一约束异常作为并发场景下的兜底防线（(product_id, supplier_id) 唯一）。
+        if ($this->supplierProductDao->findMapping($goods->supplier_id, $productId) !== null) {
             throw new HttpException(422, '该本地商品已经映射过这个供应商');
         }
 
+        $mapping = $this->createFromGoods($productId, $goods, $priority, $status);
+
+        $extra = [];
+        if (array_key_exists('param_mapping', $data)) {
+            $extra['param_mapping'] = $this->nullableJsonObject($data['param_mapping'], 'param_mapping');
+        }
+        if (array_key_exists('sale_restrictions', $data)) {
+            $extra['sale_restrictions'] = $this->nullableJsonObject($data['sale_restrictions'], 'sale_restrictions');
+        }
+        if ($extra !== []) {
+            $mapping->fill($extra)->save();
+        }
+
+        return $mapping;
+    }
+
+    /**
+     * 按 id 取一批供应商商品并校验能不能给某条业务线的本地商品用：都要存在、所属
+     * 供应商的业务线一致、同一个供应商只能选一个（`(product_id, supplier_id)` 唯一）。
+     * 返回顺序跟传入的 id 顺序一致（新增商品时这个顺序就是优先级顺序）。
+     *
+     * @param array<int, int> $goodsIds
+     * @return array<int, SupplierGoods>
+     */
+    public function resolveGoods(string $businessLine, array $goodsIds): array
+    {
+        $goodsById = $this->supplierGoodsDao->findMany($goodsIds);
+        $suppliers = $this->supplierDao->findMany($goodsById->pluck('supplier_id')->unique()->values()->all());
+
+        $result = [];
+        $seenSuppliers = [];
+        foreach ($goodsIds as $goodsId) {
+            $goods = $goodsById->get($goodsId);
+            if (! $goods instanceof SupplierGoods) {
+                throw new HttpException(422, '供应商商品不存在：#' . $goodsId);
+            }
+
+            $supplier = $suppliers->get($goods->supplier_id);
+            if (! $supplier instanceof Supplier) {
+                throw new HttpException(422, '供应商商品所属的供应商不存在：#' . $goodsId);
+            }
+            if ($supplier->business_line !== $businessLine) {
+                throw new HttpException(422, '供应商业务线与本地商品业务线不一致，无法映射');
+            }
+            if (isset($seenSuppliers[$goods->supplier_id])) {
+                throw new HttpException(422, '同一个供应商只能选一个商品：' . $supplier->name);
+            }
+
+            $seenSuppliers[$goods->supplier_id] = true;
+            $result[] = $goods;
+        }
+
+        return $result;
+    }
+
+    /**
+     * 用一个已经校验过的供应商商品建映射行（校验见 resolveGoods()）。`$status` 为
+     * null 时跟供应商商品当前状态一致。
+     */
+    public function createFromGoods(int $productId, SupplierGoods $goods, int $priority, ?string $status = null): SupplierProduct
+    {
         try {
             return $this->supplierProductDao->create([
                 'product_id' => $productId,
-                'supplier_id' => $supplierId,
-                'supplier_product_code' => $supplierProductCode,
-                'cost_price' => $costPrice,
+                'supplier_id' => $goods->supplier_id,
+                'supplier_product_code' => $goods->code,
+                'cost_price' => $goods->cost_price,
                 'priority' => $priority,
-                'status' => $status,
-                'stock' => $this->nullableInt($data['stock'] ?? null),
-                'param_mapping' => $this->nullableJsonObject($data['param_mapping'] ?? null, 'param_mapping'),
-                'sale_restrictions' => $this->nullableJsonObject($data['sale_restrictions'] ?? null, 'sale_restrictions'),
+                'status' => $status ?? $goods->status,
+                'stock' => $goods->stock,
+                'synced_at' => $goods->synced_at?->toDateTimeString(),
             ]);
         } catch (QueryException $e) {
             throw new HttpException(422, '该本地商品已经映射过这个供应商', 0, $e);
@@ -176,12 +238,13 @@ class ProductMappingAdminService extends AbstractService
 
     /**
      * 映射详情里除了 cost_price/priority/status 之外的其它字段——
-     * supplier_product_code（供应商侧编码可能需要人工订正）、param_mapping
+     * supplier_goods_id（换成同一个供应商的另一个商品）、param_mapping
      * （下单参数映射）、stock（人工录入库存的供应商可能需要手动改）、
      * sale_restrictions（透传 JSON，本 Service 不解释其内容，见类注释）。
      * 只处理调用方实际传入的字段（`array_key_exists`），不传视为不改；刻意
      * 不接受 cost_price/priority/status——那三个字段各有专门的方法，混进这个
-     * 通用更新方法会让"改价必留痕"这条规则出现一个可以绕过去的后门。
+     * 通用更新方法会让"改价必留痕"这条规则出现一个可以绕过去的后门。换供应商商品
+     * 带过来的成本价也走 updateCostPriceManually()，照样留历史。
      *
      * @param array<string, mixed> $data
      */
@@ -189,14 +252,26 @@ class ProductMappingAdminService extends AbstractService
     {
         $mapping = $this->findOrFail($id);
 
+        if (array_key_exists('supplier_product_code', $data)) {
+            throw new HttpException(422, '供应商商品编码不能手填，请用 supplier_goods_id 从供应商商品库里选');
+        }
+
         $attributes = [];
 
-        if (array_key_exists('supplier_product_code', $data)) {
-            $attributes['supplier_product_code'] = $this->requiredString(
-                $data,
-                'supplier_product_code',
-                'supplier_product_code 不能为空'
-            );
+        $goods = null;
+        if (array_key_exists('supplier_goods_id', $data)) {
+            $goodsId = $this->requiredPositiveInt($data, 'supplier_goods_id', 'supplier_goods_id 不能为空');
+            $goods = $this->supplierGoodsDao->find($goodsId);
+            if (! $goods) {
+                throw new HttpException(422, '供应商商品不存在：#' . $goodsId);
+            }
+            if ($goods->supplier_id !== $mapping->supplier_id) {
+                throw new HttpException(422, '只能换成同一个供应商的商品');
+            }
+            $attributes['supplier_product_code'] = $goods->code;
+            $attributes['status'] = $goods->status;
+            $attributes['stock'] = $goods->stock;
+            $attributes['synced_at'] = $goods->synced_at?->toDateTimeString();
         }
 
         if (array_key_exists('stock', $data)) {
@@ -211,9 +286,14 @@ class ProductMappingAdminService extends AbstractService
             $attributes['sale_restrictions'] = $this->nullableJsonObject($data['sale_restrictions'], 'sale_restrictions');
         }
 
-        if ($attributes !== []) {
-            $mapping->fill($attributes)->save();
-        }
+        Db::transaction(function () use ($mapping, $attributes, $goods) {
+            if ($attributes !== []) {
+                $mapping->fill($attributes)->save();
+            }
+            if ($goods !== null) {
+                $this->supplierProductDao->updateCostPriceManually($mapping, $goods->cost_price);
+            }
+        });
 
         return $mapping;
     }
@@ -241,7 +321,7 @@ class ProductMappingAdminService extends AbstractService
     /**
      * @return array<string, mixed>
      */
-    private function format(SupplierProduct $mapping, ?Supplier $supplier): array
+    private function format(SupplierProduct $mapping, ?Supplier $supplier, ?SupplierGoods $goods): array
     {
         return [
             'id' => $mapping->id,
@@ -250,6 +330,11 @@ class ProductMappingAdminService extends AbstractService
             'supplier_name' => $supplier?->name,
             'supplier_code' => $supplier?->code,
             'supplier_product_code' => $mapping->supplier_product_code,
+            'supplier_goods' => $goods === null ? null : [
+                'id' => $goods->id,
+                'name' => $goods->name,
+                'face_value' => $goods->face_value,
+            ],
             'cost_price' => $mapping->cost_price,
             'priority' => $mapping->priority,
             'status' => $mapping->status,
@@ -269,19 +354,6 @@ class ProductMappingAdminService extends AbstractService
         }
 
         return $status;
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private function requiredString(array $data, string $field, string $message): string
-    {
-        $value = trim((string) ($data[$field] ?? ''));
-        if ($value === '') {
-            throw new HttpException(422, $message);
-        }
-
-        return $value;
     }
 
     /**
@@ -308,14 +380,6 @@ class ProductMappingAdminService extends AbstractService
         }
 
         return (int) $value;
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     */
-    private function requiredNonNegativeDecimal(array $data, string $field, string $message): string
-    {
-        return $this->validateNonNegativeDecimal($data[$field] ?? null, $message);
     }
 
     /**

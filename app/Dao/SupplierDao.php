@@ -62,4 +62,25 @@ class SupplierDao extends AbstractDao
     {
         return $this->newQuery()->count();
     }
+
+    /**
+     * 某条业务线的全部供应商（不限状态），按 id 作键。选供应商商品时按业务线筛用。
+     *
+     * @return Collection<int, Supplier>
+     */
+    public function listByBusinessLine(string $businessLine): Collection
+    {
+        return $this->newQuery()->where('business_line', $businessLine)->get()->keyBy('id');
+    }
+
+    /**
+     * 按 id 批量取，按 id 作键。
+     *
+     * @param array<int, int> $ids
+     * @return Collection<int, Supplier>
+     */
+    public function findMany(array $ids): Collection
+    {
+        return $this->newQuery()->whereIn('id', $ids)->get()->keyBy('id');
+    }
 }

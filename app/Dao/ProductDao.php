@@ -32,6 +32,16 @@ class ProductDao extends AbstractDao
     }
 
     /**
+     * 按 id 批量取，按 id 作键。
+     *
+     * @param array<int, int> $ids
+     */
+    public function findMany(array $ids): Collection
+    {
+        return $this->newQuery()->whereIn('id', $ids)->get()->keyBy('id');
+    }
+
+    /**
      * 开放 API「话费/卡券商品列表」用（requirements.md 8.1）：某条业务线全部在架商品，
      * 按创建时间正序（先上架的排前面）。这些列表预期很小、变化也不频繁，但读取时机不可预测
      * （商户随时可能来查），所以不加 model-cache，普通查询即可。

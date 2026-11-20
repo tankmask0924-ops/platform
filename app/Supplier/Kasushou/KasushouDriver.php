@@ -424,7 +424,7 @@ class KasushouDriver
      * 失败了"的处理原则，不做"结果未知"这种订单类方法才有的三态语义（这不是订单
      * 操作，没有 UnifiedResult 概念可用）。
      *
-     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}
+     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}
      */
     public function queryProductDetail(string $supplierProductCode): array
     {
@@ -456,7 +456,7 @@ class KasushouDriver
      * 错误，跳过那一条（或整页返回空），因为这是"取一页数据"的语义，不是"取一个
      * 确定存在的商品详情"，容忍个别脏数据不影响其它条目正常同步。
      *
-     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}>
+     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}>
      */
     public function syncAllProducts(int $page = 1, int $pageSize = 100): array
     {
@@ -640,7 +640,7 @@ class KasushouDriver
      * queryProductDetail()/syncAllProducts() 的不同处理）。
      *
      * @param array<string, mixed> $raw
-     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int}
+     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string}
      */
     private function parseGoodsEntry(array $raw): ?array
     {
@@ -654,11 +654,18 @@ class KasushouDriver
             return null;
         }
 
+        // 名称、面值只用来在后台选供应商商品时辨认，缺了不影响同步。字段名是猜的
+        // （kasushou.md 只说"商品只有名称、面值"）：名称认 goods_name/name，面值认 face_value/par_value。
+        $name = $raw['goods_name'] ?? $raw['name'] ?? null;
+        $faceValue = $raw['face_value'] ?? $raw['par_value'] ?? null;
+
         return [
             'supplier_product_code' => (string) $id,
             'cost_price' => $costPrice,
             'status' => $this->mapGoodsStatus($raw['status'] ?? null),
             'stock' => $this->toNullableInt($raw['stock'] ?? null),
+            'name' => is_string($name) && trim($name) !== '' ? mb_substr(trim($name), 0, 128) : null,
+            'face_value' => is_numeric($faceValue) && bccomp((string) $faceValue, '0', 2) >= 0 ? bcadd((string) $faceValue, '0', 2) : null,
         ];
     }
 

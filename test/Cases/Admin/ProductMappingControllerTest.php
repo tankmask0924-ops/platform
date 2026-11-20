@@ -18,6 +18,7 @@ use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
 use App\Model\Product;
 use App\Model\Supplier;
+use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\Model\SupplierProductPriceHistory;
 use HyperfTest\HttpTestCase;
@@ -53,8 +54,14 @@ class ProductMappingControllerTest extends HttpTestCase
 
     private array $mappingIds = [];
 
+    private array $goodsIds = [];
+
     protected function tearDown(): void
     {
+        foreach ($this->goodsIds as $id) {
+            SupplierGoods::destroy($id);
+        }
+        $this->goodsIds = [];
         foreach ($this->mappingIds as $id) {
             SupplierProductPriceHistory::where('supplier_product_id', $id)->delete();
             SupplierProduct::destroy($id);
@@ -85,17 +92,16 @@ class ProductMappingControllerTest extends HttpTestCase
         parent::tearDown();
     }
 
-    public function testCreateWithValidPayloadPersistsMapping()
+    public function testCreateFromSupplierGoodsCopiesCodePriceStatusAndStock()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);
         $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $goods = $this->createGoods($supplier->id, ['code' => 'RC-100', 'cost_price' => '9.50', 'status' => 'paused', 'stock' => 7]);
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-100',
-            'cost_price' => '9.50',
+            'supplier_goods_id' => $goods->id,
             'priority' => 1,
             'param_mapping' => ['mobile' => 'recharge_account'],
         ]);
@@ -112,16 +118,38 @@ class ProductMappingControllerTest extends HttpTestCase
         $this->assertSame('RC-100', $row->supplier_product_code);
         $this->assertSame('9.50', $row->cost_price);
         $this->assertSame(1, $row->priority);
-        $this->assertSame('active', $row->status);
+        $this->assertSame('paused', $row->status);
+        $this->assertSame(7, $row->stock);
         $this->assertSame(['mobile' => 'recharge_account'], $row->param_mapping);
     }
 
-    public function testCreateWithMismatchedBusinessLineReturns422AndCreatesNoRow()
+    public function testCreateWithExplicitStatusOverridesGoodsStatus()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);
-        $supplier = $this->createSupplier(['business_line' => 'card']);
+        $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $goods = $this->createGoods($supplier->id, ['status' => 'active']);
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
+        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+            'product_id' => $product->id,
+            'supplier_goods_id' => $goods->id,
+            'priority' => 0,
+            'status' => 'paused',
+        ]);
+
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(200, $response->getStatusCode());
+        $this->mappingIds[] = $body['id'];
+        $this->assertSame('paused', SupplierProduct::find($body['id'])->status);
+    }
+
+    public function testCreateWithoutSupplierGoodsReturns422()
+    {
+        $product = $this->createProduct(['business_line' => 'recharge']);
+        $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+
+        // 旧写法：手填编码和成本价，不再接受
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
             'supplier_id' => $supplier->id,
@@ -134,38 +162,51 @@ class ProductMappingControllerTest extends HttpTestCase
         $this->assertSame(0, SupplierProduct::where('product_id', $product->id)->count());
     }
 
-    public function testCreateDuplicateMappingReturnsCleanErrorNotRawDbError()
+    public function testCreateWithMismatchedBusinessLineReturns422AndCreatesNoRow()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);
-        $supplier = $this->createSupplier(['business_line' => 'recharge']);
-        $existing = $this->createMapping($product->id, $supplier->id);
+        $supplier = $this->createSupplier(['business_line' => 'card']);
+        $goods = $this->createGoods($supplier->id);
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-200',
-            'cost_price' => '5.00',
+            'supplier_goods_id' => $goods->id,
+            'priority' => 1,
+        ]);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertSame(0, SupplierProduct::where('product_id', $product->id)->count());
+    }
+
+    public function testCreateDuplicateMappingReturnsCleanErrorNotRawDbError()
+    {
+        $product = $this->createProduct(['business_line' => 'recharge']);
+        $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $this->createMapping($product->id, $supplier->id);
+        $goods = $this->createGoods($supplier->id);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+
+        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+            'product_id' => $product->id,
+            'supplier_goods_id' => $goods->id,
             'priority' => 2,
         ]);
 
-        $this->assertGreaterThanOrEqual(400, $response->getStatusCode());
-        $this->assertLessThan(500, $response->getStatusCode());
+        $this->assertSame(422, $response->getStatusCode());
         $this->assertSame(1, SupplierProduct::where('product_id', $product->id)
             ->where('supplier_id', $supplier->id)->count());
-        unset($existing);
     }
 
-    public function testCreateWithNonexistentProductOrSupplierReturns422()
+    public function testCreateWithNonexistentProductOrGoodsReturnsError()
     {
         $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $goods = $this->createGoods($supplier->id);
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => 999999999,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-100',
-            'cost_price' => '9.50',
+            'supplier_goods_id' => $goods->id,
             'priority' => 1,
         ]);
         $this->assertSame(404, $response->getStatusCode());
@@ -173,37 +214,59 @@ class ProductMappingControllerTest extends HttpTestCase
         $product = $this->createProduct(['business_line' => 'recharge']);
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
-            'supplier_id' => 999999999,
-            'supplier_product_code' => 'RC-100',
-            'cost_price' => '9.50',
+            'supplier_goods_id' => 999999999,
             'priority' => 1,
         ]);
         $this->assertSame(422, $response->getStatusCode());
     }
 
-    public function testCreateWithInvalidCostPriceOrPriorityReturns422()
+    public function testCreateWithInvalidPriorityReturns422()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);
         $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $goods = $this->createGoods($supplier->id);
         $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
 
         $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-100',
-            'cost_price' => '-1.00',
-            'priority' => 1,
-        ]);
-        $this->assertSame(422, $response->getStatusCode());
-
-        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
-            'product_id' => $product->id,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-100',
-            'cost_price' => '9.50',
+            'supplier_goods_id' => $goods->id,
             'priority' => -1,
         ]);
         $this->assertSame(422, $response->getStatusCode());
+    }
+
+    public function testUpdateRebindsToAnotherGoodsOfSameSupplierAndLogsPriceChange()
+    {
+        $product = $this->createProduct(['business_line' => 'recharge']);
+        $supplier = $this->createSupplier(['business_line' => 'recharge']);
+        $mapping = $this->createMapping($product->id, $supplier->id, ['cost_price' => '10.00']);
+        $goods = $this->createGoods($supplier->id, ['code' => 'NEW-1', 'cost_price' => '8.80', 'stock' => 3]);
+        $otherSupplier = $this->createSupplier(['business_line' => 'recharge']);
+        $otherGoods = $this->createGoods($otherSupplier->id);
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+
+        $response = $this->jsonRequest('PUT', '/admin/product-mappings/' . $mapping->id, $token, [
+            'supplier_goods_id' => $otherGoods->id,
+        ]);
+        $this->assertSame(422, $response->getStatusCode());
+
+        $response = $this->jsonRequest('PUT', '/admin/product-mappings/' . $mapping->id, $token, [
+            'supplier_product_code' => 'HAND-TYPED',
+        ]);
+        $this->assertSame(422, $response->getStatusCode());
+
+        $response = $this->jsonRequest('PUT', '/admin/product-mappings/' . $mapping->id, $token, [
+            'supplier_goods_id' => $goods->id,
+        ]);
+        $this->assertSame(200, $response->getStatusCode());
+
+        $mapping->refresh();
+        $this->assertSame('NEW-1', $mapping->supplier_product_code);
+        $this->assertSame('8.80', $mapping->cost_price);
+        $this->assertSame(3, $mapping->stock);
+        $history = SupplierProductPriceHistory::where('supplier_product_id', $mapping->id)->get();
+        $this->assertCount(1, $history);
+        $this->assertSame('manual', $history->first()->source);
     }
 
     public function testListOrdersByPriorityAndIncludesSupplierNameAndCode()
@@ -330,9 +393,7 @@ class ProductMappingControllerTest extends HttpTestCase
 
         $createResponse = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
             'product_id' => $product->id,
-            'supplier_id' => $supplier->id,
-            'supplier_product_code' => 'RC-999',
-            'cost_price' => '1.00',
+            'supplier_goods_id' => $this->createGoods($supplier->id)->id,
             'priority' => 1,
         ]);
         $this->assertSame(403, $createResponse->getStatusCode());
@@ -497,5 +558,24 @@ class ProductMappingControllerTest extends HttpTestCase
         $this->mappingIds[] = $mapping->id;
 
         return $mapping;
+    }
+
+    /**
+     * @param array<string, mixed> $overrides
+     */
+    private function createGoods(int $supplierId, array $overrides = []): SupplierGoods
+    {
+        $goods = SupplierGoods::create(array_merge([
+            'supplier_id' => $supplierId,
+            'code' => 'G-' . uniqid('', true),
+            'name' => '供应商商品',
+            'face_value' => '100.00',
+            'cost_price' => '9.00',
+            'status' => 'active',
+            'stock' => null,
+        ], $overrides));
+        $this->goodsIds[] = $goods->id;
+
+        return $goods;
     }
 }

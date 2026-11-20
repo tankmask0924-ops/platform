@@ -4,7 +4,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { mappingApi, productApi, type ProductDetail, type ProductMapping, type Supplier, supplierApi } from '@/api/admin'
+import { mappingApi, productApi, type ProductDetail, type ProductMapping, type SupplierGoods } from '@/api/admin'
 import { useLevels } from '@/composables/useLevels'
 import {
   cardTypeLabels,
@@ -15,6 +15,7 @@ import {
   productStatusLabels,
 } from '@/labels'
 import ProductFormDialog from './ProductFormDialog.vue'
+import SupplierGoodsPicker from './SupplierGoodsPicker.vue'
 
 const route = useRoute()
 const id = Number(route.params.id)
@@ -114,82 +115,97 @@ async function removeOverride(levelId: number, levelName: string | null) {
   await load()
 }
 
-// 供应商映射
-const suppliers = ref<Supplier[]>([])
+// 供应商映射：一律从供应商商品库里选，不手填编码
 const mappingDialog = ref(false)
 const editingMapping = ref<ProductMapping | null>(null)
 const mappingSaving = ref(false)
 const mappingFormRef = ref<FormInstance>()
+const picker = ref<InstanceType<typeof SupplierGoodsPicker>>()
+/** 新增时选中的，或编辑时换成的供应商商品；编辑时没换就是 null */
+const pickedGoods = ref<SupplierGoods | null>(null)
 const mappingForm = reactive({
-  supplier_id: undefined as number | undefined,
-  supplier_product_code: '',
   cost_price: '',
   priority: 0,
   status: 'active',
   stock: undefined as number | undefined,
 })
 const mappingRules: FormRules = {
-  supplier_id: [{ required: true, message: '请选择供应商', trigger: 'change' }],
-  supplier_product_code: [{ required: true, message: '请输入供应商商品编码', trigger: 'blur' }],
   cost_price: [
     { required: true, message: '请输入成本价', trigger: 'blur' },
     { pattern: /^\d+(\.\d{1,2})?$/, message: '成本价必须是非负数，最多两位小数', trigger: 'blur' },
   ],
 }
 
-const availableSuppliers = computed(() =>
-  suppliers.value.filter(
-    (s) => s.business_line === product.value?.business_line && !mappings.value.some((m) => m.supplier_id === s.id),
-  ),
-)
-
-async function openMapping(mapping?: ProductMapping) {
+function openMapping(mapping?: ProductMapping) {
   editingMapping.value = mapping ?? null
+  pickedGoods.value = null
   Object.assign(mappingForm, {
-    supplier_id: mapping?.supplier_id,
-    supplier_product_code: mapping?.supplier_product_code ?? '',
     cost_price: mapping?.cost_price ?? '',
     priority: mapping?.priority ?? (mappings.value.length ? Math.max(...mappings.value.map((m) => m.priority)) + 1 : 0),
     status: mapping?.status ?? 'active',
     stock: mapping?.stock ?? undefined,
   })
   mappingDialog.value = true
-  if (!mapping && suppliers.value.length === 0) {
-    suppliers.value = (await supplierApi.list({ page: 1, per_page: 100 })).data
+}
+
+function openPicker() {
+  const m = editingMapping.value
+  if (!product.value) {
+    return
   }
+  picker.value?.open(
+    m
+      ? { businessLine: product.value.business_line, supplierId: m.supplier_id, title: `更换供应商商品（${m.supplier_name ?? `#${m.supplier_id}`}）` }
+      : { businessLine: product.value.business_line, excludeSupplierIds: mappings.value.map((x) => x.supplier_id) },
+  )
+}
+
+function onPick(g: SupplierGoods) {
+  pickedGoods.value = g
+  // 选了供应商商品后，成本价、状态、库存跟它一致
+  mappingForm.cost_price = g.cost_price
+  mappingForm.status = g.status
+  mappingForm.stock = g.stock ?? undefined
 }
 
 async function saveMapping() {
-  const valid = await mappingFormRef.value?.validate().catch(() => false)
-  if (!valid) {
+  const m = editingMapping.value
+  if (m === null && pickedGoods.value === null) {
+    ElMessage.warning('请选择供应商商品')
     return
+  }
+  if (m !== null) {
+    const valid = await mappingFormRef.value?.validate().catch(() => false)
+    if (!valid) {
+      return
+    }
   }
   const stock = mappingForm.stock ?? null
   mappingSaving.value = true
   try {
-    const m = editingMapping.value
     if (m === null) {
       await mappingApi.create({
         product_id: id,
-        supplier_id: mappingForm.supplier_id as number,
-        supplier_product_code: mappingForm.supplier_product_code.trim(),
-        cost_price: mappingForm.cost_price,
+        supplier_goods_id: (pickedGoods.value as SupplierGoods).id,
         priority: mappingForm.priority,
         status: mappingForm.status,
-        stock,
       })
     } else {
-      // 成本价、优先级、状态、其它字段各有独立接口，只调改动了的
-      if (mappingForm.supplier_product_code.trim() !== m.supplier_product_code || stock !== m.stock) {
-        await mappingApi.update(m.id, { supplier_product_code: mappingForm.supplier_product_code.trim(), stock })
+      // 换供应商商品会一并带过来编码、成本价、状态、库存；其余字段各有独立接口，只调改动了的
+      const goods = pickedGoods.value
+      if (goods !== null) {
+        await mappingApi.update(m.id, { supplier_goods_id: goods.id })
       }
-      if (mappingForm.cost_price !== m.cost_price) {
+      if (stock !== (goods ? goods.stock : m.stock)) {
+        await mappingApi.update(m.id, { stock })
+      }
+      if (mappingForm.cost_price !== (goods ? goods.cost_price : m.cost_price)) {
         await mappingApi.setCostPrice(m.id, mappingForm.cost_price)
       }
       if (mappingForm.priority !== m.priority) {
         await mappingApi.setPriority(m.id, mappingForm.priority)
       }
-      if (mappingForm.status !== m.status) {
+      if (mappingForm.status !== (goods ? goods.status : m.status)) {
         await mappingApi.setStatus(m.id, mappingForm.status)
       }
     }
@@ -255,7 +271,15 @@ onMounted(() => {
           <el-table-column label="供应商" min-width="140">
             <template #default="{ row }">{{ row.supplier_name ?? `#${row.supplier_id}` }}</template>
           </el-table-column>
-          <el-table-column prop="supplier_product_code" label="供应商商品编码" min-width="140" />
+          <el-table-column label="供应商商品" min-width="200">
+            <template #default="{ row }">
+              <template v-if="row.supplier_goods">{{ row.supplier_goods.name ?? '-' }}</template>
+              <el-tooltip v-else content="供应商商品库里没有这个编码，请编辑映射重新选择" placement="top">
+                <el-tag type="warning" size="small">未关联</el-tag>
+              </el-tooltip>
+              <span class="muted">（{{ row.supplier_product_code }}）</span>
+            </template>
+          </el-table-column>
           <el-table-column label="成本价" width="100" align="right">
             <template #default="{ row }">
               <span :class="{ danger: Number(row.cost_price) > Number(product.sale_price) }">{{ money(row.cost_price) }}</span>
@@ -335,18 +359,27 @@ onMounted(() => {
 
   <el-dialog v-model="mappingDialog" :title="editingMapping ? '编辑映射' : '添加映射'" width="520px" @closed="mappingFormRef?.clearValidate()">
     <el-form ref="mappingFormRef" :model="mappingForm" :rules="mappingRules" label-width="130px">
-      <el-form-item label="供应商" prop="supplier_id">
-        <el-input v-if="editingMapping" :model-value="editingMapping.supplier_name ?? `#${editingMapping.supplier_id}`" disabled />
-        <el-select v-else v-model="mappingForm.supplier_id" placeholder="同业务线、尚未映射的供应商" style="width: 100%">
-          <el-option v-for="s in availableSuppliers" :key="s.id" :value="s.id" :label="`${s.name}（${s.code}）`" />
-        </el-select>
+      <el-form-item label="供应商商品" required>
+        <div class="picked">
+          <template v-if="pickedGoods">
+            {{ pickedGoods.supplier_name ?? `#${pickedGoods.supplier_id}` }} / {{ pickedGoods.name ?? '-' }}
+            <span class="muted">（{{ pickedGoods.code }}）</span>
+          </template>
+          <template v-else-if="editingMapping">
+            {{ editingMapping.supplier_name ?? `#${editingMapping.supplier_id}` }} / {{ editingMapping.supplier_goods?.name ?? '-' }}
+            <span class="muted">（{{ editingMapping.supplier_product_code }}）</span>
+          </template>
+          <span v-else class="muted">还没选</span>
+          <el-button link type="primary" class="gap-left" @click="openPicker">{{ pickedGoods || editingMapping ? '更换' : '选择' }}</el-button>
+        </div>
       </el-form-item>
-      <el-form-item label="供应商商品编码" prop="supplier_product_code">
-        <el-input v-model="mappingForm.supplier_product_code" maxlength="64" />
-      </el-form-item>
-      <el-form-item label="成本价" prop="cost_price">
+      <el-form-item v-if="editingMapping" label="成本价" prop="cost_price">
         <el-input v-model="mappingForm.cost_price"><template #prepend>¥</template></el-input>
-        <div v-if="editingMapping" class="tip">手动改价会留存价格历史</div>
+        <div class="tip">手动改价会留存价格历史；供应商下次同步时会覆盖</div>
+      </el-form-item>
+      <el-form-item v-else-if="pickedGoods" label="成本价">
+        {{ money(pickedGoods.cost_price) }}
+        <span class="muted gap-left">库存 {{ pickedGoods.stock ?? '不限' }}，跟随供应商同步</span>
       </el-form-item>
       <el-form-item label="优先级">
         <el-input-number v-model="mappingForm.priority" :min="0" :step="1" step-strictly />
@@ -357,7 +390,7 @@ onMounted(() => {
           <el-radio-button v-for="o in toOptions(mappingStatusLabels)" :key="o.value" :value="o.value">{{ o.label }}</el-radio-button>
         </el-radio-group>
       </el-form-item>
-      <el-form-item label="库存">
+      <el-form-item v-if="editingMapping" label="库存">
         <el-input-number v-model="mappingForm.stock" :min="0" :step="1" step-strictly placeholder="不限" />
         <div class="tip">留空表示不限</div>
       </el-form-item>
@@ -367,9 +400,22 @@ onMounted(() => {
       <el-button type="primary" :loading="mappingSaving" @click="saveMapping">保存</el-button>
     </template>
   </el-dialog>
+  <SupplierGoodsPicker ref="picker" @select="onPick" />
 </template>
 
 <style scoped>
+.muted {
+  color: #909399;
+}
+
+.gap-left {
+  margin-left: 8px;
+}
+
+.picked {
+  width: 100%;
+}
+
 .page {
   display: flex;
   flex-direction: column;

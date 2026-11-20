@@ -161,7 +161,10 @@ export interface ProductDetail extends Product {
   level_rebates: { level_id: number; level_name: string | null; rebate_rate: string }[]
 }
 
-export type ProductForm = Partial<Omit<Product, 'id' | 'created_at' | 'updated_at'>>
+export type ProductForm = Partial<Omit<Product, 'id' | 'created_at' | 'updated_at'>> & {
+  /** 只在新建时传：选中的供应商商品，顺序即优先级 */
+  supplier_goods_ids?: number[]
+}
 
 export const productApi = {
   list: (params: Query) => http.get<Paged<Product>>('/admin/products', params),
@@ -174,6 +177,27 @@ export const productApi = {
   deleteLevelRebate: (id: number, levelId: number) => http.delete<Ok>(`/admin/products/${id}/level-rebates/${levelId}`),
 }
 
+/** 供应商商品库：App\Controller\Admin\SupplierGoodsController（数据来自商品同步，只读） */
+export interface SupplierGoods {
+  id: number
+  supplier_id: number
+  supplier_name: string | null
+  supplier_code: string | null
+  code: string
+  name: string | null
+  face_value: string | null
+  cost_price: string
+  status: string
+  stock: number | null
+  synced_at: string | null
+  /** 已经映射了它的本地商品 */
+  used_by: { id: number; name: string | null }[]
+}
+
+export const supplierGoodsApi = {
+  list: (params: Query) => http.get<Paged<SupplierGoods>>('/admin/supplier-goods', params),
+}
+
 /** 商品映射：App\Controller\Admin\ProductMappingController */
 export interface ProductMapping {
   id: number
@@ -182,6 +206,8 @@ export interface ProductMapping {
   supplier_name: string | null
   supplier_code: string | null
   supplier_product_code: string
+  /** 关联的供应商商品；供应商商品库里找不到时为 null（上线前手填编码的老映射） */
+  supplier_goods: { id: number; name: string | null; face_value: string | null } | null
   cost_price: string
   priority: number
   status: string
@@ -195,18 +221,15 @@ export interface ProductMapping {
 
 export interface MappingForm {
   product_id: number
-  supplier_id: number
-  supplier_product_code: string
-  cost_price: string
+  supplier_goods_id: number
   priority: number
-  status: string
-  stock: number | null
+  status?: string
 }
 
 export const mappingApi = {
   list: (productId: number) => http.get<ProductMapping[]>('/admin/product-mappings', { product_id: productId }),
   create: (data: MappingForm) => http.post('/admin/product-mappings', data),
-  update: (id: number, data: { supplier_product_code: string; stock: number | null }) =>
+  update: (id: number, data: { supplier_goods_id?: number; stock?: number | null }) =>
     http.put(`/admin/product-mappings/${id}`, data),
   setCostPrice: (id: number, costPrice: string) => http.post<Ok>(`/admin/product-mappings/${id}/cost-price`, { cost_price: costPrice }),
   setPriority: (id: number, priority: number) => http.post<Ok>(`/admin/product-mappings/${id}/priority`, { priority }),

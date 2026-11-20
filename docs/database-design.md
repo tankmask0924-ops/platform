@@ -74,6 +74,7 @@
 | | `supplier_call_logs` | 调用供应商的原始请求/响应日志 |
 | 本地商品 | `products` | 话费、卡券本地商品 |
 | | `product_level_rebates` | 商品单独设置某等级返佣比例 |
+| | `supplier_goods` | 供应商商品库：供应商那边有哪些商品（同步写入），新增本地商品、添加映射时从这里选 |
 | | `supplier_products` | 商品在各供应商的映射、成本价、优先级 |
 | | `supplier_product_price_history` | 供应商商品成本价变更历史 |
 | 订单核心 | `orders` | 订单主表，四条业务线共用 |
@@ -96,7 +97,7 @@
 | 告警 | `alerts` | 告警记录（对应 [8.3](requirements.md#83-系统管理后台webadmin)"告警"的 7 类场景） |
 | 对账 | `reconciliation_diffs` | 订单对账、返佣对账标出的差异，支持标记处理状态 |
 
-共 39 张表（其中 `movie_showtime_caches` 为可选表）。
+共 40 张表（其中 `movie_showtime_caches` 为可选表）。
 
 ---
 
@@ -119,6 +120,8 @@ erDiagram
 
 ```mermaid
 erDiagram
+    SUPPLIERS ||--o{ SUPPLIER_GOODS : "供应商商品库"
+    SUPPLIER_GOODS ||--o{ SUPPLIER_PRODUCTS : "被选用（supplier_id + code）"
     SUPPLIERS ||--o{ SUPPLIER_PRODUCTS : "提供商品"
     SUPPLIERS ||--o{ SUPPLIER_CIRCUIT_BREAKERS : "熔断状态"
     SUPPLIERS ||--o{ SUPPLIER_CALL_LOGS : "调用日志"
@@ -494,6 +497,25 @@ erDiagram
 
 索引：`(product_id, level_id)` 唯一。取返佣比例时优先查这张表，没有再退回 `merchant_level_business_rates`（见 [5.3](requirements.md#53-返佣计算)）。
 
+#### `supplier_goods`
+
+供应商那边有哪些商品，由商品同步（变更通知 + 每日全量校准）整批写入，不管平台有没有用到。后台新增本地商品、添加映射时从这里选，映射行按 `(supplier_id, supplier_product_code)` ↔ `(supplier_id, code)` 关联过来。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | 是 | 主键 |
+| supplier_id | bigint unsigned | 是 | 外键 `suppliers.id` |
+| code | varchar(64) | 是 | 供应商侧商品编码 |
+| name | varchar(128) | 否 | 供应商侧商品名称；同步没返回时保留上次的值 |
+| face_value | decimal(10,2) | 否 | 面值；同步没返回时保留上次的值 |
+| cost_price | decimal(10,2) | 是 | 成本价（供应商最新值，历史记在映射行的 `supplier_product_price_history`） |
+| status | varchar(16) | 是 | `active` 在售 / `paused` 暂停 / `banned` 禁售 |
+| stock | int | 否 | 库存，为空表示不限 |
+| synced_at | datetime | 否 | 最近一次同步时间 |
+| created_at / updated_at | datetime | 是 | |
+
+索引：`(supplier_id, code)` 唯一、`(supplier_id, status)`。全量同步时列表里没出现的商品保持原样，不删除、不改状态（接口分页结构尚未联调，"没出现"不足以说明已下架）。
+
 #### `supplier_products`
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -501,8 +523,8 @@ erDiagram
 | id | bigint unsigned | 是 | 主键 |
 | product_id | bigint unsigned | 是 | 外键 `products.id` |
 | supplier_id | bigint unsigned | 是 | 外键 `suppliers.id` |
-| supplier_product_code | varchar(64) | 是 | 供应商侧商品编码 |
-| cost_price | decimal(10,2) | 是 | 成本价 |
+| supplier_product_code | varchar(64) | 是 | 供应商侧商品编码，从 `supplier_goods.code` 选来，不手填 |
+| cost_price | decimal(10,2) | 是 | 成本价，创建时取自供应商商品，之后随同步更新；可人工改价 |
 | priority | int unsigned | 是 | 优先级，数字越小越优先 |
 | status | varchar(16) | 是 | `active` 启用 / `paused` 暂停 / `banned` 禁售 |
 | stock | int | 否 | 库存，为空表示不限 |
@@ -513,7 +535,7 @@ erDiagram
 
 索引：`(product_id, priority)`、`(supplier_id, status)`；`(product_id, supplier_id)` 唯一。路由时按 `(product_id, priority)` 取启用且未熔断、未禁售、库存非 0 的供应商。
 
-**一致性校验**（应用层，不做数据库约束）：新增/编辑映射时要检查 `suppliers.business_line` 与 `products.business_line` 一致——供应商现在单选业务线，不能把一个话费商品映射到一条只开通了卡券的供应商记录上。
+**一致性校验**（应用层，不做数据库约束）：新增/编辑映射时要检查 `suppliers.business_line` 与 `products.business_line` 一致——供应商现在单选业务线，不能把一个话费商品映射到一条只开通了卡券的供应商记录上。新增本地商品时必须同时选至少一个供应商商品（每个供应商一个），在同一个事务里建好映射行；已有映射的商品不能再改业务线。
 
 #### `supplier_product_price_history`
 

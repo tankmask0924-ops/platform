@@ -20,6 +20,9 @@ use App\Model\MerchantLevel;
 use App\Model\MerchantLevelBusinessRate;
 use App\Model\Product;
 use App\Model\ProductLevelRebate;
+use App\Model\Supplier;
+use App\Model\SupplierGoods;
+use App\Model\SupplierProduct;
 use App\Service\Product\RebateCalculator;
 use HyperfTest\HttpTestCase;
 
@@ -52,8 +55,23 @@ class ProductControllerTest extends HttpTestCase
 
     private array $levelIds = [];
 
+    private array $supplierIds = [];
+
+    private array $goodsIds = [];
+
     protected function tearDown(): void
     {
+        foreach ($this->productIds as $id) {
+            SupplierProduct::where('product_id', $id)->delete();
+        }
+        foreach ($this->goodsIds as $id) {
+            SupplierGoods::destroy($id);
+        }
+        foreach ($this->supplierIds as $id) {
+            Supplier::destroy($id);
+        }
+        $this->goodsIds = [];
+        $this->supplierIds = [];
         foreach ($this->adminUserIds as $id) {
             AdminUser::destroy($id);
         }
@@ -109,6 +127,79 @@ class ProductControllerTest extends HttpTestCase
         $this->assertSame('direct', $body['card_type']);
         $this->assertNull($body['operator']);
         $this->assertNull($body['charge_speed']);
+    }
+
+    public function testCreateLinksSelectedSupplierGoodsInPriorityOrder()
+    {
+        $first = $this->createGoods($this->createSupplier('recharge')->id, ['code' => 'A-1', 'cost_price' => '98.50']);
+        $second = $this->createGoods($this->createSupplier('recharge')->id, ['code' => 'B-1', 'cost_price' => '98.80', 'status' => 'paused', 'stock' => 5]);
+        $payload = $this->rechargePayload();
+        $payload['supplier_goods_ids'] = [$second->id, $first->id];
+
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $body = json_decode((string) $response->getBody(), true);
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->productIds[] = $body['id'];
+
+        $mappings = SupplierProduct::where('product_id', $body['id'])->orderBy('priority')->get();
+        $this->assertCount(2, $mappings);
+        $this->assertSame([$second->supplier_id, $first->supplier_id], $mappings->pluck('supplier_id')->all());
+        $this->assertSame([0, 1], $mappings->pluck('priority')->all());
+        $this->assertSame('B-1', $mappings[0]->supplier_product_code);
+        $this->assertSame('98.80', $mappings[0]->cost_price);
+        $this->assertSame('paused', $mappings[0]->status);
+        $this->assertSame(5, $mappings[0]->stock);
+        $this->assertSame('A-1', $mappings[1]->supplier_product_code);
+    }
+
+    public function testCreateWithoutSupplierGoodsReturns422AndCreatesNothing()
+    {
+        $payload = $this->rechargePayload();
+        $before = Product::where('name', $payload['name'])->count();
+
+        foreach ([null, [], 'abc', [0]] as $ids) {
+            $payload['supplier_goods_ids'] = $ids;
+            $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+            $this->assertSame(422, $response->getStatusCode());
+        }
+        unset($payload['supplier_goods_ids']);
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $this->assertSame(422, $response->getStatusCode());
+
+        $this->assertSame($before, Product::where('name', $payload['name'])->count());
+    }
+
+    public function testCreateRejectsGoodsOfOtherBusinessLineOrTwoGoodsFromSameSupplier()
+    {
+        $payload = $this->rechargePayload();
+        $payload['supplier_goods_ids'] = [$this->createGoods($this->createSupplier('card')->id)->id];
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $this->assertSame(422, $response->getStatusCode());
+
+        $supplier = $this->createSupplier('recharge');
+        $payload['supplier_goods_ids'] = [$this->createGoods($supplier->id)->id, $this->createGoods($supplier->id)->id];
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $this->assertSame(422, $response->getStatusCode());
+
+        $this->assertSame(0, Product::where('name', $payload['name'])->count());
+    }
+
+    public function testUpdateBusinessLineRejectedOnceSupplierGoodsLinked()
+    {
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $this->rechargePayload());
+        $body = json_decode((string) $response->getBody(), true);
+        $this->productIds[] = $body['id'];
+
+        $response = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), [
+            'business_line' => 'card',
+            'operator' => null,
+            'card_type' => 'direct',
+        ]);
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('不能修改业务线', (string) $response->getBody());
+        $this->assertSame('recharge', Product::find($body['id'])->business_line);
     }
 
     public function testCreateWithInvalidBusinessLineReturns422()
@@ -435,6 +526,7 @@ class ProductControllerTest extends HttpTestCase
             'face_value' => '100.00',
             'sale_price' => '99.00',
             'rebate_amount' => '0.50',
+            'supplier_goods_ids' => [$this->createGoods($this->createSupplier('recharge')->id)->id],
         ];
     }
 
@@ -447,7 +539,39 @@ class ProductControllerTest extends HttpTestCase
             'face_value' => '50.00',
             'sale_price' => '48.00',
             'rebate_amount' => '0.20',
+            'supplier_goods_ids' => [$this->createGoods($this->createSupplier('card')->id)->id],
         ];
+    }
+
+    private function createSupplier(string $businessLine): Supplier
+    {
+        $supplier = Supplier::create([
+            'name' => '测试供应商_' . uniqid('', true),
+            'code' => 'supplier_' . uniqid('', true),
+            'business_line' => $businessLine,
+            'driver' => 'kasushou',
+            'config' => 'encrypted-placeholder',
+            'status' => 'active',
+        ]);
+        $this->supplierIds[] = $supplier->id;
+
+        return $supplier;
+    }
+
+    private function createGoods(int $supplierId, array $overrides = []): SupplierGoods
+    {
+        $goods = SupplierGoods::create(array_merge([
+            'supplier_id' => $supplierId,
+            'code' => 'G-' . uniqid('', true),
+            'name' => '供应商商品',
+            'face_value' => '100.00',
+            'cost_price' => '98.50',
+            'status' => 'active',
+            'stock' => null,
+        ], $overrides));
+        $this->goodsIds[] = $goods->id;
+
+        return $goods;
     }
 
     private function createRechargeProduct(array $overrides = []): Product

@@ -60,5 +60,6 @@ class SupplierProduct extends Model
     protected array $casts = [
         'param_mapping' => 'array',
         'sale_restrictions' => 'array',
+        'synced_at' => 'datetime',
     ];
 }

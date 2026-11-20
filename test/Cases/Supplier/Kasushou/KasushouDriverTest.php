@@ -548,8 +548,8 @@ class KasushouDriverTest extends TestCase
                 'msg' => '',
                 'data' => [
                     'list' => [
-                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100],
-                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 'banned', 'stock' => 0],
+                        ['id' => 'GOODS-1', 'goods_price' => '8.50', 'status' => 'active', 'stock' => 100, 'goods_name' => '移动 10 元快充', 'face_value' => '10'],
+                        ['id' => 'GOODS-2', 'goods_price' => '9.90', 'status' => 'banned', 'stock' => 0, 'face_value' => 'n/a'],
                     ],
                     'total' => 2,
                 ],
@@ -563,6 +563,11 @@ class KasushouDriverTest extends TestCase
         $this->assertSame('active', $entries[0]['status']);
         $this->assertSame('GOODS-2', $entries[1]['supplier_product_code']);
         $this->assertSame('banned', $entries[1]['status']);
+        // 名称、面值只用来在后台辨认，缺了或格式不对就是 null，不影响这一条同步
+        $this->assertSame('移动 10 元快充', $entries[0]['name']);
+        $this->assertSame('10.00', $entries[0]['face_value']);
+        $this->assertNull($entries[1]['name']);
+        $this->assertNull($entries[1]['face_value']);
     }
 
     public function testSyncAllProductsEmptyListReturnsEmptyArray()

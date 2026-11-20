@@ -65,6 +65,21 @@ class SupplierProductDao extends AbstractDao
             ->first();
     }
 
+    /**
+     * 一批供应商商品被哪些本地商品用到了：按 `(supplier_id, supplier_product_code)`
+     * 取映射行。先用两个 whereIn 缩小范围，组合是否真的匹配由调用方按两列再核对一次。
+     *
+     * @param array<int, int> $supplierIds
+     * @param array<int, string> $codes
+     */
+    public function listBySupplierCodes(array $supplierIds, array $codes): Collection
+    {
+        return $this->newQuery()
+            ->whereIn('supplier_id', $supplierIds)
+            ->whereIn('supplier_product_code', $codes)
+            ->get();
+    }
+
     public function listForProduct(int $productId): Collection
     {
         return $this->newQuery()
