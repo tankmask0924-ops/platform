@@ -126,10 +126,13 @@ class ProductAdminService extends AbstractService
     #[Inject]
     protected ProductMappingAdminService $productMappingAdminService;
 
+    #[Inject]
+    protected CardBrandAdminService $cardBrandAdminService;
+
     /**
      * @return array{data: array<int, array<string, mixed>>, total: int, page: int, per_page: int}
      */
-    public function list(int $page, int $perPage, ?string $businessLine, ?string $status): array
+    public function list(int $page, int $perPage, ?string $businessLine, ?string $status, ?int $brandId = null): array
     {
         if ($businessLine !== null) {
             $this->validateBusinessLine($businessLine);
@@ -138,11 +141,12 @@ class ProductAdminService extends AbstractService
             $this->validateStatus($status);
         }
 
-        $products = $this->productDao->paginate($page, $perPage, $businessLine, $status);
+        $products = $this->productDao->paginate($page, $perPage, $businessLine, $status, $brandId);
+        $brandNames = $this->cardBrandAdminService->namesById($products->pluck('brand_id')->filter()->unique()->values()->all());
 
         return [
-            'data' => $products->map(fn (Product $product) => $this->formatProduct($product))->values()->all(),
-            'total' => $this->productDao->count($businessLine, $status),
+            'data' => $products->map(fn (Product $product) => $this->formatProduct($product, $brandNames))->values()->all(),
+            'total' => $this->productDao->count($businessLine, $status, $brandId),
             'page' => $page,
             'per_page' => $perPage,
         ];
@@ -160,7 +164,9 @@ class ProductAdminService extends AbstractService
     {
         $product = $this->findOrFail($id);
 
-        return $this->formatProduct($product) + ['level_rebates' => $this->listLevelRebates($product->id)];
+        $brandNames = $product->brand_id === null ? [] : $this->cardBrandAdminService->namesById([(int) $product->brand_id]);
+
+        return $this->formatProduct($product, $brandNames) + ['level_rebates' => $this->listLevelRebates($product->id)];
     }
 
     /**
@@ -184,6 +190,7 @@ class ProductAdminService extends AbstractService
         );
 
         $conditionalFields = $this->resolveConditionalFields($businessLine, $data, true);
+        $conditionalFields['brand_id'] = $this->resolveBrandId($businessLine, $data, true, null);
         $goodsList = $this->productMappingAdminService->resolveGoods(
             $businessLine,
             $conditionalFields['card_type'] ?? null,
@@ -290,6 +297,9 @@ class ProductAdminService extends AbstractService
         }
 
         $attributes = array_merge($attributes, $this->resolveConditionalFields($businessLine, $data, false));
+        if (array_key_exists('brand_id', $data)) {
+            $attributes['brand_id'] = $this->resolveBrandId($businessLine, $data, false, $product->brand_id);
+        }
 
         // 卡密 / 直充决定了要配哪种供应商商品，已经配好的映射会全部对不上
         if (array_key_exists('card_type', $attributes)
@@ -377,7 +387,10 @@ class ProductAdminService extends AbstractService
     /**
      * @return array<string, mixed>
      */
-    private function formatProduct(Product $product): array
+    /**
+     * @param array<int, string> $brandNames 品牌 id => 名称
+     */
+    private function formatProduct(Product $product, array $brandNames = []): array
     {
         return [
             'id' => $product->id,
@@ -388,6 +401,8 @@ class ProductAdminService extends AbstractService
             'province' => $product->province,
             'charge_speed' => $product->charge_speed,
             'card_type' => $product->card_type,
+            'brand_id' => $product->brand_id,
+            'brand_name' => $product->brand_id === null ? null : ($brandNames[$product->brand_id] ?? null),
             'face_value' => $product->face_value,
             'sale_price' => $product->sale_price,
             'rebate_amount' => $product->rebate_amount,
@@ -512,6 +527,28 @@ class ProductAdminService extends AbstractService
         }
 
         return $value;
+    }
+
+    /**
+     * 卡券品牌：卡券新建时必填（存量商品可以先不填，编辑时补上）；话费没有品牌，传了非空值直接拒绝。
+     *
+     * @param array<string, mixed> $data
+     */
+    private function resolveBrandId(string $businessLine, array $data, bool $isCreate, ?int $currentBrandId): ?int
+    {
+        $value = $data['brand_id'] ?? null;
+        if ($businessLine !== 'card') {
+            if ($value !== null && $value !== '') {
+                throw new HttpException(422, 'brand_id 不适用于 recharge 商品');
+            }
+
+            return null;
+        }
+        if (! $isCreate && ($value === null || $value === '')) {
+            return null;
+        }
+
+        return $this->cardBrandAdminService->assertSelectable($value, $currentBrandId);
     }
 
     /**

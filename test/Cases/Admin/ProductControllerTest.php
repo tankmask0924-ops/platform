@@ -16,6 +16,7 @@ use App\Model\AdminPermission;
 use App\Model\AdminRole;
 use App\Model\AdminRolePermission;
 use App\Model\AdminUser;
+use App\Model\CardBrand;
 use App\Model\MerchantLevel;
 use App\Model\MerchantLevelBusinessRate;
 use App\Model\Product;
@@ -59,6 +60,8 @@ class ProductControllerTest extends HttpTestCase
 
     private array $goodsIds = [];
 
+    private array $brandIds = [];
+
     protected function tearDown(): void
     {
         foreach ($this->productIds as $id) {
@@ -70,6 +73,11 @@ class ProductControllerTest extends HttpTestCase
         foreach ($this->supplierIds as $id) {
             Supplier::destroy($id);
         }
+        foreach ($this->productIds as $id) {
+            Product::destroy($id);
+        }
+        CardBrand::destroy($this->brandIds);
+        $this->brandIds = [];
         $this->goodsIds = [];
         $this->supplierIds = [];
         foreach ($this->adminUserIds as $id) {
@@ -218,7 +226,11 @@ class ProductControllerTest extends HttpTestCase
             if ($cardType !== null) {
                 $payload['card_type'] = $cardType;
             }
-            $payload['supplier_goods_ids'] = [$this->createGoods($this->createSupplier($businessLine)->id, ['goods_type' => $goodsType])->id];
+            $goodsOverrides = ['goods_type' => $goodsType];
+            if ($cardType === 'card_secret') {
+                $goodsOverrides['attach_template'] = [];
+            }
+            $payload['supplier_goods_ids'] = [$this->createGoods($this->createSupplier($businessLine)->id, $goodsOverrides)->id];
 
             $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
             $label = $businessLine . '/' . ($cardType ?? '-') . ' + ' . ($goodsType ?? 'unknown');
@@ -264,6 +276,36 @@ class ProductControllerTest extends HttpTestCase
         $response = $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['image_url' => '']);
         $this->assertSame(200, $response->getStatusCode());
         $this->assertNull(Product::find($body['id'])->image_url);
+    }
+
+    public function testCardBrandIsRequiredValidatedAndReturned()
+    {
+        $payload = $this->cardPayload();
+        unset($payload['brand_id']);
+        $this->assertSame(422, $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload)->getStatusCode(), '卡券新建必须选品牌');
+
+        $payload['brand_id'] = $this->createBrand('disabled')->id;
+        $this->assertSame(422, $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload)->getStatusCode(), '停用的品牌不能选');
+
+        $recharge = $this->rechargePayload();
+        $recharge['brand_id'] = $this->createBrand()->id;
+        $this->assertSame(422, $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $recharge)->getStatusCode(), '话费没有品牌');
+
+        $brand = $this->createBrand();
+        $payload['brand_id'] = $brand->id;
+        $response = $this->jsonRequest('POST', '/admin/products', $this->manageToken(), $payload);
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertSame(200, $response->getStatusCode(), (string) $response->getBody());
+        $this->productIds[] = $body['id'];
+        $this->assertSame($brand->id, $body['brand_id']);
+        $this->assertSame($brand->name, $body['brand_name']);
+
+        // 品牌停用后，已有商品照常保存；按品牌筛选
+        $brand->fill(['status' => 'disabled'])->save();
+        $this->assertSame(200, $this->jsonRequest('PUT', '/admin/products/' . $body['id'], $this->manageToken(), ['brand_id' => $brand->id, 'name' => '改名'])->getStatusCode());
+        $list = json_decode((string) $this->client->request('GET', '/admin/products?brand_id=' . $brand->id, ['headers' => ['Authorization' => 'Bearer ' . $this->viewToken()]])->getBody(), true);
+        $this->assertSame([$body['id']], array_column($list['data'], 'id'));
+        $this->assertSame($brand->name, $list['data'][0]['brand_name']);
     }
 
     public function testCreateWithInvalidBusinessLineReturns422()
@@ -600,11 +642,20 @@ class ProductControllerTest extends HttpTestCase
             'business_line' => 'card',
             'name' => '卡券测试商品_' . bin2hex(random_bytes(4)),
             'card_type' => 'direct',
+            'brand_id' => $this->createBrand()->id,
             'face_value' => '50.00',
             'sale_price' => '48.00',
             'rebate_amount' => '0.20',
             'supplier_goods_ids' => [$this->createGoods($this->createSupplier('card')->id)->id],
         ];
+    }
+
+    private function createBrand(string $status = 'active'): CardBrand
+    {
+        $brand = CardBrand::create(['name' => '品牌_' . uniqid('', true), 'sort' => 0, 'status' => $status]);
+        $this->brandIds[] = $brand->id;
+
+        return $brand;
     }
 
     private function createSupplier(string $businessLine): Supplier
@@ -632,6 +683,11 @@ class ProductControllerTest extends HttpTestCase
             'cost_price' => '98.50',
             'status' => 'active',
             'stock' => null,
+            // 商品详情刚查过：下单模板只要充值账号（卡密商品没有模板），建映射时不用再去问供应商
+            'attach_template' => ($overrides['goods_type'] ?? null) === 'card_secret' ? [] : [['key' => 'recharge_account', 'name' => '充值账号', 'type' => 'text']],
+            'min_quantity' => 1,
+            'max_quantity' => 10,
+            'detail_synced_at' => date('Y-m-d H:i:s'),
         ], $overrides));
         $this->goodsIds[] = $goods->id;
 

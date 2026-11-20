@@ -1140,7 +1140,17 @@ Product\RebateCalculator` 对 `business_line = 'card'` 未经改动即可正确�
 - **商品**：详情路径 `/goods/detail` → `/goods/info`、字段 `id`；列表分页 `page_size` → `limit`；状态是 1/2/3 数字（之前按字符串猜，真实数据会全部落成"暂停"）；库存 `stock_num`（之前猜 `stock`，库存永远是不限）。
 - **请求体**：改为原样发送签名用的 JSON 字符串，不再交给 Guzzle 用默认参数重新编码（默认会转义 `/` 和中文、不排序，跟签名内容不一致，卡速售若按原始请求体验签会失败）。
 - 签名算法本身跟原文一致：`KasushouSignerTest` 新增用例，用文档「签名规范」的示例原样算出文档给的 sign。
-- 待向卡速售确认：多规格商品（`goods_sku_id`）怎么下单；订单详情查不到时返回空数组还是 400（见 kasushou.md 第 5 节）。
+- 2026-11-20 补充定下：多规格商品下单只传商品 `id`；订单详情查不到时"成功但 data 为空/null"和"400 提示订单不存在"都按查不到（`KasushouDriver::isOrderNotFoundResponse()`），其它 400/500/超时仍是结果未知；接口频率限制暂不处理。`need_balance` 含义仍未知，只记录不使用。
+
+**下单模板、购买数量、销售限制、卡券品牌**（2026-11-20）：
+- **供应商商品详情**：`supplier_goods` 新增 `attach_template`（下单参数模板）、`min_quantity` / `max_quantity`、`can_back`、`sale_restrictions`、`detail_synced_at`。
+  销售限制列表接口就有，每天全量校准时写入，并同步到映射行 `supplier_products.sale_restrictions`；模板、购买数量、撤单只有详情接口有，变更通知时查，建映射时一小时内没查过也会先查（查不到报 502，不建映射）。
+- **建映射自动生成 `param_mapping`**：话费、卡券直充模板里有 `recharge_account` 就用它，只有一个字段就填那个字段；没有模板、或要求多个参数却没有 `recharge_account` 的拒绝（平台只能提供充值账号）。卡密商品模板必须为空。最少要买 2 个以上的拒绝。
+  路由也跳过最少购买数量大于 1 的映射（供应商后来改了限制时兜底）。后台供应商商品列表显示「下单参数」和最少购买数量。
+- **卡券品牌**：新表 `card_brands`，`products.brand_id`；后台 `GET/POST /admin/card-brands`、`PUT/DELETE /admin/card-brands/{id}`（权限 `product.view` / `product.manage`），页面 `views/product/CardBrandView.vue`。
+  新建卡券商品必须选启用的品牌，话费不能带品牌；有商品的品牌不能删、只能停用，停用后已有商品照常编辑。商品列表可按 `brand_id` 筛选；开放 API 商品列表、商户后台「商品价格」返回品牌（已更新 `open-api-integration.md`）。
+- **后台菜单**：「本地商品」拆成「话费商品」`/products/recharge`、「卡券商品」`/products/card`（同一个列表页按业务线传参），新增「卡券品牌」`/products/brands`；旧地址 `/products` 跳到话费商品。
+- 测试：`ProductMappingControllerTest::testParamMappingFollowsGoodsTemplateAndUnusableGoodsAreRejected`、`ProductMappingDetailRefreshTest`、`SupplierRouterTest::testMappingWhoseGoodsNeedsMoreThanOneIsNotEligible`、`ProductSyncServiceTest::testSaleRestrictionsAreCopiedToMappings`、`KasushouDriverTest`、`CardBrandControllerTest`、`ProductControllerTest::testCardBrandIsRequiredValidatedAndReturned`。
 
 **云存储与商品图片**（2026-11-20）：
 - **系统设置 - 云存储**：`GET/PUT /admin/storage-settings`、`POST /admin/storage-settings/test`（权限沿用 `setting.view` / `setting.manage`），后台页面 `views/system/StorageSettingView.vue`。

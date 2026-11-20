@@ -22,6 +22,7 @@ use App\Model\OrderRecharge;
 use App\Model\Product;
 use App\Model\Supplier;
 use App\Model\SupplierCircuitBreaker;
+use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\OpenApi\ErrorCode;
 use App\Service\Order\SupplierCallbackService;
@@ -325,6 +326,27 @@ class SupplierRouterTest extends TestCase
 
         OrderRecharge::where('order_id', $order->id)->delete();
         $this->assertTrue($router->isCardSecretOrder($order), '找不到商品时按卡密处理');
+    }
+
+    /**
+     * 供应商商品后来改成最少买 2 个以上：平台每单只买 1 个，路由跳过这个映射。
+     */
+    public function testMappingWhoseGoodsNeedsMoreThanOneIsNotEligible()
+    {
+        $product = $this->createProduct('10.00');
+        $supplierA = $this->createSupplier();
+        $supplierB = $this->createSupplier();
+        $this->createSupplierProduct($product->id, $supplierA->id, 'MINQ-A-' . uniqid(), '9.00', 1);
+        $this->createSupplierProduct($product->id, $supplierB->id, 'MINQ-B-' . uniqid(), '9.10', 2);
+        $codeA = SupplierProduct::where('product_id', $product->id)->where('supplier_id', $supplierA->id)->value('supplier_product_code');
+        SupplierGoods::create(['supplier_id' => $supplierA->id, 'code' => $codeA, 'cost_price' => '9.00', 'status' => 'active', 'min_quantity' => 2]);
+
+        try {
+            $candidates = $this->getContainer()->get(SupplierRouter::class)->eligibleCandidates($product);
+            $this->assertSame([$supplierB->id], array_map(static fn (array $c) => (int) $c[1]->id, $candidates));
+        } finally {
+            SupplierGoods::where('supplier_id', $supplierA->id)->delete();
+        }
     }
 
     private function setUpTwoSuppliers(): array

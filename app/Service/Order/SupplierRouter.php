@@ -17,12 +17,14 @@ use App\Dao\OrderDao;
 use App\Dao\OrderRechargeDao;
 use App\Dao\ProductDao;
 use App\Dao\SupplierDao;
+use App\Dao\SupplierGoodsDao;
 use App\Dao\SupplierProductDao;
 use App\Dao\SystemSettingDao;
 use App\Model\Order;
 use App\Model\OrderAttempt;
 use App\Model\Product;
 use App\Model\Supplier;
+use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\OpenApi\ErrorCode;
 use App\Service\AbstractService;
@@ -107,6 +109,9 @@ class SupplierRouter extends AbstractService
     protected ProductDao $productDao;
 
     #[Inject]
+    protected SupplierGoodsDao $supplierGoodsDao;
+
+    #[Inject]
     protected SystemSettingDao $systemSettingDao;
 
     #[Inject]
@@ -142,7 +147,14 @@ class SupplierRouter extends AbstractService
     public function eligibleCandidates(Product $product, array $excludeSupplierIds = []): array
     {
         $candidates = [];
-        foreach ($this->supplierProductDao->listForProduct($product->id) as $mapping) {
+        $mappings = $this->supplierProductDao->listForProduct($product->id);
+        // 供应商商品后来改成最少买 2 个以上的，平台每单只买 1 个，下单一定失败，路由直接跳过
+        $minQuantities = $this->supplierGoodsDao->listBySupplierCodes(
+            $mappings->pluck('supplier_id')->unique()->values()->all(),
+            $mappings->pluck('supplier_product_code')->unique()->values()->all()
+        )->mapWithKeys(fn (SupplierGoods $goods) => [$goods->supplier_id . ':' . $goods->code => $goods->min_quantity]);
+
+        foreach ($mappings as $mapping) {
             if (in_array((int) $mapping->supplier_id, $excludeSupplierIds, true)) {
                 continue;
             }
@@ -150,6 +162,9 @@ class SupplierRouter extends AbstractService
                 continue;
             }
             if ($mapping->stock !== null && $mapping->stock <= 0) {
+                continue;
+            }
+            if (($minQuantities[$mapping->supplier_id . ':' . $mapping->supplier_product_code] ?? null) > 1) {
                 continue;
             }
 

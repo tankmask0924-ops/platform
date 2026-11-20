@@ -230,6 +230,21 @@ class ProductSyncServiceTest extends TestCase
         $this->assertSame(0, $rows[0]->stock);
     }
 
+    public function testSaleRestrictionsAreCopiedToMappings()
+    {
+        $code = $this->uniqueCode();
+        $mapping = $this->createProduct($code, costPrice: '10.00');
+
+        $this->service()->applyFullSyncPage(self::SUPPLIER_ID, [
+            ['supplier_product_code' => $code, 'cost_price' => '10.00', 'status' => 'active', 'stock' => null, 'sale_restrictions' => ['can_buy' => '京东', 'can_no_buy' => '抖音', 'can_price' => '9.90', 'need_balance' => null]],
+        ]);
+
+        $this->assertSame('抖音', $mapping->refresh()->sale_restrictions['can_no_buy']);
+        $goods = SupplierGoods::where('supplier_id', self::SUPPLIER_ID)->where('code', $code)->first();
+        $this->assertSame('9.90', $goods->sale_restrictions['can_price']);
+        $this->assertNull($goods->attach_template, '列表同步不带下单模板，保持"没查过详情"');
+    }
+
     public function testHandleNotificationResolvesSupplierByCode()
     {
         $supplier = $this->createSupplier();

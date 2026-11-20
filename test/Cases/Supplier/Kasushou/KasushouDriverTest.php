@@ -296,6 +296,43 @@ class KasushouDriverTest extends TestCase
         $this->assertSame(UnifiedResult::Unknown, $result->result);
     }
 
+    /**
+     * 文档没写查不到订单时怎么返回：空数组、data 为 null、400 且提示订单不存在都算查不到；
+     * 其它 400（签名错误等）、500、看不懂的响应仍是结果未知，不能当查不到去换供应商。
+     */
+    public function testQueryOrderNotFoundVariants()
+    {
+        $cases = [
+            'empty list' => [200, ['code' => 200, 'msg' => '成功', 'data' => []], UnifiedResult::DefiniteFailure],
+            'data null' => [200, ['code' => 200, 'msg' => '成功', 'data' => null], UnifiedResult::DefiniteFailure],
+            '400 订单不存在' => [400, ['code' => 400, 'msg' => '订单不存在'], UnifiedResult::DefiniteFailure],
+            '400 未找到订单' => [400, ['code' => 400, 'msg' => '未找到该订单信息'], UnifiedResult::DefiniteFailure],
+            '400 签名错误' => [400, ['code' => 400, 'msg' => '签名错误'], UnifiedResult::Unknown],
+            '400 没有 msg' => [400, ['code' => 400], UnifiedResult::Unknown],
+            '500 订单不存在' => [500, ['code' => 500, 'msg' => '订单不存在'], UnifiedResult::Unknown],
+            'not json' => [200, null, UnifiedResult::Unknown],
+        ];
+        foreach ($cases as $label => [$status, $body, $expected]) {
+            $client = Mockery::mock(ClientInterface::class);
+            $client->shouldReceive('request')->once()->andReturn(new Response($status, [], $body === null ? '<html>gateway</html>' : json_encode($body)));
+
+            $this->assertSame($expected, $this->makeDriver($client)->queryOrder('EO-NF')->result, $label);
+        }
+    }
+
+    public function testPlaceOrderHttp400ThenQuerySaysNotExistSwitchesSupplier()
+    {
+        $client = Mockery::mock(ClientInterface::class);
+        $client->shouldReceive('request')->once()->with('POST', Mockery::pattern('#/api/v1/order/buy$#'), Mockery::type('array'))
+            ->andReturn(new Response(400, [], json_encode(['code' => 400, 'msg' => '安全价格低于售价'])));
+        $client->shouldReceive('request')->once()->with('POST', Mockery::pattern('#/api/v1/order/info$#'), Mockery::type('array'))
+            ->andReturn(new Response(400, [], json_encode(['code' => 400, 'msg' => '订单不存在'])));
+
+        $result = $this->makeDriver($client)->placeOrder('EO-NF-2', '2909', '10.00', 'https://merchant.example.com/notify');
+
+        $this->assertSame(UnifiedResult::DefiniteFailure, $result->result);
+    }
+
     public function testQueryOrderNotFoundMapsToDefiniteFailure()
     {
         $client = Mockery::mock(ClientInterface::class);
@@ -496,13 +533,26 @@ class KasushouDriverTest extends TestCase
             ->andReturn(new Response(200, [], json_encode([
                 'code' => 200,
                 'msg' => '',
-                'data' => ['id' => 2909, 'goods_name' => '移动 100 元快充', 'goods_type' => 2, 'face_value' => '100.00', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100],
+                'data' => [
+                    'id' => 2909, 'goods_name' => '移动 100 元快充', 'goods_type' => 2, 'face_value' => '100.00', 'goods_price' => '8.50', 'status' => 1, 'stock_num' => 100,
+                    'start_count' => 1, 'end_count' => 10, 'can_back' => 1,
+                    'can_buy' => '拼多多,京东', 'can_no_buy' => '抖音', 'can_price' => '2.00', 'need_balance' => '2000',
+                    'attach' => [
+                        ['key' => 'recharge_account', 'type' => 'text', 'tip' => '请填写手机号', 'name' => '手机号'],
+                        ['type' => 'text', 'name' => '没有 key 的条目跳过'],
+                    ],
+                ],
             ])));
 
         $driver = $this->makeDriver($client);
         $detail = $driver->queryProductDetail('2909');
 
         $this->assertSame('2909', $detail['supplier_product_code']);
+        $this->assertSame([['key' => 'recharge_account', 'name' => '手机号', 'type' => 'text']], $detail['attach_template']);
+        $this->assertSame(1, $detail['min_quantity']);
+        $this->assertSame(10, $detail['max_quantity']);
+        $this->assertTrue($detail['can_back']);
+        $this->assertSame(['can_buy' => '拼多多,京东', 'can_no_buy' => '抖音', 'can_price' => '2.00', 'need_balance' => '2000'], $detail['sale_restrictions']);
         $this->assertSame('8.50', $detail['cost_price']);
         $this->assertSame('active', $detail['status']);
         $this->assertSame(100, $detail['stock']);
@@ -524,6 +574,9 @@ class KasushouDriverTest extends TestCase
 
         $this->assertSame('paused', $detail['status']);
         $this->assertNull($detail['stock']);
+        // 详情没有 attach（卡密商品）：空模板，不是"没查过"
+        $this->assertSame([], $detail['attach_template']);
+        $this->assertNull($detail['sale_restrictions']);
     }
 
     public function testQueryProductDetailHttp500Throws()

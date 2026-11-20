@@ -44,7 +44,7 @@ use Throwable;
  *
  * 【落库分两处】每条供应商商品都写进供应商商品库（`supplier_goods`，不管平台有没有
  * 用到——后台新增本地商品、添加映射时要从这里选）；如果有本地商品映射了它，再把
- * 成本价/状态/库存同步到这些映射行（`supplier_products`，改价留历史）。
+ * 成本价/状态/库存/销售限制同步到这些映射行（`supplier_products`，改价留历史）。
  *
  * 【全量校准不下架列表里没出现的商品】商品列表接口的分页参数、外层结构都是按文档
  * 行文猜的（见 KasushouDriver 类注释），在没联调之前，"列表里没出现"不足以说明
@@ -219,7 +219,7 @@ class ProductSyncService extends AbstractService
 
         $mappings = $this->supplierProductDao->listBySupplierCodes([$supplierId], [$detail['supplier_product_code']]);
         foreach ($mappings as $mapping) {
-            $this->supplierProductDao->applySync($mapping, $detail['cost_price'], $detail['status'], $detail['stock']);
+            $this->supplierProductDao->applySync($mapping, $detail['cost_price'], $detail['status'], $detail['stock'], $detail['sale_restrictions'] ?? null);
         }
     }
 

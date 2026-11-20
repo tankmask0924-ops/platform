@@ -66,6 +66,14 @@ function pick(row: SupplierGoods) {
           <span v-else class="muted">未知</span>
         </template>
       </el-table-column>
+      <el-table-column label="下单参数" min-width="140">
+        <template #default="{ row }">
+          <span v-if="row.attach_template === null" class="muted">未查（选用时自动查）</span>
+          <span v-else-if="row.attach_template.length === 0">无</span>
+          <span v-else>{{ (row as SupplierGoods).attach_template!.map((f) => f.name ?? f.key).join('、') }}</span>
+          <el-tag v-if="row.min_quantity !== null && row.min_quantity > 1" type="danger" size="small" class="gap-left">最少买 {{ row.min_quantity }} 个</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="面值" width="90" align="right">
         <template #default="{ row }">{{ money(row.face_value) }}</template>
       </el-table-column>
@@ -106,6 +114,10 @@ function pick(row: SupplierGoods) {
 </template>
 
 <style scoped>
+.gap-left {
+  margin-left: 6px;
+}
+
 .pagination {
   margin-top: 12px;
   justify-content: flex-end;

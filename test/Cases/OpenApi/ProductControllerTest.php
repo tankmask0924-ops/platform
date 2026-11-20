@@ -122,6 +122,7 @@ class ProductControllerTest extends HttpTestCase
         $this->assertSame('mobile', $rows[$nameA]['operator']);
         $this->assertSame('100.00', $rows[$nameA]['face_value']);
         $this->assertArrayHasKey('image_url', $rows[$nameA], '商品图片字段始终返回，没上传时为 null');
+        $this->assertNull($rows[$nameA]['brand_name'], '话费没有品牌');
         $this->assertSame('99.20', $rows[$nameA]['sale_price']);
         $this->assertSame('0.30', $rows[$nameA]['rebate']);
 

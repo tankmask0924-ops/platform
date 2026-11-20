@@ -93,13 +93,19 @@ class SupplierProductDao extends AbstractDao
      * 改价必留痕的事务逻辑收在 writeCostPrice()，这里只负责拼出"同步"场景特有的
      * 附加字段（status/stock/synced_at）和固定的 source='sync'。
      */
-    public function applySync(SupplierProduct $product, string $costPrice, string $status, ?int $stock): SupplierProduct
+    public function applySync(SupplierProduct $product, string $costPrice, string $status, ?int $stock, ?array $saleRestrictions = null): SupplierProduct
     {
-        return $this->writeCostPrice($product, $costPrice, 'sync', [
+        $extra = [
             'status' => $status,
             'stock' => $stock,
             'synced_at' => date('Y-m-d H:i:s'),
-        ]);
+        ];
+        // 供应商给了销售限制才覆盖（requirements.md 6.4：只在后台记录，不展示给商户）
+        if ($saleRestrictions !== null) {
+            $extra['sale_restrictions'] = $saleRestrictions;
+        }
+
+        return $this->writeCostPrice($product, $costPrice, 'sync', $extra);
     }
 
     /**

@@ -21,10 +21,12 @@ use App\Model\Supplier;
 use App\Model\SupplierGoods;
 use App\Model\SupplierProduct;
 use App\Service\AbstractService;
+use App\Supplier\SupplierDriverFactory;
 use Hyperf\Database\Exception\QueryException;
 use Hyperf\DbConnection\Db;
 use Hyperf\Di\Annotation\Inject;
 use Hyperf\HttpMessage\Exception\HttpException;
+use Throwable;
 
 /**
  * 系统管理后台（web/admin）「商品映射与成本价」（requirements.md 6.4），
@@ -51,6 +53,12 @@ class ProductMappingAdminService extends AbstractService
 {
     private const ALLOWED_STATUSES = ['active', 'paused', 'banned'];
 
+    /** 商品详情（下单模板、购买数量）查过之后多久内不再重查 */
+    private const DETAIL_FRESH_SECONDS = 3600;
+
+    /** 平台下单参数：充值账号（话费手机号、卡券直充账号） */
+    private const ACCOUNT_PARAM = 'recharge_account';
+
     private const GOODS_TYPE_LABELS = [
         SupplierGoods::TYPE_CARD_SECRET => '卡密',
         SupplierGoods::TYPE_VIRTUAL => '直充',
@@ -67,6 +75,9 @@ class ProductMappingAdminService extends AbstractService
 
     #[Inject]
     protected SupplierGoodsDao $supplierGoodsDao;
+
+    #[Inject]
+    protected SupplierDriverFactory $supplierDriverFactory;
 
     /**
      * 某个本地商品的全部供应商映射，按 `priority` 升序（跟 SupplierProductDao::listForProduct()
@@ -152,7 +163,8 @@ class ProductMappingAdminService extends AbstractService
 
     /**
      * 按 id 取一批供应商商品并校验能不能给这个本地商品用：都要存在、所属供应商的业务线一致、
-     * 商品类型对得上（requiredGoodsType()；供应商没给类型的不拦）、同一个供应商只能选一个
+     * 商品类型对得上（requiredGoodsType()；供应商没给类型的不拦）、下单模板和购买数量平台能满足
+     * （paramMappingFor()，校验前先查一次商品详情，见 refreshDetail()）、同一个供应商只能选一个
      * （`(product_id, supplier_id)` 唯一）。返回顺序跟传入的 id 顺序一致（新增商品时这个顺序就是优先级顺序）。
      *
      * @param array<int, int> $goodsIds
@@ -178,7 +190,9 @@ class ProductMappingAdminService extends AbstractService
             if ($supplier->business_line !== $businessLine) {
                 throw new HttpException(422, '供应商业务线与本地商品业务线不一致，无法映射');
             }
+            $goods = $this->refreshDetail($goods);
             $this->assertGoodsTypeMatches($goods, $businessLine, $cardType);
+            $this->paramMappingFor($goods, $businessLine, $cardType);
             if (isset($seenSuppliers[$goods->supplier_id])) {
                 throw new HttpException(422, '同一个供应商只能选一个商品：' . $supplier->name);
             }
@@ -192,10 +206,12 @@ class ProductMappingAdminService extends AbstractService
 
     /**
      * 用一个已经校验过的供应商商品建映射行（校验见 resolveGoods()）。`$status` 为
-     * null 时跟供应商商品当前状态一致。
+     * null 时跟供应商商品当前状态一致；下单参数映射按供应商商品的下单模板自动生成。
      */
     public function createFromGoods(int $productId, SupplierGoods $goods, int $priority, ?string $status = null): SupplierProduct
     {
+        $product = $this->findProductOrFail($productId);
+
         try {
             return $this->supplierProductDao->create([
                 'product_id' => $productId,
@@ -205,6 +221,8 @@ class ProductMappingAdminService extends AbstractService
                 'priority' => $priority,
                 'status' => $status ?? $goods->status,
                 'stock' => $goods->stock,
+                'param_mapping' => $this->paramMappingFor($goods, $product->business_line, $product->card_type),
+                'sale_restrictions' => $goods->sale_restrictions,
                 'synced_at' => $goods->synced_at?->toDateTimeString(),
             ]);
         } catch (QueryException $e) {
@@ -284,7 +302,10 @@ class ProductMappingAdminService extends AbstractService
                 throw new HttpException(422, '只能换成同一个供应商的商品');
             }
             $product = $this->findProductOrFail((int) $mapping->product_id);
+            $goods = $this->refreshDetail($goods);
             $this->assertGoodsTypeMatches($goods, $product->business_line, $product->card_type);
+            $attributes['param_mapping'] = $this->paramMappingFor($goods, $product->business_line, $product->card_type);
+            $attributes['sale_restrictions'] = $goods->sale_restrictions;
             $attributes['supplier_product_code'] = $goods->code;
             $attributes['status'] = $goods->status;
             $attributes['stock'] = $goods->stock;
@@ -313,6 +334,68 @@ class ProductMappingAdminService extends AbstractService
         });
 
         return $mapping;
+    }
+
+    /**
+     * 建映射前查一次供应商商品详情（下单模板、购买数量只有详情接口有）。一小时内查过就不再查；
+     * 查不到直接报错，不拿不知道模板的商品去建映射——模板对不上，上线后这个商品每单都会下单失败。
+     */
+    private function refreshDetail(SupplierGoods $goods): SupplierGoods
+    {
+        if ($goods->detail_synced_at !== null && $goods->detail_synced_at->getTimestamp() > time() - self::DETAIL_FRESH_SECONDS) {
+            return $goods;
+        }
+
+        $supplier = $this->supplierDao->find((int) $goods->supplier_id);
+        try {
+            $detail = $this->supplierDriverFactory->build($supplier)->queryProductDetail($goods->code);
+        } catch (Throwable $e) {
+            throw new HttpException(502, sprintf('查询供应商商品「%s」的详情失败，请稍后重试：%s', $goods->name ?? $goods->code, $e->getMessage()), 0, $e);
+        }
+
+        return $this->supplierGoodsDao->upsertFromSync((int) $goods->supplier_id, $detail);
+    }
+
+    /**
+     * 按供应商商品的下单模板生成映射行的 param_mapping（`{"recharge_account": "<模板里的字段名>"}`），
+     * 平台满足不了的直接拒绝：
+     * - 话费、卡券直充要传充值账号：模板里有 `recharge_account` 就用它；只有一个字段就填到那个字段；
+     *   一个字段都没有，或者有多个字段却没有 `recharge_account`（平台只能提供充值账号这一个值）都不能用；
+     * - 卡密商品不传参数：模板必须是空的；
+     * - 最少要买 2 个以上的不能用：平台每单只买 1 个。
+     *
+     * @return null|array<string, string>
+     */
+    private function paramMappingFor(SupplierGoods $goods, string $businessLine, ?string $cardType): ?array
+    {
+        $label = '供应商商品「' . ($goods->name ?? $goods->code) . '」';
+        if ($goods->min_quantity !== null && $goods->min_quantity > 1) {
+            throw new HttpException(422, $label . '最少要买 ' . $goods->min_quantity . ' 个，平台每单只买 1 个，不能用');
+        }
+
+        $template = $goods->attach_template ?? [];
+        $keys = array_values(array_map(static fn (array $field) => (string) $field['key'], $template));
+        $names = array_map(static fn (array $field) => (string) ($field['name'] ?? $field['key']), $template);
+
+        if (self::requiredGoodsType($businessLine, $cardType) === SupplierGoods::TYPE_CARD_SECRET) {
+            if ($keys !== []) {
+                throw new HttpException(422, $label . '下单要填参数（' . implode('、', $names) . '），不是卡密商品');
+            }
+
+            return null;
+        }
+
+        if (in_array(self::ACCOUNT_PARAM, $keys, true)) {
+            return [self::ACCOUNT_PARAM => self::ACCOUNT_PARAM];
+        }
+        if (count($keys) === 1) {
+            return [self::ACCOUNT_PARAM => $keys[0]];
+        }
+        if ($keys === []) {
+            throw new HttpException(422, $label . '没有下单参数模板，传不了充值账号，不能用');
+        }
+
+        throw new HttpException(422, $label . '下单要填 ' . count($keys) . ' 个参数（' . implode('、', $names) . '），平台只能传充值账号，不能用');
     }
 
     private function assertGoodsTypeMatches(SupplierGoods $goods, string $businessLine, ?string $cardType): void
@@ -365,6 +448,9 @@ class ProductMappingAdminService extends AbstractService
                 'name' => $goods->name,
                 'face_value' => $goods->face_value,
                 'goods_type' => $goods->goods_type,
+                'attach_template' => $goods->attach_template,
+                'min_quantity' => $goods->min_quantity,
+                'can_back' => $goods->can_back,
             ],
             'cost_price' => $mapping->cost_price,
             'priority' => $mapping->priority,

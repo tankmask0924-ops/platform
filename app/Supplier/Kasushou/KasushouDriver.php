@@ -202,7 +202,8 @@ class KasushouDriver
      * 响应 data 是订单数组（external_orderno 可以逗号拼多个），这里只查一个，按
      * external_orderno 找出对应那一条。
      * 查询本身返回 400/500/超时：结果未知，继续查询（kasushou.md 第 3 节）。
-     * 查询成功但返回空数组：明确失败（对应 placeOrder 400 之后"查不到订单"的场景）。
+     * 卡速售说没有这笔订单（空数组，或 400 且提示订单不存在，见 isOrderNotFoundResponse()）：明确失败
+     * （对应 placeOrder 400 之后"查不到订单"的场景）。
      * 返回了订单但没有一条是这个 external_orderno：拿不准，结果未知。
      * 查到订单：按 KasushouStatusMapper 映射状态码。
      */
@@ -406,6 +407,9 @@ class KasushouDriver
      * 验签失败：返回 null，调用方不能把 null 当成"没有变化"，也不能凭 null 做
      * 任何库存/价格更新——就是单纯的"这条通知不可信，忽略"。
      *
+     * 通知里可能带 `goods_sku_id`（多规格商品）：平台下单只用商品 id（2026-11-20 定），规格不区分，
+     * 所以这里只取 id，按商品去刷新。
+     *
      * @param array<string, mixed> $payload
      */
     public function parseProductChangeNotification(array $payload): ?string
@@ -430,7 +434,10 @@ class KasushouDriver
      * 失败了"的处理原则，不做"结果未知"这种订单类方法才有的三态语义（这不是订单
      * 操作，没有 UnifiedResult 概念可用）。
      *
-     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}
+     * 比列表多返回只有详情接口才有的：attach_template（下单参数模板，卡密商品为空数组）、
+     * min_quantity / max_quantity（start_count / end_count）、can_back（是否支持撤单）。
+     *
+     * @return array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string, sale_restrictions: null|array<string, null|string>, attach_template: array<int, array{key: string, name: null|string, type: null|string}>, min_quantity: null|int, max_quantity: null|int, can_back: null|bool}
      */
     public function queryProductDetail(string $supplierProductCode): array
     {
@@ -449,7 +456,7 @@ class KasushouDriver
             throw new RuntimeException('KasushouDriver::queryProductDetail: response missing id/goods_price or unparseable.');
         }
 
-        return $entry;
+        return $entry + $this->parseGoodsDetailExtras($response['data']);
     }
 
     /**
@@ -462,7 +469,7 @@ class KasushouDriver
      * 错误，跳过那一条（或整页返回空），因为这是"取一页数据"的语义，不是"取一个
      * 确定存在的商品详情"，容忍个别脏数据不影响其它条目正常同步。
      *
-     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}>
+     * @return array<int, array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string, sale_restrictions: null|array<string, null|string>}>
      */
     public function syncAllProducts(int $page = 1, int $pageSize = 100): array
     {
@@ -574,8 +581,39 @@ class KasushouDriver
     }
 
     /**
+     * 订单详情接口怎么表示"没有这笔订单"文档没写，两种都认（2026-11-20 定）：
+     * - 成功响应（code 200）但 data 是空数组 / null / 空串；
+     * - 返回 400，msg 明确说订单不存在（不存在、未找到、找不到、查无、无此订单……）。
+     * 其它 400（签名错误、参数错误等）、500、超时、响应解析不了一律不算——那些是"没查成"，不是"查了没有"，
+     * 误判成查不到会把可能已经扣费的订单当失败换下一家，造成重复充值。
+     *
+     * @param null|array<string, mixed> $decoded
+     */
+    private function isOrderNotFoundResponse(?int $httpStatus, ?array $decoded): bool
+    {
+        if ($decoded === null) {
+            return false;
+        }
+
+        $code = (string) ($decoded['code'] ?? '');
+        if ($httpStatus === 200 && $code === '200') {
+            $data = $decoded['data'] ?? null;
+
+            return $data === null || $data === [] || $data === '';
+        }
+
+        if ($httpStatus === 400 && $code === '400') {
+            $message = is_string($decoded['msg'] ?? null) ? $decoded['msg'] : '';
+
+            return preg_match('/不存在|未找到|找不到|查无|无此订单|没有(找到|该|此|这)?订单|not\s*(found|exist)/iu', $message) === 1;
+        }
+
+        return false;
+    }
+
+    /**
      * 按 external_orderno 查订单详情，找出对应的那一条（订单详情接口 data 是数组）。
-     * state：found（entry 是那条订单）/ not_found（返回空数组）/ unknown（请求失败、
+     * state：found（entry 是那条订单）/ not_found（见 isOrderNotFoundResponse()）/ unknown（请求失败、
      * 结构解析不了、或者返回的订单里没有这个 external_orderno），reason 说明 unknown 的原因。
      *
      * @return array{state: string, entry: null|array<string, mixed>, reason: string, request: array<string, mixed>, raw: array<string, mixed>}
@@ -586,12 +624,13 @@ class KasushouDriver
         $response = $this->sendSigned(self::PATH_ORDER_QUERY, $body);
         $result = ['state' => 'unknown', 'entry' => null, 'reason' => '', 'request' => $body, 'raw' => $response['raw']];
 
-        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
-            return ['reason' => $this->describeNonSuccessHttp($response['httpStatus'])] + $result;
+        $decoded = json_decode((string) ($response['raw']['body'] ?? ''), true);
+        if ($this->isOrderNotFoundResponse($response['httpStatus'], is_array($decoded) ? $decoded : null)) {
+            return ['state' => 'not_found'] + $result;
         }
 
-        if ($response['data'] === []) {
-            return ['state' => 'not_found'] + $result;
+        if ($response['httpStatus'] !== 200 || $response['data'] === null) {
+            return ['reason' => $this->describeNonSuccessHttp($response['httpStatus'])] + $result;
         }
 
         foreach ($response['data'] as $entry) {
@@ -682,7 +721,7 @@ class KasushouDriver
      * queryProductDetail()/syncAllProducts() 的不同处理）。
      *
      * @param array<string, mixed> $raw
-     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string}
+     * @return null|array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name: null|string, face_value: null|string, goods_type: null|string, sale_restrictions: null|array<string, null|string>}
      */
     private function parseGoodsEntry(array $raw): ?array
     {
@@ -708,6 +747,59 @@ class KasushouDriver
             'name' => is_string($name) && trim($name) !== '' ? mb_substr(trim($name), 0, 128) : null,
             'face_value' => is_numeric($faceValue) && bccomp((string) $faceValue, '0', 2) >= 0 ? bcadd((string) $faceValue, '0', 2) : null,
             'goods_type' => $this->mapGoodsType($raw['goods_type'] ?? null),
+            'sale_restrictions' => $this->parseSaleRestrictions($raw),
+        ];
+    }
+
+    /**
+     * 销售限制（可售渠道 can_buy、禁售渠道 can_no_buy、销售限价 can_price、余额限价 need_balance），
+     * 只在平台后台记录，不展示给商户。一个都没给时返回 null。
+     *
+     * @param array<string, mixed> $raw
+     * @return null|array<string, null|string>
+     */
+    private function parseSaleRestrictions(array $raw): ?array
+    {
+        $result = [];
+        foreach (['can_buy', 'can_no_buy', 'can_price', 'need_balance'] as $field) {
+            if (array_key_exists($field, $raw)) {
+                $value = $raw[$field];
+                $result[$field] = is_scalar($value) && (string) $value !== '' ? mb_substr(trim((string) $value), 0, 255) : null;
+            }
+        }
+
+        return $result === [] ? null : $result;
+    }
+
+    /**
+     * 只有商品详情接口才有的字段。attach 缺失或不是数组时按空模板处理（文档：卡密商品此数组为空）；
+     * 模板里没有 key 的条目跳过。
+     *
+     * @param array<string, mixed> $raw
+     * @return array{attach_template: array<int, array{key: string, name: null|string, type: null|string}>, min_quantity: null|int, max_quantity: null|int, can_back: null|bool}
+     */
+    private function parseGoodsDetailExtras(array $raw): array
+    {
+        $template = [];
+        foreach (is_array($raw['attach'] ?? null) ? $raw['attach'] : [] as $field) {
+            $key = is_array($field) ? ($field['key'] ?? null) : null;
+            if (! is_string($key) || trim($key) === '') {
+                continue;
+            }
+            $template[] = [
+                'key' => trim($key),
+                'name' => is_string($field['name'] ?? null) ? $field['name'] : null,
+                'type' => is_string($field['type'] ?? null) ? $field['type'] : null,
+            ];
+        }
+
+        $canBack = $raw['can_back'] ?? null;
+
+        return [
+            'attach_template' => $template,
+            'min_quantity' => $this->toNullableInt($raw['start_count'] ?? null),
+            'max_quantity' => $this->toNullableInt($raw['end_count'] ?? null),
+            'can_back' => $canBack === null || $canBack === '' ? null : in_array((string) $canBack, ['1', 'true'], true),
         ];
     }
 

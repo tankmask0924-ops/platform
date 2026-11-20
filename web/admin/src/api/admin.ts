@@ -150,6 +150,9 @@ export interface Product {
   province: string | null
   charge_speed: string | null
   card_type: string | null
+  /** 卡券品牌 */
+  brand_id: number | null
+  brand_name: string | null
   face_value: string
   sale_price: string
   rebate_amount: string
@@ -163,7 +166,7 @@ export interface ProductDetail extends Product {
   level_rebates: { level_id: number; level_name: string | null; rebate_rate: string }[]
 }
 
-export type ProductForm = Partial<Omit<Product, 'id' | 'created_at' | 'updated_at'>> & {
+export type ProductForm = Partial<Omit<Product, 'id' | 'brand_name' | 'created_at' | 'updated_at'>> & {
   /** 只在新建时传：选中的供应商商品，顺序即优先级 */
   supplier_goods_ids?: number[]
 }
@@ -193,7 +196,14 @@ export interface SupplierGoods {
   cost_price: string
   status: string
   stock: number | null
+  /** 以下只有查过商品详情才有（null 表示还没查过，建映射时会自动查） */
+  attach_template: { key: string; name: string | null; type: string | null }[] | null
+  min_quantity: number | null
+  max_quantity: number | null
+  can_back: boolean | null
+  sale_restrictions: { can_buy?: string | null; can_no_buy?: string | null; can_price?: string | null; need_balance?: string | null } | null
   synced_at: string | null
+  detail_synced_at: string | null
   /** 已经映射了它的本地商品 */
   used_by: { id: number; name: string | null }[]
 }
@@ -205,6 +215,24 @@ export function requiredGoodsType(businessLine: string, cardType: string | null)
 
 export const supplierGoodsApi = {
   list: (params: Query) => http.get<Paged<SupplierGoods>>('/admin/supplier-goods', params),
+}
+
+/** 卡券品牌：App\Controller\Admin\CardBrandController */
+export interface CardBrand {
+  id: number
+  name: string
+  sort: number
+  status: 'active' | 'disabled'
+  product_count: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export const cardBrandApi = {
+  list: (status?: 'active' | 'disabled') => http.get<CardBrand[]>('/admin/card-brands', status ? { status } : {}),
+  create: (data: { name: string; sort: number; status?: string }) => http.post<CardBrand>('/admin/card-brands', data),
+  update: (id: number, data: Partial<{ name: string; sort: number; status: string }>) => http.put<CardBrand>(`/admin/card-brands/${id}`, data),
+  remove: (id: number) => http.delete<Ok>(`/admin/card-brands/${id}`),
 }
 
 /** 后台上传图片到云存储：App\Controller\Admin\UploadController */
@@ -225,7 +253,15 @@ export interface ProductMapping {
   supplier_code: string | null
   supplier_product_code: string
   /** 关联的供应商商品；供应商商品库里找不到时为 null（上线前手填编码的老映射） */
-  supplier_goods: { id: number; name: string | null; face_value: string | null; goods_type: SupplierGoods['goods_type'] } | null
+  supplier_goods: {
+    id: number
+    name: string | null
+    face_value: string | null
+    goods_type: SupplierGoods['goods_type']
+    attach_template: SupplierGoods['attach_template']
+    min_quantity: number | null
+    can_back: boolean | null
+  } | null
   cost_price: string
   priority: number
   status: string

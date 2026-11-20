@@ -188,6 +188,48 @@ class ProductMappingControllerTest extends HttpTestCase
         $this->assertSame($secret->code, SupplierProduct::find($mappingId)->supplier_product_code);
     }
 
+    /**
+     * 下单参数映射按供应商商品的下单模板自动生成；平台满足不了的模板、最少要买多个的商品直接拒绝。
+     */
+    public function testParamMappingFollowsGoodsTemplateAndUnusableGoodsAreRejected()
+    {
+        $token = $this->loginAs($this->createAdminWithPermissions([self::MANAGE_PERMISSION_CODE]));
+        $field = static fn (string $key, string $name) => ['key' => $key, 'name' => $name, 'type' => 'text'];
+
+        $cases = [
+            'recharge_account' => [[$field('recharge_account', '充值账号'), $field('lblName1', '备注')], 1, 200, ['recharge_account' => 'recharge_account']],
+            'single other key' => [[$field('lblName1', '游戏账号')], 1, 200, ['recharge_account' => 'lblName1']],
+            'no template' => [[], 1, 422, null],
+            'two keys' => [[$field('lblName1', '区服'), $field('lblName2', '角色名')], 1, 422, null],
+            'min quantity 2' => [[$field('recharge_account', '充值账号')], 2, 422, null],
+        ];
+        foreach ($cases as $label => [$template, $minQuantity, $expected, $paramMapping]) {
+            $product = $this->createProduct(['business_line' => 'recharge']);
+            $supplier = $this->createSupplier(['business_line' => 'recharge']);
+            $goods = $this->createGoods($supplier->id, ['attach_template' => $template, 'min_quantity' => $minQuantity]);
+
+            $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+                'product_id' => $product->id, 'supplier_goods_id' => $goods->id, 'priority' => 0,
+            ]);
+            $this->assertSame($expected, $response->getStatusCode(), $label . ': ' . $response->getBody());
+            if ($expected === 200) {
+                $id = json_decode((string) $response->getBody(), true)['id'];
+                $this->mappingIds[] = $id;
+                $this->assertSame($paramMapping, SupplierProduct::find($id)->param_mapping, $label);
+            }
+        }
+
+        // 卡密商品不能带下单参数
+        $product = $this->createProduct(['business_line' => 'card', 'card_type' => 'card_secret']);
+        $supplier = $this->createSupplier(['business_line' => 'card']);
+        $goods = $this->createGoods($supplier->id, ['goods_type' => 'card_secret', 'attach_template' => [$field('recharge_account', '充值账号')]]);
+        $response = $this->jsonRequest('POST', '/admin/product-mappings', $token, [
+            'product_id' => $product->id, 'supplier_goods_id' => $goods->id, 'priority' => 0,
+        ]);
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('不是卡密商品', (string) $response->getBody());
+    }
+
     public function testCreateWithMismatchedBusinessLineReturns422AndCreatesNoRow()
     {
         $product = $this->createProduct(['business_line' => 'recharge']);
@@ -599,6 +641,11 @@ class ProductMappingControllerTest extends HttpTestCase
             'cost_price' => '9.00',
             'status' => 'active',
             'stock' => null,
+            // 商品详情刚查过：下单模板只要充值账号（卡密商品没有模板），建映射时不用再去问供应商
+            'attach_template' => ($overrides['goods_type'] ?? null) === 'card_secret' ? [] : [['key' => 'recharge_account', 'name' => '充值账号', 'type' => 'text']],
+            'min_quantity' => 1,
+            'max_quantity' => 10,
+            'detail_synced_at' => date('Y-m-d H:i:s'),
         ], $overrides));
         $this->goodsIds[] = $goods->id;
 

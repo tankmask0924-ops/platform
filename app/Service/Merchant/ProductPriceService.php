@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace App\Service\Merchant;
 
+use App\Dao\CardBrandDao;
 use App\Dao\MerchantLevelBusinessRateDao;
 use App\Dao\ProductDao;
 use App\Model\Merchant;
@@ -33,6 +34,9 @@ class ProductPriceService extends AbstractService
 
     #[Inject]
     protected ProductDao $productDao;
+
+    #[Inject]
+    protected CardBrandDao $cardBrandDao;
 
     #[Inject]
     protected RebateCalculator $rebateCalculator;
@@ -58,7 +62,9 @@ class ProductPriceService extends AbstractService
 
         $products = [];
         if ($subscribed && in_array($businessLine, self::CATALOG_BUSINESS_LINES, true)) {
-            $products = $this->productDao->listOnShelfByBusinessLine($businessLine)
+            $onShelf = $this->productDao->listOnShelfByBusinessLine($businessLine);
+            $brands = $this->cardBrandDao->findMany($onShelf->pluck('brand_id')->filter()->unique()->values()->all());
+            $products = $onShelf
                 ->map(fn (Product $product) => [
                     'id' => $product->id,
                     'name' => $product->name,
@@ -67,6 +73,8 @@ class ProductPriceService extends AbstractService
                     'province' => $product->province,
                     'charge_speed' => $product->charge_speed,
                     'card_type' => $product->card_type,
+                    'brand_id' => $product->brand_id,
+                    'brand_name' => $product->brand_id === null ? null : $brands->get($product->brand_id)?->name,
                     'face_value' => $product->face_value,
                     'sale_price' => $product->sale_price,
                     'rebate' => $this->rebateCalculator->calculate($product, $levelId),

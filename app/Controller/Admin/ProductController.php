@@ -57,12 +57,14 @@ class ProductController extends AbstractController
         $perPage = (int) $this->request->input('per_page', 15);
         $businessLine = $this->request->input('business_line');
         $status = $this->request->input('status');
+        $brandId = $this->request->input('brand_id');
 
         return $this->productAdminService->list(
             $page,
             $perPage,
             $businessLine !== null ? (string) $businessLine : null,
-            $status !== null ? (string) $status : null
+            $status !== null ? (string) $status : null,
+            $brandId !== null && $brandId !== '' ? (int) $brandId : null
         );
     }
 

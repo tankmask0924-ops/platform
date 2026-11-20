@@ -74,6 +74,7 @@
 | | `supplier_call_logs` | 调用供应商的原始请求/响应日志 |
 | 本地商品 | `products` | 话费、卡券本地商品 |
 | | `product_level_rebates` | 商品单独设置某等级返佣比例 |
+| | `card_brands` | 卡券品牌 |
 | | `supplier_goods` | 供应商商品库：供应商那边有哪些商品（同步写入），新增本地商品、添加映射时从这里选 |
 | | `supplier_products` | 商品在各供应商的映射、成本价、优先级 |
 | | `supplier_product_price_history` | 供应商商品成本价变更历史 |
@@ -97,7 +98,7 @@
 | 告警 | `alerts` | 告警记录（对应 [8.3](requirements.md#83-系统管理后台webadmin)"告警"的 7 类场景） |
 | 对账 | `reconciliation_diffs` | 订单对账、返佣对账标出的差异，支持标记处理状态 |
 
-共 40 张表（其中 `movie_showtime_caches` 为可选表）。
+共 41 张表（其中 `movie_showtime_caches` 为可选表）。
 
 ---
 
@@ -477,6 +478,7 @@ erDiagram
 | province | varchar(32) | 否 | 适用省份，话费可能按省份区分 |
 | charge_speed | varchar(16) | 否 | 话费专用：`fast` 快充 / `slow` 慢充 |
 | card_type | varchar(16) | 否 | 卡券专用：`direct` 直充 / `card_secret` 卡密 |
+| brand_id | bigint unsigned | 否 | 卡券专用：外键 `card_brands.id`。新建卡券商品必填，存量商品可为空 |
 | face_value | decimal(10,2) | 是 | 面值 |
 | sale_price | decimal(10,2) | 是 | 售价，对所有商户统一 |
 | rebate_amount | decimal(10,2) | 是 | 商品返佣金额，默认 0 |
@@ -485,6 +487,20 @@ erDiagram
 | created_at / updated_at | datetime | 是 | |
 
 索引：`(business_line, status)`。**没有任何启用的供应商映射时不能上架**（应用层在上架校验时检查，不做数据库约束）。
+
+#### `card_brands`
+
+卡券品牌（爱奇艺、腾讯视频、游戏点卡……），卡券商品按品牌归类。话费不用品牌，运营商在 `products.operator`。
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| id | bigint unsigned | 是 | 主键 |
+| name | varchar(64) | 是 | 品牌名称，唯一 |
+| sort | int unsigned | 是 | 排序，小的在前，默认 0 |
+| status | varchar(16) | 是 | `active` 启用 / `disabled` 停用（停用后新建、编辑卡券商品时不能新选这个品牌，已有商品不受影响） |
+| created_at / updated_at | datetime | 是 | |
+
+有商品的品牌不能删除，只能停用。
 
 #### `product_level_rebates`
 
@@ -513,8 +529,15 @@ erDiagram
 | cost_price | decimal(10,2) | 是 | 成本价（供应商最新值，历史记在映射行的 `supplier_product_price_history`） |
 | status | varchar(16) | 是 | `active` 在售 / `paused` 暂停 / `banned` 禁售 |
 | stock | int | 否 | 库存，为空表示不限 |
+| attach_template | json | 否 | 下单参数模板 `[{key, name, type}]`（商品详情接口的 `attach`），卡密商品为空数组；为空表示还没查过详情 |
+| min_quantity / max_quantity | int unsigned | 否 | 最小 / 最大购买数量（`start_count` / `end_count`）；平台每单买 1 个，最小数量大于 1 的不能用 |
+| can_back | tinyint | 否 | 是否支持撤单 |
+| sale_restrictions | json | 否 | 销售限制 `{can_buy, can_no_buy, can_price, need_balance}`，**不展示给商户**，同步时也写到映射行 |
 | synced_at | datetime | 否 | 最近一次同步时间 |
+| detail_synced_at | datetime | 否 | 最近一次查商品详情的时间（变更通知、后台建映射时会查） |
 | created_at / updated_at | datetime | 是 | |
+
+下单模板、购买数量、撤单只有商品详情接口给，每日全量校准用的列表接口没有；建映射时如果一小时内没查过详情会先查一次，按模板自动生成映射行的 `param_mapping`（平台只能提供充值账号，模板要求多个参数的商品不能用）。
 
 索引：`(supplier_id, code)` 唯一、`(supplier_id, status)`。全量同步时列表里没出现的商品保持原样，不删除、不改状态（接口分页结构尚未联调，"没出现"不足以说明已下架）。
 

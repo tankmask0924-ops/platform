@@ -97,9 +97,14 @@ onMounted(load)
                 <template #default="{ row }">{{ labelOf(chargeSpeedLabels, row.charge_speed) }}</template>
               </el-table-column>
             </template>
-            <el-table-column v-else label="类型" width="90">
-              <template #default="{ row }">{{ labelOf(cardTypeLabels, row.card_type) }}</template>
-            </el-table-column>
+            <template v-else>
+              <el-table-column label="品牌" width="120">
+                <template #default="{ row }">{{ row.brand_name ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column label="类型" width="90">
+                <template #default="{ row }">{{ labelOf(cardTypeLabels, row.card_type) }}</template>
+              </el-table-column>
+            </template>
             <el-table-column label="面值" width="110" align="right">
               <template #default="{ row }">{{ money(row.face_value) }}</template>
             </el-table-column>

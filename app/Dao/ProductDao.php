@@ -62,22 +62,43 @@ class ProductDao extends AbstractDao
      * 过滤。跟 App\Dao\SupplierDao::paginate() 同样的手写分页原因（`hyperf/paginator`
      * 未安装），按创建时间倒序。
      */
-    public function paginate(int $page, int $perPage, ?string $businessLine, ?string $status): Collection
+    public function paginate(int $page, int $perPage, ?string $businessLine, ?string $status, ?int $brandId = null): Collection
     {
-        return $this->filteredQuery($businessLine, $status)
+        return $this->filteredQuery($businessLine, $status, $brandId)
             ->orderByDesc('created_at')
             ->forPage($page, $perPage)
             ->get();
     }
 
-    public function count(?string $businessLine, ?string $status): int
+    public function count(?string $businessLine, ?string $status, ?int $brandId = null): int
     {
-        return $this->filteredQuery($businessLine, $status)->count();
+        return $this->filteredQuery($businessLine, $status, $brandId)->count();
     }
 
-    private function filteredQuery(?string $businessLine, ?string $status): Builder
+    /**
+     * 每个卡券品牌下有多少个商品，按品牌 id 作键（没有商品的品牌不在结果里）。
+     *
+     * @param array<int, int> $brandIds
+     * @return array<int, int>
+     */
+    public function countByBrand(array $brandIds): array
+    {
+        return $this->newQuery()
+            ->whereIn('brand_id', $brandIds)
+            ->groupBy('brand_id')
+            ->selectRaw('brand_id, count(*) as total')
+            ->pluck('total', 'brand_id')
+            ->map(static fn ($total) => (int) $total)
+            ->all();
+    }
+
+    private function filteredQuery(?string $businessLine, ?string $status, ?int $brandId = null): Builder
     {
         $query = $this->newQuery();
+
+        if ($brandId !== null) {
+            $query->where('brand_id', $brandId);
+        }
 
         if ($businessLine !== null) {
             $query->where('business_line', $businessLine);

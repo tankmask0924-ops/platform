@@ -160,7 +160,14 @@ class SupplierGoodsAdminService extends AbstractService
             'cost_price' => $goods->cost_price,
             'status' => $goods->status,
             'stock' => $goods->stock,
+            // 下面几项只有查过商品详情才有（null = 还没查过），建映射时会自动查一次
+            'attach_template' => $goods->attach_template,
+            'min_quantity' => $goods->min_quantity,
+            'max_quantity' => $goods->max_quantity,
+            'can_back' => $goods->can_back,
+            'sale_restrictions' => $goods->sale_restrictions,
             'synced_at' => $goods->synced_at?->toDateTimeString(),
+            'detail_synced_at' => $goods->detail_synced_at?->toDateTimeString(),
             'used_by' => $usedBy,
         ];
     }

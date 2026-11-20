@@ -28,6 +28,7 @@ use Carbon\Carbon;
  * @property null|string $province
  * @property null|string $charge_speed
  * @property null|string $card_type
+ * @property null|int $brand_id 卡券专用：card_brands.id
  * @property string $face_value
  * @property string $sale_price
  * @property string $rebate_amount
@@ -48,6 +49,7 @@ class Product extends Model
         'province',
         'charge_speed',
         'card_type',
+        'brand_id',
         'face_value',
         'sale_price',
         'rebate_amount',

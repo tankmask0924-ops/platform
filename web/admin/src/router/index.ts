@@ -65,11 +65,27 @@ const router = createRouter({
           component: () => import('@/views/merchant/SupplierRebateListView.vue'),
           meta: { title: '供应商返佣明细' },
         },
+        // 话费、卡券分成两个菜单，共用一个列表页；旧地址 /products 跳到话费
+        { path: 'products', redirect: { name: 'products-recharge' } },
         {
-          path: 'products',
-          name: 'products',
+          path: 'products/recharge',
+          name: 'products-recharge',
           component: () => import('@/views/product/ProductListView.vue'),
-          meta: { title: '本地商品' },
+          props: { businessLine: 'recharge' },
+          meta: { title: '话费商品' },
+        },
+        {
+          path: 'products/card',
+          name: 'products-card',
+          component: () => import('@/views/product/ProductListView.vue'),
+          props: { businessLine: 'card' },
+          meta: { title: '卡券商品' },
+        },
+        {
+          path: 'products/brands',
+          name: 'card-brands',
+          component: () => import('@/views/product/CardBrandView.vue'),
+          meta: { title: '卡券品牌' },
         },
         {
           path: 'products/:id(\\d+)',

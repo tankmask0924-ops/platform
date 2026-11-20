@@ -59,7 +59,7 @@ class SupplierGoodsDao extends AbstractDao
 
     /**
      * 同步写入一条供应商商品：`(supplier_id, code)` 已存在就更新，不存在就新建。
-     * 供应商没返回名称、面值、商品类型时保留库里原来的值，不拿 null 覆盖。
+     * 供应商没返回名称、面值、商品类型、销售限制时保留库里原来的值，不拿 null 覆盖。
      *
      * @param array{supplier_product_code: string, cost_price: string, status: string, stock: null|int, name?: null|string, face_value?: null|string, goods_type?: null|string} $detail
      */
@@ -71,10 +71,18 @@ class SupplierGoodsDao extends AbstractDao
             'stock' => $detail['stock'],
             'synced_at' => date('Y-m-d H:i:s'),
         ];
-        foreach (['name', 'face_value', 'goods_type'] as $field) {
+        foreach (['name', 'face_value', 'goods_type', 'sale_restrictions'] as $field) {
             if (($detail[$field] ?? null) !== null) {
                 $attributes[$field] = $detail[$field];
             }
+        }
+        // 下单模板、购买数量、撤单只有商品详情接口给（列表没有这几个键），给了就整体覆盖
+        if (array_key_exists('attach_template', $detail)) {
+            $attributes['attach_template'] = $detail['attach_template'];
+            $attributes['min_quantity'] = $detail['min_quantity'] ?? null;
+            $attributes['max_quantity'] = $detail['max_quantity'] ?? null;
+            $attributes['can_back'] = $detail['can_back'] ?? null;
+            $attributes['detail_synced_at'] = date('Y-m-d H:i:s');
         }
 
         $goods = $this->findBySupplierAndCode($supplierId, $detail['supplier_product_code'])

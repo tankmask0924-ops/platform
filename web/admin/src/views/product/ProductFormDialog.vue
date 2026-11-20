@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { money, StatusTag, toOptions } from '@platform/shared'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { reactive, ref, watch } from 'vue'
-import { type Product, productApi, type ProductForm, requiredGoodsType, type SupplierGoods } from '@/api/admin'
+import { computed, reactive, ref, watch } from 'vue'
+import { type CardBrand, cardBrandApi, type Product, productApi, type ProductForm, requiredGoodsType, type SupplierGoods } from '@/api/admin'
 import { cardTypeLabels, chargeSpeedLabels, mappingStatusLabels, operatorLabels, productBusinessLineLabels, supplierGoodsTypeLabels } from '@/labels'
 import ImageUpload from './ImageUpload.vue'
 import SupplierGoodsPicker from './SupplierGoodsPicker.vue'
@@ -22,6 +22,7 @@ const empty = () => ({
   province: '',
   charge_speed: '',
   card_type: '',
+  brand_id: undefined as number | undefined,
   face_value: '',
   sale_price: '',
   rebate_amount: '0',
@@ -87,15 +88,31 @@ const rules: FormRules = {
   name: [{ required: true, message: '请输入商品名称', trigger: 'blur' }],
   operator: [{ required: true, message: '请选择运营商', trigger: 'change' }],
   card_type: [{ required: true, message: '请选择卡券类型', trigger: 'change' }],
+  brand_id: [{ required: true, message: '请选择卡券品牌', trigger: 'change' }],
   face_value: decimal('面值'),
   sale_price: decimal('售价'),
   rebate_amount: decimal('返佣金额'),
 }
 
-function open(product?: Product) {
+// 卡券品牌：只能选启用的；编辑时商品原来的品牌停用了也要能显示
+const brands = ref<CardBrand[]>([])
+const brandOptions = computed(() =>
+  brands.value.filter((b) => b.status === 'active' || b.id === form.brand_id),
+)
+
+async function loadBrands() {
+  brands.value = await cardBrandApi.list()
+}
+
+/** businessLine：从「话费商品」「卡券商品」哪个列表点的新增，就默认哪条业务线 */
+function open(product?: Product, businessLine?: Product['business_line']) {
   editingId.value = product?.id ?? null
   Object.assign(form, empty())
+  if (businessLine) {
+    form.business_line = businessLine
+  }
   goods.value = []
+  loadBrands()
   if (product) {
     Object.assign(form, {
       business_line: product.business_line,
@@ -105,6 +122,7 @@ function open(product?: Product) {
       province: product.province ?? '',
       charge_speed: product.charge_speed ?? '',
       card_type: product.card_type ?? '',
+      brand_id: product.brand_id ?? undefined,
       face_value: product.face_value,
       sale_price: product.sale_price,
       rebate_amount: product.rebate_amount,
@@ -140,6 +158,7 @@ async function save() {
     data.charge_speed = form.charge_speed || null
   } else {
     data.card_type = form.card_type
+    data.brand_id = form.brand_id ?? null
   }
   saving.value = true
   try {
@@ -174,6 +193,12 @@ async function save() {
           <el-option v-for="o in toOptions(cardTypeLabels)" :key="o.value" :value="o.value" :label="o.label" />
         </el-select>
         <div v-if="editingId !== null" class="tip">已关联供应商商品，卡密 / 直充不能再改</div>
+      </el-form-item>
+      <el-form-item v-if="form.business_line === 'card'" label="卡券品牌" prop="brand_id">
+        <el-select v-model="form.brand_id" placeholder="请选择" filterable style="width: 240px">
+          <el-option v-for="b in brandOptions" :key="b.id" :value="b.id" :label="b.status === 'active' ? b.name : `${b.name}（已停用）`" />
+        </el-select>
+        <router-link :to="{ name: 'card-brands' }" target="_blank" class="gap-left tip-link">管理品牌</router-link>
       </el-form-item>
       <el-form-item v-if="editingId === null" label="供应商商品" required>
         <div class="goods">
@@ -255,6 +280,14 @@ async function save() {
 </template>
 
 <style scoped>
+.gap-left {
+  margin-left: 8px;
+}
+
+.tip-link {
+  font-size: 12px;
+}
+
 .tip {
   color: #909399;
   font-size: 12px;

@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace App\Service\OpenApi;
 
+use App\Dao\CardBrandDao;
 use App\Dao\ProductDao;
 use App\Exception\OpenApiException;
 use App\Model\Merchant;
@@ -45,6 +46,9 @@ class ProductListService extends AbstractService
     protected ProductDao $productDao;
 
     #[Inject]
+    protected CardBrandDao $cardBrandDao;
+
+    #[Inject]
     protected RebateCalculator $rebateCalculator;
 
     #[Inject]
@@ -63,6 +67,7 @@ class ProductListService extends AbstractService
         }
 
         $products = $this->productDao->listOnShelfByBusinessLine($businessLine);
+        $brands = $this->cardBrandDao->findMany($products->pluck('brand_id')->filter()->unique()->values()->all());
 
         $result = [];
         foreach ($products as $product) {
@@ -76,6 +81,9 @@ class ProductListService extends AbstractService
                 'charge_speed' => $product->charge_speed,
                 // 卡券专用：direct（直充，下单必传 recharge_account）/ card_secret（卡密，不传）
                 'card_type' => $product->card_type,
+                // 卡券品牌，话费和没设置品牌的卡券为 null
+                'brand_id' => $product->brand_id,
+                'brand_name' => $product->brand_id === null ? null : $brands->get($product->brand_id)?->name,
                 'face_value' => $product->face_value,
                 'sale_price' => $product->sale_price,
                 'rebate' => $this->rebateCalculator->calculate($product, $merchant->level_id),
